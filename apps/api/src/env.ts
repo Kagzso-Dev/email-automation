@@ -21,7 +21,13 @@ const schema = z.object({
   JWT_REFRESH_TTL: z.coerce.number().default(60 * 60 * 24 * 14),
   LINK_SIGNING_SECRET: z.string().min(8),
 
-  DATABASE_URL: z.string(),
+  // MySQL connection is configured with discrete parts; scripts/db-url.mjs
+  // assembles the URL Prisma needs. DATABASE_URL still works if set (it wins).
+  DB_HOST: z.string().default("localhost"),
+  DB_PORT: z.string().default("3306"),
+  DB_NAME: z.string().default("dispatch"),
+  DB_USER: z.string().default("root"),
+  DB_PASSWORD: z.string().default(""),
 
   EMAIL_PROVIDER: z.enum(["mock", "ses"]).default("mock"),
   EMAIL_FROM: z.string().default("Dispatch <no-reply@example.com>"),

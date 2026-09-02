@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { buildDatabaseUrl } from "../scripts/db-url.mjs";
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasourceUrl: buildDatabaseUrl() });
 
 async function main() {
   const email = (process.env.SEED_ADMIN_EMAIL ?? "admin@example.com").toLowerCase();

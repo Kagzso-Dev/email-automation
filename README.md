@@ -21,7 +21,7 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 Prerequisites: **Node 20+** and a local **MySQL 8** server. That's it.
 
 ```bash
-cp .env.example .env                 # set DATABASE_URL, edit secrets
+cp .env.example .env                 # set DB_HOST/PORT/NAME/USER/PASSWORD, edit secrets
 npm install
 mysql -u root -p -e "CREATE DATABASE dispatch CHARACTER SET utf8mb4;"
 npm run prisma:deploy                # apply migrations
@@ -80,10 +80,14 @@ Integration tests against a real MySQL are stubbed for milestone M9 (see design 
 ## Deployment
 
 Plain Node processes plus a managed MySQL. Run `apps/api` twice (one `start:api`, one
-`start:worker`), point `DATABASE_URL` at the database, run `npm run prisma:deploy` on release.
-No broker to operate.
+`start:worker`), set `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` for the
+database, run `npm run prisma:deploy` on release. No broker to operate.
 
 ## Environment
 
-See [`.env.example`](.env.example). Key knobs: `EMAIL_PROVIDER`, `SEND_RATE_PER_SEC`,
-`SEND_DAILY_CAP`, `SEND_MAX_ATTEMPTS`, `SCHEDULER_TIMEZONE`.
+See [`.env.example`](.env.example). The database is configured with discrete variables
+(`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`); [`scripts/db-url.mjs`](scripts/db-url.mjs)
+assembles the connection string Prisma needs, and the `prisma:*` npm scripts pass it to the CLI —
+run those rather than bare `npx prisma`. Setting `DATABASE_URL` directly still works and overrides
+the parts. Other key knobs: `EMAIL_PROVIDER`, `SEND_RATE_PER_SEC`, `SEND_DAILY_CAP`,
+`SEND_MAX_ATTEMPTS`, `SCHEDULER_TIMEZONE`.

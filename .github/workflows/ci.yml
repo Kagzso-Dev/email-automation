@@ -20,7 +20,11 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 15
 
     env:
-      DATABASE_URL: mysql://root:root@localhost:3306/dispatch
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: dispatch
+      DB_USER: root
+      DB_PASSWORD: root
       JWT_ACCESS_SECRET: ci-access-secret
       JWT_REFRESH_SECRET: ci-refresh-secret
       LINK_SIGNING_SECRET: ci-link-secret
