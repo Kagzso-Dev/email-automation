@@ -23,12 +23,14 @@ contactsRouter.get(
     const where = {
       ...(q.status ? { status: q.status } : {}),
       ...(q.listId ? { memberships: { some: { listId: q.listId } } } : {}),
+      // MySQL columns use a _ci collation, so `contains` is already
+      // case-insensitive; Prisma's `mode` option is Postgres-only.
       ...(q.search
         ? {
             OR: [
-              { email: { contains: q.search, mode: "insensitive" as const } },
-              { firstName: { contains: q.search, mode: "insensitive" as const } },
-              { lastName: { contains: q.search, mode: "insensitive" as const } },
+              { email: { contains: q.search } },
+              { firstName: { contains: q.search } },
+              { lastName: { contains: q.search } },
             ],
           }
         : {}),

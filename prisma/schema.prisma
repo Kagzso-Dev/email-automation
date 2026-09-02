@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -30,7 +30,7 @@ model ApiKey {
   id        String    @id @default(cuid())
   name      String
   keyHash   String    @unique // sha-256 of the raw key; raw value shown once at creation
-  prefix    String // first 8 chars of the raw key, for display
+  prefix    String // first 10 chars of the raw key, for display
   lastUsed  DateTime?
   createdAt DateTime  @default(now())
 }
@@ -49,7 +49,7 @@ model Contact {
   email        String           @unique
   firstName    String?
   lastName     String?
-  customFields Json             @default("{}")
+  customFields Json
   status       ContactStatus    @default(ACTIVE)
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
@@ -61,7 +61,7 @@ model Contact {
 model List {
   id          String           @id @default(cuid())
   name        String
-  description String?
+  description String?          @db.VarChar(1000)
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
   members     ListMembership[]
@@ -84,10 +84,10 @@ model ListMembership {
 model Template {
   id        String     @id @default(cuid())
   name      String
-  subject   String
-  htmlBody  String // stored raw; sanitised at render time
-  textBody  String?
-  variables Json       @default("[]") // declared variable names for the editor helper
+  subject   String     @db.VarChar(300)
+  htmlBody  String     @db.LongText // stored raw; sanitised at render time
+  textBody  String?    @db.Text
+  variables Json // declared variable names for the editor helper
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
   campaigns Campaign[]
@@ -126,6 +126,9 @@ model Campaign {
   template       Template       @relation(fields: [templateId], references: [id])
   list           List           @relation(fields: [listId], references: [id])
   emailLogs      EmailLog[]
+
+  @@index([templateId])
+  @@index([listId])
 }
 
 // ---------------------------------------------------------------- event-triggered sends
@@ -135,12 +138,14 @@ model Trigger {
   name       String
   eventKey   String     @unique // path segment of the webhook URL
   templateId String
-  conditions Json       @default("[]") // array of { field, op, value } predicates on the payload
+  conditions Json // array of { field, op, value } predicates on the payload
   active     Boolean    @default(true)
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
   template   Template   @relation(fields: [templateId], references: [id])
   emailLogs  EmailLog[]
+
+  @@index([templateId])
 }
 
 // ---------------------------------------------------------------- the ledger
@@ -164,8 +169,8 @@ model EmailLog {
   idempotencyKey    String      @unique
   status            EmailStatus @default(QUEUED)
   providerMessageId String?
-  subject           String?
-  errorMessage      String?
+  subject           String?     @db.VarChar(300)
+  errorMessage      String?     @db.Text
   openedAt          DateTime?
   clickedAt         DateTime?
   sentAt            DateTime?
@@ -184,7 +189,7 @@ model EmailLog {
 model Unsubscribe {
   id        String   @id @default(cuid())
   contactId String   @unique
-  reason    String?
+  reason    String?  @db.Text
   token     String   @unique // opaque token embedded in the unsubscribe link
   createdAt DateTime @default(now())
   contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)

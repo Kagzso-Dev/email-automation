@@ -14,6 +14,14 @@ export function campaignKey(campaignId: string, contactId: string, runDate: Date
   return `campaign:${campaignId}:${contactId}:${day}`;
 }
 
+/**
+ * BullMQ rejects custom job ids containing ":", so derive a queue-safe id from
+ * the idempotency key. Still deterministic — repeat enqueues dedupe.
+ */
+export function queueJobId(idempotencyKey: string): string {
+  return idempotencyKey.replace(/:/g, "_");
+}
+
 export function triggerKey(
   triggerId: string,
   contactId: string,

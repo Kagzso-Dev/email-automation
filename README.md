@@ -8,7 +8,7 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 
 | Area | Choice |
 | --- | --- |
-| API | Node 20, TypeScript, Express, Prisma (PostgreSQL) |
+| API | Node 20, TypeScript, Express, Prisma (MySQL 8) |
 | Queue | BullMQ on Redis — scheduler, fan-out, rate-limited send workers, DLQ |
 | Email | Provider interface; `mock` adapter (writes to `.mail-outbox/`) by default, `ses` adapter built but off |
 | Web | React + Vite, React Query, Tailwind |
@@ -16,11 +16,15 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 
 ## Quick start
 
+Prerequisites: Node 20+, a local **MySQL 8** server, and Docker (for Redis only — or run
+Redis yourself on `:6379`).
+
 ```bash
-cp .env.example .env                 # then edit secrets
+cp .env.example .env                 # set DATABASE_URL to your MySQL, edit secrets
 npm install
-docker compose up -d postgres redis  # just the datastores
-npm run prisma:migrate               # create the schema
+mysql -u root -p -e "CREATE DATABASE dispatch CHARACTER SET utf8mb4;"
+docker compose up -d redis           # just Redis
+npm run prisma:deploy                # apply migrations
 npm run db:seed                      # admin user + sample data
 npm run dev                          # api :4000, worker, web :5173
 ```
@@ -36,8 +40,11 @@ Log in at http://localhost:5173 with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
 ### Everything in Docker
 
 ```bash
-docker compose --profile app up --build   # postgres, redis, api, worker
+docker compose --profile app up --build   # redis + api + worker; DB stays on the host
 ```
+
+The containers reach the host's MySQL via `host.docker.internal` — override with
+`DATABASE_URL_DOCKER` in `.env` if your MySQL isn't on the default host port.
 
 ## Try the pipeline
 
@@ -67,7 +74,7 @@ curl -X POST http://localhost:4000/api/webhooks/dev/simulate/<emailLogId>/bounce
 npm test        # unit: rendering, conditions, idempotency
 ```
 
-Integration tests against real Postgres + Redis are stubbed for milestone M9 (see design doc §11).
+Integration tests against real MySQL + Redis are stubbed for milestone M9 (see design doc §11).
 
 ## Ops
 

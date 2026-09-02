@@ -340,12 +340,12 @@
     <h1>Email Automation Platform</h1>
     <p class="standfirst">A single-organization service for scheduled campaigns and event-triggered
     transactional email &mdash; queue-backed sending, template rendering, delivery tracking, and
-    suppression enforcement. This document resolves the architecture before any code is written.</p>
+    suppression enforcement. This document is the architecture; milestones M1&ndash;M8 are built.</p>
     <dl class="meta-grid">
-      <div><dt>Status</dt><dd>Draft for review</dd></div>
+      <div><dt>Status</dt><dd>M1&ndash;M8 built &amp; verified</dd></div>
       <div><dt>Date</dt><dd>2026-09-02</dd></div>
       <div><dt>Scope</dt><dd>Single org, SES sandbox</dd></div>
-      <div><dt>Target volume</dt><dd>&lt; 200 emails / 24h</dd></div>
+      <div><dt>Datastore</dt><dd>MySQL 8 + Redis</dd></div>
       <div><dt>Supersedes</dt><dd>Build Prompt v1</dd></div>
     </dl>
   </header>
@@ -372,12 +372,19 @@
 
     <section id="decisions">
       <h2><span class="num">01</span>Resolved decisions</h2>
-      <p>Four questions were settled before this draft. They are load-bearing &mdash; changing any
+      <p>These questions were settled before the build. They are load-bearing &mdash; changing any
       of them reopens the design.</p>
       <div class="ledger">
         <div class="row">
           <span class="q">Deliverable now</span>
-          <span class="a">This design document only. No code until it is approved.</span>
+          <span class="a">Design approved; M1&ndash;M8 built and verified end-to-end against MySQL.</span>
+        </div>
+        <div class="row">
+          <span class="q">Database</span>
+          <span class="a"><b>MySQL 8</b> (was PostgreSQL in the first draft). Run as the developer's local
+          server, not a container. Prisma provider <code>mysql</code>; long text columns get explicit
+          <code>@db.Text</code>/<code>@db.LongText</code>, and <code>contains</code> filters rely on the
+          <code>utf8mb4_*_ci</code> collation since Prisma's <code>mode: "insensitive"</code> is Postgres-only.</span>
         </div>
         <div class="row">
           <span class="q">Repository</span>
@@ -434,7 +441,7 @@
     <section id="architecture">
       <h2><span class="num">03</span>Architecture overview</h2>
       <p>One Node process type runs the API; a second runs the queue workers and the scheduler.
-      Both share the Prisma client and the Redis connection. PostgreSQL is the source of truth;
+      Both share the Prisma client and the Redis connection. MySQL is the source of truth;
       Redis holds only transient queue state.</p>
 
       <figure class="diagram">
@@ -443,7 +450,7 @@
 flowchart LR
   UI["Dashboard<br/>React + Vite SPA"] -->|JWT| API
   EXT["External systems"] -->|API key| API
-  API["API service<br/>Express + Prisma"] --> PG[("PostgreSQL")]
+  API["API service<br/>Express + Prisma"] --> PG[("MySQL 8")]
   API --> RS[("Redis")]
   SCHED["Scheduler<br/>BullMQ repeatable jobs"] --> RS
   RS --> WRK["Send workers<br/>rate-limited, concurrency N"]
@@ -465,15 +472,16 @@ flowchart LR
             <tr><td><code>api</code></td><td>REST endpoints, auth, webhook ingestion, enqueues jobs</td><td>request latency</td></tr>
             <tr><td><code>worker</code></td><td>Consumes send jobs, renders, checks suppression, calls provider, writes <code>EmailLog</code></td><td>queue depth</td></tr>
             <tr><td><code>scheduler</code></td><td>Owns BullMQ repeatable jobs; promotes due campaigns into the send queue. Runs inside the <code>worker</code> process, guarded by a Redis lock so only one instance schedules.</td><td>n/a (singleton)</td></tr>
-            <tr><td><code>postgres</code></td><td>Primary datastore</td><td>connections, disk</td></tr>
+            <tr><td><code>mysql</code></td><td>Primary datastore (developer's local server, not containerised)</td><td>connections, disk</td></tr>
             <tr><td><code>redis</code></td><td>BullMQ queues + scheduler lock</td><td>memory</td></tr>
           </tbody>
         </table>
       </div>
 
       <h3>Local development</h3>
-      <p><code>docker-compose</code> brings up <code>postgres</code>, <code>redis</code>, and optionally
-      <a href="https://github.com/felixmosh/bull-board">Bull Board</a>. The Node services run on the host
+      <p><code>docker-compose</code> brings up <code>redis</code> (and optionally
+      <a href="https://github.com/felixmosh/bull-board">Bull Board</a>); MySQL is expected on the host.
+      The Node services run on the host
       (<code>npm run dev</code>) for fast reload, or in the compose file behind a profile. A single
       <code>.env</code> at the repo root is read by every service; <code>.env.example</code> is committed,
       <code>.env</code> is git-ignored.</p>
@@ -508,7 +516,11 @@ flowchart LR
       <h2><span class="num">04</span>Data model</h2>
       <p>Prisma schema, trimmed to the single-org shape. No <code>orgId</code> anywhere. Timestamps
       (<code>createdAt</code>, <code>updatedAt</code>) are on every model but elided below for brevity
-      except where they carry meaning.</p>
+      except where they carry meaning. The outline below is provider-neutral; the committed
+      <code>schema.prisma</code> is MySQL &mdash; <code>htmlBody</code> is <code>@db.LongText</code>,
+      <code>textBody</code>/<code>errorMessage</code>/<code>reason</code> are <code>@db.Text</code>,
+      <code>subject</code> is <code>@db.VarChar(300)</code>, and the JSON columns carry no default
+      (MySQL forbids it) so every write supplies <code>{}</code>/<code>[]</code> explicitly.</p>
 
       <pre><code>// ---- auth ----
 model User {
@@ -754,7 +766,7 @@ sequenceDiagram
   participant API as API
   participant Q as send-email queue
   participant W as Worker
-  participant DB as Postgres
+  participant DB as MySQL
   participant P as Provider adapter
   EXT->>API: POST /api/webhooks/trigger/:eventKey
   API->>DB: resolve Trigger + Contact, eval conditions
@@ -811,7 +823,7 @@ stateDiagram-v2
       <p>Each scheduled campaign registers one BullMQ <strong>repeatable job</strong> keyed by
       <code>campaign:{id}</code>. For <code>ONCE</code>, a single delayed job at <code>sendAt</code>.
       For <code>RECURRING</code>, a repeatable job on <code>cronExpression</code> (evaluated in a fixed
-      configured timezone). When the job fires it re-reads the campaign from Postgres &mdash; if status
+      configured timezone). When the job fires it re-reads the campaign from MySQL &mdash; if status
       is no longer <code>SCHEDULED</code>/<code>SENDING</code>, it exits. This makes pause/resume a pure
       database operation with the repeatable job as an idempotent trigger.</p>
     </section>
@@ -945,7 +957,7 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
         <thead><tr><th>Layer</th><th>What</th><th>Tooling</th></tr></thead>
         <tbody>
           <tr><td>Unit</td><td>Template rendering (substitution, missing-var error, sanitisation, link rewrite, HMAC signing); <code>isSuppressed</code> truth table; idempotency-key construction; provider error classification.</td><td>Vitest</td></tr>
-          <tr><td>Integration</td><td>Trigger webhook &rarr; job enqueued &rarr; worker &rarr; <code>EmailLog</code> row, against a real Postgres + Redis (Testcontainers) and the MockProvider. Duplicate webhook call produces exactly one send.</td><td>Vitest + Testcontainers</td></tr>
+          <tr><td>Integration</td><td>Trigger webhook &rarr; job enqueued &rarr; worker &rarr; <code>EmailLog</code> row, against a real MySQL + Redis (Testcontainers) and the MockProvider. Duplicate webhook call produces exactly one send.</td><td>Vitest + Testcontainers</td></tr>
           <tr><td>Integration</td><td>Campaign schedule &rarr; fan-out &rarr; rate limiting observed &rarr; suppressed contact skipped &rarr; stats endpoint reflects counts.</td><td>Vitest + Testcontainers</td></tr>
           <tr><td>Contract</td><td>SNS payload fixtures (delivery / hard bounce / complaint) drive <code>parseWebhook</code> and assert auto-suppression.</td><td>Vitest fixtures</td></tr>
           <tr><td>E2E (smoke)</td><td>Login &rarr; create template &rarr; create list + contact &rarr; schedule campaign &rarr; see it in outbox.</td><td>Playwright, optional in CI</td></tr>
@@ -960,7 +972,7 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
       <div class="table-wrap"><table>
         <thead><tr><th>#</th><th>Milestone</th><th>Demo</th></tr></thead>
         <tbody>
-          <tr><td>M1</td><td>Repo scaffold, docker-compose, Prisma schema + first migration, <code>/health</code>, pino, CI.</td><td><code>docker-compose up</code>, <code>/health</code> green, migrate runs.</td></tr>
+          <tr><td>M1</td><td>Repo scaffold, docker-compose (redis), Prisma schema + first migration, <code>/health</code>, pino, CI.</td><td><code>/health</code> green against local MySQL + Redis, migrate runs.</td></tr>
           <tr><td>M2</td><td>Auth (login/refresh, bcrypt, JWT) + CRUD for contacts, lists, templates with Zod validation.</td><td>Create a template via API + Postman collection.</td></tr>
           <tr><td>M3</td><td><code>EmailProvider</code> interface + MockProvider + render/sanitise module + <code>POST /templates/:id/preview</code> + "send test email" endpoint.</td><td>Test email lands in <code>.mail-outbox/</code>.</td></tr>
           <tr><td>M4</td><td>BullMQ wiring, <code>send-email</code> queue, worker with idempotency + suppression + rate limit + retries + DLQ. Scheduler + campaign fan-out.</td><td>Schedule a campaign 2 min out; watch it send at 1/sec.</td></tr>

@@ -9,7 +9,7 @@ const LOCK_KEY = "dispatch:scheduler:lock";
 const LOCK_TTL = 30; // seconds
 
 export function repeatKey(campaignId: string): string {
-  return `campaign:${campaignId}`;
+  return `campaign_${campaignId}`;
 }
 
 /** Register (or refresh) the BullMQ trigger for a scheduled campaign. */
@@ -24,7 +24,7 @@ export async function scheduleCampaign(campaignId: string): Promise<string> {
     await campaignDispatchQueue.add(
       jobName,
       { campaignId, runDate: campaign.sendAt.toISOString().slice(0, 10) },
-      { delay, jobId: `once:${campaignId}` },
+      { delay, jobId: `once_${campaignId}` },
     );
   } else {
     if (!campaign.cronExpression) throw new Error("RECURRING campaign missing cronExpression");
@@ -52,7 +52,7 @@ export async function unscheduleCampaign(campaignId: string): Promise<void> {
       await campaignDispatchQueue.removeRepeatableByKey(r.key);
     }
   }
-  await campaignDispatchQueue.remove(`once:${campaignId}`).catch(() => undefined);
+  await campaignDispatchQueue.remove(`once_${campaignId}`).catch(() => undefined);
 }
 
 /**
@@ -96,7 +96,7 @@ async function reconcile(): Promise<void> {
   for (const c of scheduled) {
     const jobName = repeatKey(c.id);
     const hasRepeat = repeatables.some((r) => r.name === jobName);
-    const hasOnce = delayed.some((j) => j.id === `once:${c.id}`);
+    const hasOnce = delayed.some((j) => j.id === `once_${c.id}`);
     if (c.scheduleType === "RECURRING" && !hasRepeat) {
       logger.warn({ campaignId: c.id }, "scheduler: re-registering missing repeatable");
       await scheduleCampaign(c.id);

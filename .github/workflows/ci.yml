@@ -9,16 +9,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     services:
-      postgres:
-        image: postgres:16-alpine
+      mysql:
+        image: mysql:8.4
         env:
-          POSTGRES_USER: dispatch
-          POSTGRES_PASSWORD: dispatch
-          POSTGRES_DB: dispatch
-        ports: ["5432:5432"]
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: dispatch
+        ports: ["3306:3306"]
         options: >-
-          --health-cmd "pg_isready -U dispatch"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-cmd "mysqladmin ping -h localhost -proot"
+          --health-interval 5s --health-timeout 5s --health-retries 15
       redis:
         image: redis:7-alpine
         ports: ["6379:6379"]
@@ -27,7 +26,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://dispatch:dispatch@localhost:5432/dispatch?schema=public
+      DATABASE_URL: mysql://root:root@localhost:3306/dispatch
       REDIS_URL: redis://localhost:6379
       JWT_ACCESS_SECRET: ci-access-secret
       JWT_REFRESH_SECRET: ci-refresh-secret
@@ -41,7 +40,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run prisma:generate
-      - run: npx prisma migrate deploy
+      - run: npm run prisma:deploy
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

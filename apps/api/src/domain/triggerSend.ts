@@ -3,7 +3,7 @@ import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 import { evaluateConditions } from "./conditions.js";
-import { triggerKey } from "./idempotency.js";
+import { queueJobId, triggerKey } from "./idempotency.js";
 import { isSuppressed } from "./suppression.js";
 import { sendEmailQueue, type SendEmailJob } from "../queue/queues.js";
 import type { TriggerCondition } from "@dispatch/shared";
@@ -63,7 +63,7 @@ export async function fireTrigger(
     "send",
     { idempotencyKey, contactId: contact.id, source },
     {
-      jobId: idempotencyKey,
+      jobId: queueJobId(idempotencyKey),
       attempts: env.SEND_MAX_ATTEMPTS,
       backoff: { type: "exponential", delay: env.SEND_BACKOFF_MS },
     },

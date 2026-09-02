@@ -38,7 +38,7 @@ async function main() {
   for (const [i, e] of ["ada@example.com", "grace@example.com", "linus@example.com"].entries()) {
     const c = await prisma.contact.upsert({
       where: { email: e },
-      create: { email: e, firstName: e.split("@")[0], lastName: `Test${i}` },
+      create: { email: e, firstName: e.split("@")[0], lastName: `Test${i}`, customFields: {} },
       update: {},
     });
     await prisma.listMembership.upsert({

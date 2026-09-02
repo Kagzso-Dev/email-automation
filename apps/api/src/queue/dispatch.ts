@@ -1,7 +1,7 @@
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
-import { campaignKey } from "../domain/idempotency.js";
+import { campaignKey, queueJobId } from "../domain/idempotency.js";
 import { sendEmailQueue, type SendEmailJob } from "./queues.js";
 
 const BATCH = 500;
@@ -50,7 +50,7 @@ export async function fanOutCampaign(campaignId: string, runDate: string): Promi
           source,
         } satisfies SendEmailJob,
         opts: {
-          jobId: campaignKey(campaignId, m.contactId, runDay), // dedupe identical enqueues
+          jobId: queueJobId(campaignKey(campaignId, m.contactId, runDay)), // dedupe identical enqueues
           attempts: env.SEND_MAX_ATTEMPTS,
           backoff: { type: "exponential" as const, delay: env.SEND_BACKOFF_MS },
         },

@@ -1,21 +1,5 @@
+# Local dev needs only Redis in a container — the database is your local MySQL.
 services:
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: dispatch
-      POSTGRES_PASSWORD: dispatch
-      POSTGRES_DB: dispatch
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dispatch"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -27,7 +11,8 @@ services:
       timeout: 5s
       retries: 10
 
-  # Application services. Enabled with:  docker compose --profile app up
+  # Application services. Enabled with:  docker compose --profile app up --build
+  # These reach the host's MySQL via host.docker.internal.
   api:
     profiles: ["app"]
     build:
@@ -37,13 +22,13 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://dispatch:dispatch@postgres:5432/dispatch?schema=public
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-mysql://root:root@host.docker.internal:3306/dispatch}
       REDIS_URL: redis://redis:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "4000:4000"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
 
@@ -56,13 +41,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://dispatch:dispatch@postgres:5432/dispatch?schema=public
+      DATABASE_URL: ${DATABASE_URL_DOCKER:-mysql://root:root@host.docker.internal:3306/dispatch}
       REDIS_URL: redis://redis:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
-
-volumes:
-  pgdata:
