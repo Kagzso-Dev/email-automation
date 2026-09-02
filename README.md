@@ -21,11 +21,11 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 Prerequisites: **Node 20+** and a local **MySQL 8** server. That's it.
 
 ```bash
-cp .env.example .env                 # set DB_HOST/PORT/NAME/USER/PASSWORD, edit secrets
+cp .env.example .env                 # set DB_HOST/PORT/NAME/USER/PASSWORD + SEED_ADMIN_*, edit secrets
 npm install
-mysql -u root -p -e "CREATE DATABASE dispatch CHARACTER SET utf8mb4;"
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS dispatch CHARACTER SET utf8mb4;"
 npm run prisma:deploy                # apply migrations
-npm run db:seed                      # admin user + sample data
+npm run seed                         # bootstrap admin + sample data (idempotent)
 npm run dev                          # api :4000, worker, web :5173
 ```
 

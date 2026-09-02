@@ -18,6 +18,7 @@
     "prisma:deploy": "node scripts/prisma.mjs migrate deploy",
     "prisma:studio": "node scripts/prisma.mjs studio",
     "db:seed": "tsx prisma/seed.ts",
+    "seed": "npm run db:seed",
     "test": "npm run test --workspace @dispatch/api",
     "typecheck": "npm-run-all typecheck:*",
     "typecheck:api": "tsc -p apps/api/tsconfig.json --noEmit",

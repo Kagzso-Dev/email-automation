@@ -5,16 +5,53 @@ import { buildDatabaseUrl } from "../scripts/db-url.mjs";
 
 const prisma = new PrismaClient({ datasourceUrl: buildDatabaseUrl() });
 
+// bcrypt cost — matches hashPassword() in apps/api/src/domain/auth.service.ts.
+const BCRYPT_COST = 12;
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value || !value.trim()) {
+    console.error(
+      `\n✗ Missing required environment variable: ${name}\n` +
+        `  Set it in .env (see .env.example) before running the seed.\n`,
+    );
+    process.exit(1);
+  }
+  return value.trim();
+}
+
+async function verifyConnection() {
+  const host = process.env.DB_HOST || "localhost";
+  const port = process.env.DB_PORT || "3306";
+  const name = process.env.DB_NAME || "dispatch";
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (err) {
+    console.error(
+      `\n✗ Could not connect to MySQL at ${host}:${port}/${name}\n` +
+        `  Check DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD in .env,\n` +
+        `  and that the database exists:\n` +
+        `    mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS ${name} CHARACTER SET utf8mb4;"\n`,
+    );
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+  // Never logs DB_PASSWORD.
+  console.log(`✓ MySQL connection successful — ${name} @ ${host}:${port}`);
+}
+
 async function main() {
-  const email = (process.env.SEED_ADMIN_EMAIL ?? "admin@example.com").toLowerCase();
-  const password = process.env.SEED_ADMIN_PASSWORD ?? "changeme12345";
+  await verifyConnection();
+
+  const email = requireEnv("SEED_ADMIN_EMAIL").toLowerCase();
+  const password = requireEnv("SEED_ADMIN_PASSWORD");
 
   const admin = await prisma.user.upsert({
     where: { email },
-    create: { email, passwordHash: await bcrypt.hash(password, 12), role: "ADMIN" },
-    update: {},
+    create: { email, passwordHash: await bcrypt.hash(password, BCRYPT_COST), role: "ADMIN" },
+    update: {}, // idempotent — an existing admin's password is left untouched
   });
-  console.log(`admin user: ${admin.email} (${admin.role})`);
+  console.log(`✓ admin user: ${admin.email} (${admin.role})`);
 
   const template = await prisma.template.upsert({
     where: { id: "seed-welcome" },
@@ -61,7 +98,7 @@ async function main() {
     update: {},
   });
 
-  console.log("seed complete");
+  console.log("✓ seed complete (idempotent — safe to re-run)");
 }
 
 main()
