@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+*.local
+.mail-outbox/
+coverage/
+*.log
+.DS_Store
+prisma/*.db
+apps/web/dist/
+.vite/

@@ -1,0 +1,39 @@
+{
+  "name": "email-automation-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Dispatch — scheduled + event-triggered outbound email platform (single org).",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:api dev:worker dev:web",
+    "dev:api": "npm run dev --workspace @dispatch/api",
+    "dev:worker": "npm run dev:worker --workspace @dispatch/api",
+    "dev:web": "npm run dev --workspace @dispatch/web",
+    "build": "npm run build --workspace @dispatch/web",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "db:seed": "tsx prisma/seed.ts",
+    "test": "npm run test --workspace @dispatch/api",
+    "typecheck": "npm-run-all typecheck:*",
+    "typecheck:api": "tsc -p apps/api/tsconfig.json --noEmit",
+    "typecheck:web": "tsc -p apps/web/tsconfig.json --noEmit"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "npm-run-all": "^4.1.5",
+    "prisma": "^5.17.0",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

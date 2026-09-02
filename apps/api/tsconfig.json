@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vitest/globals"],
+    // Express route params are always strings once a route matches; the extra
+    // undefined from noUncheckedIndexedAccess adds noise without safety here.
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src", "test"]
+}

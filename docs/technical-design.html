@@ -1,0 +1,998 @@
+<title>Dispatch Technical Design</title>
+<meta name="description" content="Technical design for a scheduled + event-triggered outbound email platform.">
+<style>
+  :root {
+    --paper: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #fbfbfd;
+    --ink: #1b1f2a;
+    --slate: #565f6e;
+    --faint: #8a92a0;
+    --line: #e3e6ec;
+    --line-strong: #ccd2dc;
+    --accent: #3a4fb8;
+    --accent-ink: #2c3c96;
+    --accent-soft: #eef0fb;
+    --ok: #2f7d5d;
+    --ok-soft: #e7f1ec;
+    --warn: #9c6412;
+    --warn-soft: #f8f0e1;
+    --crit: #bd4238;
+    --crit-soft: #f9ebe9;
+    --shadow: 0 1px 2px rgba(20,23,30,.05), 0 10px 30px rgba(20,23,30,.055);
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #12151b;
+      --surface: #191d25;
+      --surface-2: #1f242d;
+      --ink: #e7e9ef;
+      --slate: #a6adbb;
+      --faint: #767e8c;
+      --line: #2a2f3a;
+      --line-strong: #3b414e;
+      --accent: #97a5f3;
+      --accent-ink: #b6c0f8;
+      --accent-soft: #212844;
+      --ok: #7fc9a6;
+      --ok-soft: #1a2b25;
+      --warn: #d9a441;
+      --warn-soft: #2c2416;
+      --crit: #e4796d;
+      --crit-soft: #2e1d1b;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #12151b;
+    --surface: #191d25;
+    --surface-2: #1f242d;
+    --ink: #e7e9ef;
+    --slate: #a6adbb;
+    --faint: #767e8c;
+    --line: #2a2f3a;
+    --line-strong: #3b414e;
+    --accent: #97a5f3;
+    --accent-ink: #b6c0f8;
+    --accent-soft: #212844;
+    --ok: #7fc9a6;
+    --ok-soft: #1a2b25;
+    --warn: #d9a441;
+    --warn-soft: #2c2416;
+    --crit: #e4796d;
+    --crit-soft: #2e1d1b;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(1.25rem, 4vw, 3rem) clamp(1rem, 4vw, 2.5rem) 5rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+  @media (min-width: 1000px) {
+    .wrap { grid-template-columns: 232px minmax(0, 1fr); gap: 3.5rem; align-items: start; }
+    nav.toc { position: sticky; top: 1.5rem; }
+  }
+
+  /* ---- masthead ---- */
+  header.masthead {
+    grid-column: 1 / -1;
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 1.75rem;
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .72rem;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 .9rem;
+  }
+  h1 {
+    font-family: "Fraunces", Georgia, "Times New Roman", serif;
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-size: clamp(2rem, 5vw, 3.1rem);
+    line-height: 1.08;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0 0 .6rem;
+  }
+  .standfirst {
+    font-size: clamp(1.02rem, 2vw, 1.18rem);
+    color: var(--slate);
+    max-width: 62ch;
+    margin: 0 0 1.6rem;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: .1rem 1.5rem;
+    border-top: 1px solid var(--line);
+    padding-top: 1.1rem;
+  }
+  .meta-grid div { padding: .35rem 0; }
+  .meta-grid dt {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .meta-grid dd { margin: .15rem 0 0; font-size: .92rem; font-weight: 500; }
+
+  /* ---- toc ---- */
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: toc;
+    border-left: 2px solid var(--line);
+  }
+  nav.toc a {
+    counter-increment: toc;
+    display: block;
+    padding: .3rem 0 .3rem 1rem;
+    margin-left: -2px;
+    border-left: 2px solid transparent;
+    color: var(--slate);
+    text-decoration: none;
+    font-size: .875rem;
+    line-height: 1.35;
+  }
+  nav.toc a::before {
+    content: counter(toc, decimal-leading-zero) "  ";
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .74rem;
+    color: var(--faint);
+  }
+  nav.toc a:hover { color: var(--ink); border-left-color: var(--line-strong); }
+  nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- content ---- */
+  main { min-width: 0; }
+  section { margin-bottom: 3.25rem; scroll-margin-top: 1.5rem; }
+  section > h2 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 600;
+    font-size: 1.5rem;
+    letter-spacing: -0.008em;
+    margin: 0 0 1rem;
+    padding-bottom: .5rem;
+    border-bottom: 1px solid var(--line);
+    text-wrap: balance;
+  }
+  section > h2 .num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .9rem;
+    color: var(--accent);
+    margin-right: .7rem;
+  }
+  h3 {
+    font-size: 1.06rem;
+    font-weight: 600;
+    margin: 2rem 0 .5rem;
+    letter-spacing: -0.005em;
+  }
+  h4 {
+    font-size: .8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--slate);
+    margin: 1.5rem 0 .5rem;
+  }
+  p { margin: 0 0 1rem; max-width: 68ch; }
+  main ul, main ol { max-width: 66ch; padding-left: 1.2rem; margin: 0 0 1rem; }
+  main li { margin: .3rem 0; }
+  strong { font-weight: 600; }
+  a { color: var(--accent-ink); }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .86em;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    padding: .1em .38em;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.1rem 1.25rem;
+    overflow-x: auto;
+    margin: 0 0 1.25rem;
+    font-size: .82rem;
+    line-height: 1.6;
+  }
+  pre code { background: none; color: var(--ink); padding: 0; font-size: inherit; }
+
+  /* ---- callouts ---- */
+  .box {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line-strong);
+    background: var(--surface);
+    border-radius: 8px;
+    padding: .95rem 1.15rem;
+    margin: 0 0 1.25rem;
+    box-shadow: var(--shadow);
+  }
+  .box p:last-child { margin-bottom: 0; }
+  .box .tag {
+    display: inline-block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    margin-bottom: .35rem;
+  }
+  .box.decision { border-left-color: var(--accent); }
+  .box.decision .tag { color: var(--accent); }
+  .box.constraint { border-left-color: var(--warn); background: var(--warn-soft); }
+  .box.constraint .tag { color: var(--warn); }
+  .box.risk { border-left-color: var(--crit); background: var(--crit-soft); }
+  .box.risk .tag { color: var(--crit); }
+
+  /* ---- decision ledger ---- */
+  .ledger { display: grid; gap: .75rem; margin: 0 0 1rem; }
+  .ledger .row {
+    display: grid;
+    grid-template-columns: minmax(0, 190px) 1fr;
+    gap: .3rem 1.25rem;
+    padding: .85rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .ledger .q {
+    font-weight: 600;
+    font-size: .9rem;
+  }
+  .ledger .a { color: var(--slate); font-size: .92rem; }
+  .ledger .a b { color: var(--ink); font-weight: 600; }
+  @media (max-width: 560px) { .ledger .row { grid-template-columns: 1fr; } }
+
+  /* ---- tables ---- */
+  .table-wrap { overflow-x: auto; margin: 0 0 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: .86rem; }
+  th, td { text-align: left; padding: .6rem .85rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    background: var(--surface-2);
+    font-size: .7rem;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--slate);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td code { font-size: .8rem; white-space: nowrap; }
+  .method {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 600;
+    font-size: .74rem;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .pill {
+    display: inline-block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    padding: .08em .5em;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    line-height: 1.5;
+  }
+  .pill.ok { color: var(--ok); background: var(--ok-soft); }
+  .pill.warn { color: var(--warn); background: var(--warn-soft); }
+  .pill.crit { color: var(--crit); background: var(--crit-soft); }
+
+  figure { margin: 0 0 1.25rem; }
+  figure.diagram {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    overflow-x: auto;
+  }
+  .mermaid { display: flex; justify-content: center; min-width: min-content; }
+  figcaption {
+    font-size: .78rem;
+    color: var(--faint);
+    margin-top: .6rem;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  .cols { display: grid; gap: 1.25rem; }
+  @media (min-width: 680px) { .cols.two { grid-template-columns: 1fr 1fr; } }
+
+  hr.divider { border: none; border-top: 1px solid var(--line); margin: 2.5rem 0; }
+  .footnote { font-size: .84rem; color: var(--faint); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Technical Design &nbsp;·&nbsp; Codename: Dispatch</p>
+    <h1>Email Automation Platform</h1>
+    <p class="standfirst">A single-organization service for scheduled campaigns and event-triggered
+    transactional email &mdash; queue-backed sending, template rendering, delivery tracking, and
+    suppression enforcement. This document resolves the architecture before any code is written.</p>
+    <dl class="meta-grid">
+      <div><dt>Status</dt><dd>Draft for review</dd></div>
+      <div><dt>Date</dt><dd>2026-09-02</dd></div>
+      <div><dt>Scope</dt><dd>Single org, SES sandbox</dd></div>
+      <div><dt>Target volume</dt><dd>&lt; 200 emails / 24h</dd></div>
+      <div><dt>Supersedes</dt><dd>Build Prompt v1</dd></div>
+    </dl>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <ol>
+      <li><a href="#decisions">Resolved decisions</a></li>
+      <li><a href="#scope">Scope &amp; non-goals</a></li>
+      <li><a href="#architecture">Architecture overview</a></li>
+      <li><a href="#datamodel">Data model</a></li>
+      <li><a href="#api">API surface</a></li>
+      <li><a href="#pipeline">Sending pipeline</a></li>
+      <li><a href="#provider">Provider abstraction</a></li>
+      <li><a href="#tracking">Tracking &amp; compliance</a></li>
+      <li><a href="#frontend">Frontend</a></li>
+      <li><a href="#ops">Observability &amp; ops</a></li>
+      <li><a href="#testing">Testing strategy</a></li>
+      <li><a href="#buildorder">Build order</a></li>
+      <li><a href="#open">Still open</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <section id="decisions">
+      <h2><span class="num">01</span>Resolved decisions</h2>
+      <p>Four questions were settled before this draft. They are load-bearing &mdash; changing any
+      of them reopens the design.</p>
+      <div class="ledger">
+        <div class="row">
+          <span class="q">Deliverable now</span>
+          <span class="a">This design document only. No code until it is approved.</span>
+        </div>
+        <div class="row">
+          <span class="q">Repository</span>
+          <span class="a">New folder <code>email-automation-platform/</code> under the current directory; fresh git repo.</span>
+        </div>
+        <div class="row">
+          <span class="q">Tenancy</span>
+          <span class="a"><b>Single organization.</b> No <code>orgId</code> on models. Roles are a flat <code>admin</code> / <code>editor</code> enum on <code>User</code>.</span>
+        </div>
+        <div class="row">
+          <span class="q">Email provider</span>
+          <span class="a"><b>SES sandbox, low volume.</b> Default runtime provider is a console/mock adapter. The SES adapter is written and tested but disabled by config until the domain is verified and the account leaves sandbox.</span>
+        </div>
+      </div>
+      <div class="box constraint">
+        <span class="tag">SES sandbox constraint</span>
+        <p>While in sandbox: max <strong>200 recipients / 24 hours</strong>, max <strong>1 message/second</strong>,
+        and <strong>every recipient address must be individually verified</strong>. The pipeline enforces
+        all three as hard limits so behaviour does not change shape when the real adapter is switched on &mdash;
+        only the numbers move (to config).</p>
+      </div>
+    </section>
+
+    <section id="scope">
+      <h2><span class="num">02</span>Scope &amp; non-goals</h2>
+      <div class="cols two">
+        <div>
+          <h4>In scope</h4>
+          <ul>
+            <li>Scheduled campaigns: one-time at a future time, and recurring by cron expression.</li>
+            <li>Event-triggered email via an authenticated webhook (<code>/api/webhooks/trigger/:eventKey</code>).</li>
+            <li>Contacts, lists, list membership; CSV import.</li>
+            <li>Reusable templates with <code>{{variable}}</code> substitution and a preview endpoint.</li>
+            <li>Delivery tracking: sent / delivered / opened / clicked / bounced / complained / failed.</li>
+            <li>Suppression list (unsubscribes + hard bounces + complaints), enforced on every send.</li>
+            <li>Queue with rate limiting, idempotent sends, exponential-backoff retries, dead-letter queue.</li>
+            <li>React dashboard for all of the above, plus a stats view per campaign.</li>
+          </ul>
+        </div>
+        <div>
+          <h4>Explicit non-goals (v1)</h4>
+          <ul>
+            <li>Multi-tenancy / per-customer isolation.</li>
+            <li>Visual drag-and-drop template builder &mdash; templates are hand-authored HTML.</li>
+            <li>A/B testing, send-time optimisation, deliverability analytics beyond raw counts.</li>
+            <li>Inbound email / reply parsing.</li>
+            <li>Provider failover at runtime &mdash; the interface allows it later; v1 runs one provider.</li>
+            <li>Fine-grained per-resource permissions beyond admin/editor.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <h2><span class="num">03</span>Architecture overview</h2>
+      <p>One Node process type runs the API; a second runs the queue workers and the scheduler.
+      Both share the Prisma client and the Redis connection. PostgreSQL is the source of truth;
+      Redis holds only transient queue state.</p>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+%%{init: {'theme':'neutral'}}%%
+flowchart LR
+  UI["Dashboard<br/>React + Vite SPA"] -->|JWT| API
+  EXT["External systems"] -->|API key| API
+  API["API service<br/>Express + Prisma"] --> PG[("PostgreSQL")]
+  API --> RS[("Redis")]
+  SCHED["Scheduler<br/>BullMQ repeatable jobs"] --> RS
+  RS --> WRK["Send workers<br/>rate-limited, concurrency N"]
+  WRK --> PG
+  WRK --> ADP{"Provider adapter"}
+  ADP -->|default| MOCK["Console / mock"]
+  ADP -.->|"when verified"| SES["AWS SES"]
+  SES -.->|"SNS notifications"| API
+  WRK -->|permanent failure| DLQ[["Dead-letter queue"]]
+        </pre>
+        <figcaption>fig. 3.1 &mdash; component topology</figcaption>
+      </figure>
+
+      <h3>Processes &amp; deployment units</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Unit</th><th>Responsibility</th><th>Scale signal</th></tr></thead>
+          <tbody>
+            <tr><td><code>api</code></td><td>REST endpoints, auth, webhook ingestion, enqueues jobs</td><td>request latency</td></tr>
+            <tr><td><code>worker</code></td><td>Consumes send jobs, renders, checks suppression, calls provider, writes <code>EmailLog</code></td><td>queue depth</td></tr>
+            <tr><td><code>scheduler</code></td><td>Owns BullMQ repeatable jobs; promotes due campaigns into the send queue. Runs inside the <code>worker</code> process, guarded by a Redis lock so only one instance schedules.</td><td>n/a (singleton)</td></tr>
+            <tr><td><code>postgres</code></td><td>Primary datastore</td><td>connections, disk</td></tr>
+            <tr><td><code>redis</code></td><td>BullMQ queues + scheduler lock</td><td>memory</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Local development</h3>
+      <p><code>docker-compose</code> brings up <code>postgres</code>, <code>redis</code>, and optionally
+      <a href="https://github.com/felixmosh/bull-board">Bull Board</a>. The Node services run on the host
+      (<code>npm run dev</code>) for fast reload, or in the compose file behind a profile. A single
+      <code>.env</code> at the repo root is read by every service; <code>.env.example</code> is committed,
+      <code>.env</code> is git-ignored.</p>
+
+      <h3>Repository layout</h3>
+      <pre><code>email-automation-platform/
+├── docker-compose.yml
+├── .env.example
+├── package.json            # workspaces: api, web, shared
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
+├── packages/
+│   └── shared/             # Zod schemas + TS types shared by api & web
+├── apps/
+│   ├── api/
+│   │   ├── src/
+│   │   │   ├── http/       # express routers, middleware
+│   │   │   ├── domain/     # contacts, templates, campaigns, triggers, suppression
+│   │   │   ├── queue/      # BullMQ queues, workers, scheduler
+│   │   │   ├── provider/   # EmailProvider interface + mock + ses adapters
+│   │   │   ├── render/     # template rendering + sanitisation
+│   │   │   └── observability/  # pino logger, request-id, sentry
+│   │   └── test/
+│   └── web/
+│       └── src/            # React, React Query, RHF + Zod, shadcn/ui
+└── docs/
+    └── technical-design.html   # this document</code></pre>
+    </section>
+
+    <section id="datamodel">
+      <h2><span class="num">04</span>Data model</h2>
+      <p>Prisma schema, trimmed to the single-org shape. No <code>orgId</code> anywhere. Timestamps
+      (<code>createdAt</code>, <code>updatedAt</code>) are on every model but elided below for brevity
+      except where they carry meaning.</p>
+
+      <pre><code>// ---- auth ----
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  passwordHash String
+  role         Role    @default(EDITOR)
+  createdAt    DateTime @default(now())
+}
+enum Role { ADMIN EDITOR }
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  name      String
+  keyHash   String   @unique      // sha-256 of the raw key; raw shown once at creation
+  lastUsed  DateTime?
+  createdAt DateTime @default(now())
+}
+
+// ---- audience ----
+model Contact {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  firstName    String?
+  lastName     String?
+  customFields Json          @default("{}")
+  status       ContactStatus @default(ACTIVE)
+  memberships  ListMembership[]
+  emailLogs    EmailLog[]
+  unsubscribe  Unsubscribe?
+  createdAt    DateTime      @default(now())
+}
+enum ContactStatus { ACTIVE UNSUBSCRIBED BOUNCED COMPLAINED }
+
+model List {
+  id          String @id @default(cuid())
+  name        String
+  description String?
+  members     ListMembership[]
+  campaigns   Campaign[]
+}
+model ListMembership {
+  listId    String
+  contactId String
+  addedAt   DateTime @default(now())
+  list      List    @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  @@id([listId, contactId])
+}
+
+// ---- content ----
+model Template {
+  id        String   @id @default(cuid())
+  name      String
+  subject   String
+  htmlBody  String                       // stored raw, sanitised at render time
+  textBody  String?
+  variables Json     @default("[]")       // declared var names for the editor helper
+  campaigns Campaign[]
+  triggers  Trigger[]
+  updatedAt DateTime @updatedAt
+}
+
+// ---- scheduled sends ----
+model Campaign {
+  id             String         @id @default(cuid())
+  name           String
+  templateId     String
+  listId         String
+  scheduleType   ScheduleType
+  sendAt         DateTime?      // for ONCE
+  cronExpression String?        // for RECURRING
+  status         CampaignStatus @default(DRAFT)
+  repeatJobKey   String?        // BullMQ repeatable-job key, set when scheduled
+  template       Template @relation(fields: [templateId], references: [id])
+  list           List     @relation(fields: [listId], references: [id])
+  emailLogs      EmailLog[]
+}
+enum ScheduleType { ONCE RECURRING }
+enum CampaignStatus { DRAFT SCHEDULED SENDING SENT PAUSED FAILED }
+
+// ---- event-triggered sends ----
+model Trigger {
+  id         String  @id @default(cuid())
+  name       String
+  eventKey   String  @unique         // path segment in the webhook URL
+  templateId String
+  conditions Json    @default("{}")   // simple field predicates on the payload
+  active     Boolean @default(true)
+  template   Template @relation(fields: [templateId], references: [id])
+  emailLogs  EmailLog[]
+}
+
+// ---- the ledger ----
+model EmailLog {
+  id               String      @id @default(cuid())
+  campaignId       String?
+  triggerId        String?
+  contactId        String
+  idempotencyKey   String      @unique
+  status           EmailStatus @default(QUEUED)
+  providerMessageId String?
+  errorMessage     String?
+  sentAt           DateTime?
+  updatedAt        DateTime    @updatedAt
+  campaign Campaign? @relation(fields: [campaignId], references: [id])
+  trigger  Trigger?  @relation(fields: [triggerId],  references: [id])
+  contact  Contact   @relation(fields: [contactId],  references: [id])
+  @@index([campaignId, status])
+  @@index([contactId])
+}
+enum EmailStatus { QUEUED SENT DELIVERED OPENED CLICKED BOUNCED COMPLAINED FAILED }
+
+model Unsubscribe {
+  id        String   @id @default(cuid())
+  contactId String   @unique
+  reason    String?
+  token     String   @unique          // opaque token in the unsubscribe link
+  createdAt DateTime @default(now())
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}</code></pre>
+
+      <h3>Notes</h3>
+      <ul>
+        <li><strong><code>idempotencyKey</code></strong> is the spine of exactly-once delivery. Format:
+          <code>{campaign|trigger}:{sourceId}:{contactId}:{occurrenceISODate}</code>. For a recurring
+          campaign, <code>occurrenceISODate</code> is the scheduled run's date, so the same contact can
+          receive Monday's and Tuesday's digest but never two of Monday's.</li>
+        <li><strong>Status is a lattice, not a strict line.</strong> <code>OPENED</code> implies delivered;
+          a later <code>COMPLAINED</code> can supersede <code>OPENED</code>. The worker only ever advances
+          status; provider webhooks apply terminal states. See fig. 6.2.</li>
+        <li><strong>Suppression</strong> is derived, not a table: a contact is suppressed if
+          <code>status != ACTIVE</code> <em>or</em> an <code>Unsubscribe</code> row exists. A single
+          <code>isSuppressed(contactId)</code> helper is the only code path allowed to make that call.</li>
+        <li><strong>HTML is stored raw</strong> and sanitised at render time (not on save) so the
+          sanitiser can be upgraded without a data migration.</li>
+      </ul>
+    </section>
+
+    <section id="api">
+      <h2><span class="num">05</span>API surface</h2>
+      <p>All dashboard routes require a JWT bearer token. Webhook routes authenticate by API key
+      (<code>Authorization: Bearer sk_...</code> or <code>X-Api-Key</code>) and are IP-rate-limited.
+      Tracking routes are public by design. Request and response bodies are validated with Zod schemas
+      from <code>packages/shared</code>.</p>
+
+      <h4>Auth</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">POST</td><td><code>/api/auth/login</code></td><td>Email + password &rarr; access + refresh token</td><td>none</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token &rarr; new access token</td><td>refresh token</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Contacts &amp; lists</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">GET</td><td><code>/api/contacts</code></td><td>Paginated, searchable, filter by status/list</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/contacts</code></td><td>Create one contact</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/contacts/import</code></td><td>CSV upload &rarr; async import job, returns job id</td><td>JWT</td></tr>
+          <tr><td class="method">GET / POST</td><td><code>/api/lists</code></td><td>List / create lists</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/lists/:id/members</code></td><td>Add/remove contacts (bulk)</td><td>JWT</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Templates</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">GET / POST</td><td><code>/api/templates</code></td><td>List / create</td><td>JWT</td></tr>
+          <tr><td class="method">PUT / DELETE</td><td><code>/api/templates/:id</code></td><td>Update / delete (blocked if referenced by an active campaign/trigger)</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/templates/:id/preview</code></td><td>Render with supplied sample variables &rarr; sanitised HTML + text</td><td>JWT</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Campaigns</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">GET / POST / PUT</td><td><code>/api/campaigns</code></td><td>List / create / update (draft only)</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/schedule</code></td><td>Validate + move to <span class="pill ok">SCHEDULED</span>, register repeatable job</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/pause</code></td><td><span class="pill warn">PAUSED</span>, remove repeatable job, leave in-flight jobs</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/send-now</code></td><td>Fan out immediately (still rate-limited + suppression-checked)</td><td>JWT admin</td></tr>
+          <tr><td class="method">GET</td><td><code>/api/campaigns/:id/stats</code></td><td>Counts by <code>EmailStatus</code> + open/click/bounce rates</td><td>JWT</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Triggers</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">GET / POST / PUT</td><td><code>/api/triggers</code></td><td>Manage event definitions</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/webhooks/trigger/:eventKey</code></td><td><code>{ contactEmail, payload }</code> &rarr; evaluate conditions &rarr; enqueue send &rarr; <span class="pill ok">202</span></td><td>API key</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Tracking &amp; provider callbacks</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">POST</td><td><code>/api/webhooks/ses</code></td><td>SNS-signed delivery / bounce / complaint events</td><td>SNS signature</td></tr>
+          <tr><td class="method">GET</td><td><code>/api/track/open/:logId.png</code></td><td>1&times;1 pixel; records <span class="pill ok">OPENED</span></td><td>public</td></tr>
+          <tr><td class="method">GET</td><td><code>/api/track/click/:logId</code></td><td>Records <span class="pill ok">CLICKED</span>, 302 to original URL (signed)</td><td>public</td></tr>
+          <tr><td class="method">GET</td><td><code>/api/unsubscribe/:token</code></td><td>One-click unsubscribe page &rarr; writes <code>Unsubscribe</code></td><td>public token</td></tr>
+        </tbody>
+      </table></div>
+
+      <h4>Ops</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
+        <tbody>
+          <tr><td class="method">GET</td><td><code>/health</code></td><td>DB + Redis reachability, returns 200/503</td><td>none</td></tr>
+          <tr><td class="method">GET / POST / DELETE</td><td><code>/api/api-keys</code></td><td>Manage webhook API keys (raw key shown once)</td><td>JWT admin</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="pipeline">
+      <h2><span class="num">06</span>Sending pipeline</h2>
+      <p>Two entry points &mdash; the scheduler and the trigger webhook &mdash; converge on one
+      <code>send-email</code> queue. Every send, regardless of origin, goes through the same worker
+      with the same guarantees.</p>
+
+      <h3>Queues</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Queue</th><th>Producer</th><th>Job</th><th>Settings</th></tr></thead>
+        <tbody>
+          <tr><td><code>campaign-dispatch</code></td><td>scheduler (repeatable) / <code>send-now</code></td><td>one job per due campaign; fans out into <code>send-email</code> in batches of 500</td><td>concurrency 1 per campaign</td></tr>
+          <tr><td><code>send-email</code></td><td>fan-out + trigger webhook</td><td>one job per <code>(source, contact, occurrence)</code></td><td>rate limit <code>max: 1, duration: 1000</code> (sandbox); backoff exponential, attempts 5</td></tr>
+          <tr><td><code>csv-import</code></td><td><code>/api/contacts/import</code></td><td>parse + upsert contacts</td><td>concurrency 1</td></tr>
+          <tr><td><code>send-email-dlq</code></td><td>worker on final failure</td><td>records permanent failure, logs at <code>error</code>, increments an alert metric</td><td>manual drain</td></tr>
+        </tbody>
+      </table></div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+  autonumber
+  participant EXT as External system
+  participant API as API
+  participant Q as send-email queue
+  participant W as Worker
+  participant DB as Postgres
+  participant P as Provider adapter
+  EXT->>API: POST /api/webhooks/trigger/:eventKey
+  API->>DB: resolve Trigger + Contact, eval conditions
+  alt suppressed or conditions fail
+    API-->>EXT: 202 (no-op, reason logged)
+  else proceed
+    API->>Q: add job { idempotencyKey }
+    API-->>EXT: 202 Accepted
+  end
+  Q->>W: deliver (<= 1 / second)
+  W->>DB: isSuppressed(contactId)?
+  W->>DB: upsert EmailLog by idempotencyKey
+  Note over W,DB: if EmailLog already SENT -> ack, do nothing
+  W->>W: render template (contact fields + payload)
+  W->>P: send(message)
+  P-->>W: providerMessageId
+  W->>DB: EmailLog -> SENT, providerMessageId, sentAt
+        </pre>
+        <figcaption>fig. 6.1 &mdash; event-triggered send, happy path</figcaption>
+      </figure>
+
+      <h3>Guarantees, and how each is met</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Property</th><th>Mechanism</th></tr></thead>
+        <tbody>
+          <tr><td>Idempotency</td><td>Unique <code>EmailLog.idempotencyKey</code>. Worker does <code>INSERT ... ON CONFLICT DO NOTHING</code>; if the row is already <code>SENT</code>/terminal, the job acks without sending. Safe under retry and duplicate webhook calls.</td></tr>
+          <tr><td>Rate limiting</td><td>BullMQ queue-level limiter, value from <code>SEND_RATE_PER_SEC</code> (default 1 in sandbox). Applies across all workers via Redis.</td></tr>
+          <tr><td>Daily cap</td><td>Redis counter keyed by UTC date, checked before <code>provider.send</code>. Over cap &rarr; job is delayed to the next window rather than failed.</td></tr>
+          <tr><td>Retries</td><td><code>attempts: 5</code>, <code>backoff: { type: 'exponential', delay: 30_000 }</code>. Provider errors are classified: <em>transient</em> (throttling, 5xx) retry; <em>permanent</em> (invalid address, sandbox-unverified) go straight to DLQ.</td></tr>
+          <tr><td>Suppression</td><td><code>isSuppressed()</code> called inside the worker immediately before render. Never trust the enqueue-time check &mdash; a contact can unsubscribe while the job sits in the queue.</td></tr>
+          <tr><td>Partial retry</td><td>Fan-out is per-contact jobs, so one bad address never blocks the campaign; only that job retries or dead-letters.</td></tr>
+          <tr><td>Poison-message safety</td><td>Render errors (bad template syntax, missing required var) are permanent &rarr; DLQ with the offending variable named in <code>errorMessage</code>.</td></tr>
+        </tbody>
+      </table></div>
+
+      <figure class="diagram">
+        <pre class="mermaid">
+%%{init: {'theme':'neutral'}}%%
+stateDiagram-v2
+  [*] --> QUEUED
+  QUEUED --> SENT: provider accepted
+  QUEUED --> FAILED: permanent error / DLQ
+  SENT --> DELIVERED: SES delivery event
+  SENT --> BOUNCED: hard bounce -> auto-suppress
+  DELIVERED --> OPENED: tracking pixel
+  OPENED --> CLICKED: tracked link
+  DELIVERED --> COMPLAINED: spam report -> auto-suppress
+  DELIVERED --> CLICKED: click without recorded open
+        </pre>
+        <figcaption>fig. 6.2 &mdash; <code>EmailStatus</code> transitions (worker advances; webhooks apply terminal states)</figcaption>
+      </figure>
+
+      <h3>Scheduler detail</h3>
+      <p>Each scheduled campaign registers one BullMQ <strong>repeatable job</strong> keyed by
+      <code>campaign:{id}</code>. For <code>ONCE</code>, a single delayed job at <code>sendAt</code>.
+      For <code>RECURRING</code>, a repeatable job on <code>cronExpression</code> (evaluated in a fixed
+      configured timezone). When the job fires it re-reads the campaign from Postgres &mdash; if status
+      is no longer <code>SCHEDULED</code>/<code>SENDING</code>, it exits. This makes pause/resume a pure
+      database operation with the repeatable job as an idempotent trigger.</p>
+    </section>
+
+    <section id="provider">
+      <h2><span class="num">07</span>Provider abstraction</h2>
+      <p>The worker depends only on this interface. The concrete adapter is chosen at boot from
+      <code>EMAIL_PROVIDER</code> (<code>mock</code> | <code>ses</code>).</p>
+      <pre><code>interface EmailProvider {
+  readonly name: string;
+
+  send(msg: OutboundMessage): Promise&lt;SendResult&gt;;
+
+  // Parse a provider callback (SNS body) into normalised events.
+  parseWebhook(req: RawRequest): DeliveryEvent[];
+}
+
+interface OutboundMessage {
+  to: string;
+  from: string;              // configured verified sender
+  subject: string;
+  html: string;
+  text: string;
+  headers: Record&lt;string, string&gt;;   // List-Unsubscribe, etc.
+  tags: { emailLogId: string };       // round-tripped via provider metadata
+}
+
+interface SendResult { providerMessageId: string; }
+
+type DeliveryEvent =
+  | { type: 'delivered';  providerMessageId: string }
+  | { type: 'bounced';    providerMessageId: string; hard: boolean }
+  | { type: 'complained'; providerMessageId: string };
+
+class PermanentSendError extends Error {}   // -> DLQ, no retry
+class TransientSendError extends Error {}   // -> retry with backoff</code></pre>
+      <div class="cols two">
+        <div>
+          <h4>MockProvider (default)</h4>
+          <ul>
+            <li>Writes the rendered message to disk under <code>./.mail-outbox/</code> and logs a one-line summary.</li>
+            <li>Returns a synthetic <code>providerMessageId</code> (<code>mock-{uuid}</code>).</li>
+            <li>Optional <code>MOCK_FAIL_RATE</code> to exercise retry/DLQ paths in dev.</li>
+            <li>No webhook; a dev-only endpoint can simulate delivery events.</li>
+          </ul>
+        </div>
+        <div>
+          <h4>SesProvider (built, disabled)</h4>
+          <ul>
+            <li><code>@aws-sdk/client-sesv2</code>, <code>SendEmailCommand</code> with configuration set for event publishing.</li>
+            <li><code>parseWebhook</code> verifies the SNS signature, handles subscription confirmation, maps SES notification types.</li>
+            <li>Classifies <code>Throttling</code> / <code>ServiceUnavailable</code> as transient; <code>MessageRejected</code> for unverified recipients as permanent (expected in sandbox).</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="tracking">
+      <h2><span class="num">08</span>Tracking &amp; compliance</h2>
+      <h3>Rendering &amp; link rewriting</h3>
+      <ul>
+        <li>Template rendered with a logic-less engine (Handlebars-style <code>{{var}}</code> only &mdash;
+          no partials, no helpers that can execute). Missing declared variables raise a permanent render error.</li>
+        <li>Output HTML sanitised with a strict allowlist (no <code>&lt;script&gt;</code>, no event
+          handler attributes, no <code>javascript:</code> URLs).</li>
+        <li>Every <code>&lt;a href&gt;</code> is rewritten to <code>/api/track/click/:logId?u=&lt;signed&gt;</code>.
+          The original URL is HMAC-signed so the redirect cannot be turned into an open redirect.</li>
+        <li>A tracking pixel <code>&lt;img src="/api/track/open/:logId.png"&gt;</code> is appended before <code>&lt;/body&gt;</code>.</li>
+        <li>Every message gets a <code>List-Unsubscribe</code> header and a visible unsubscribe link
+          (<code>/api/unsubscribe/:token</code>) &mdash; template validation rejects a template that omits
+          the <code>{{unsubscribe_url}}</code> variable.</li>
+      </ul>
+      <div class="box constraint">
+        <span class="tag">Compliance baseline</span>
+        <p>CAN-SPAM / GDPR: physical sender address in the footer, functioning unsubscribe honoured within
+        the send pipeline immediately (suppression is derived, not batch-processed), hard bounces and
+        complaints auto-suppress on webhook receipt. Open/click tracking is on by default &mdash; see
+        <a href="#open">Still open</a> for the consent question.</p>
+      </div>
+      <h3>Webhook ingestion</h3>
+      <p><code>/api/webhooks/ses</code> verifies the SNS signature, looks up the <code>EmailLog</code> by
+      <code>providerMessageId</code>, advances status, and on <code>bounced(hard)</code> /
+      <code>complained</code> sets <code>Contact.status</code> and the send pipeline stops targeting that
+      address on the next evaluation. Events are processed idempotently (a delivery event arriving twice
+      is a no-op).</p>
+    </section>
+
+    <section id="frontend">
+      <h2><span class="num">09</span>Frontend</h2>
+      <p>React + TypeScript (Vite), Tailwind + shadcn/ui, React Query for server state, React Hook Form +
+      Zod (schemas imported from <code>packages/shared</code>, so client and server validate identically).
+      Auth token in memory + refresh token in an httpOnly cookie.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Page</th><th>Contents</th></tr></thead>
+        <tbody>
+          <tr><td>Login</td><td>Email + password; redirect to Dashboard.</td></tr>
+          <tr><td>Dashboard</td><td>Sent today vs. 200-cap gauge, open rate, bounce rate, recent campaigns, queue depth.</td></tr>
+          <tr><td>Contacts</td><td>Table with search + status filter, CSV import with progress, per-contact drawer showing list memberships and email history.</td></tr>
+          <tr><td>Lists</td><td>CRUD; member management (add from contacts, bulk remove).</td></tr>
+          <tr><td>Templates</td><td>List + editor: HTML pane, live preview pane, variable helper chip row, "send test to me" button.</td></tr>
+          <tr><td>Campaigns</td><td>List with status badges; create wizard (template &rarr; list &rarr; schedule: once/recurring); detail page with the stats from <code>/stats</code> and a status-breakdown bar.</td></tr>
+          <tr><td>Triggers</td><td>List + editor (event key, template, condition builder); a copy-paste webhook URL and a ready-to-run <code>curl</code> example with a sample payload.</td></tr>
+          <tr><td>Settings</td><td>API keys (create shows raw key once), sender identity + SES status, unsubscribe-page branding, SPF/DKIM/DMARC setup checklist.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="ops">
+      <h2><span class="num">10</span>Observability &amp; ops</h2>
+      <ul>
+        <li><strong>Logging</strong> &mdash; <code>pino</code>, JSON, one logger per process. Every HTTP
+          request and every job carries a <code>requestId</code> / <code>jobId</code>; the send path logs
+          <code>emailLogId</code> so a single email is greppable end to end.</li>
+        <li><strong>Error tracking</strong> &mdash; Sentry in <code>api</code> and <code>worker</code>;
+          DLQ arrivals raise a Sentry event with the classified cause.</li>
+        <li><strong>Queue visibility</strong> &mdash; Bull Board mounted at <code>/admin/queues</code>
+          behind JWT admin, or as a separate container in dev.</li>
+        <li><strong>Metrics</strong> &mdash; counters for sent / failed / suppressed / dead-lettered and a
+          gauge for daily-cap usage, exposed at <code>/metrics</code> (Prometheus text format).</li>
+        <li><strong>Secrets</strong> &mdash; all via environment; <code>.env</code> git-ignored;
+          production secrets from the host's secret manager, never baked into images.</li>
+        <li><strong>Migrations</strong> &mdash; Prisma Migrate; <code>migrate deploy</code> runs as a
+          pre-start step. Backwards-compatible migrations only, so a rolling deploy never runs old code
+          against a new schema it can't read.</li>
+      </ul>
+    </section>
+
+    <section id="testing">
+      <h2><span class="num">11</span>Testing strategy</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Layer</th><th>What</th><th>Tooling</th></tr></thead>
+        <tbody>
+          <tr><td>Unit</td><td>Template rendering (substitution, missing-var error, sanitisation, link rewrite, HMAC signing); <code>isSuppressed</code> truth table; idempotency-key construction; provider error classification.</td><td>Vitest</td></tr>
+          <tr><td>Integration</td><td>Trigger webhook &rarr; job enqueued &rarr; worker &rarr; <code>EmailLog</code> row, against a real Postgres + Redis (Testcontainers) and the MockProvider. Duplicate webhook call produces exactly one send.</td><td>Vitest + Testcontainers</td></tr>
+          <tr><td>Integration</td><td>Campaign schedule &rarr; fan-out &rarr; rate limiting observed &rarr; suppressed contact skipped &rarr; stats endpoint reflects counts.</td><td>Vitest + Testcontainers</td></tr>
+          <tr><td>Contract</td><td>SNS payload fixtures (delivery / hard bounce / complaint) drive <code>parseWebhook</code> and assert auto-suppression.</td><td>Vitest fixtures</td></tr>
+          <tr><td>E2E (smoke)</td><td>Login &rarr; create template &rarr; create list + contact &rarr; schedule campaign &rarr; see it in outbox.</td><td>Playwright, optional in CI</td></tr>
+        </tbody>
+      </table></div>
+      <p class="footnote">CI: lint &rarr; typecheck &rarr; unit &rarr; integration (Testcontainers) on every PR; migrations checked for drift.</p>
+    </section>
+
+    <section id="buildorder">
+      <h2><span class="num">12</span>Build order</h2>
+      <p>Each milestone is independently demoable and leaves <code>main</code> deployable.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Milestone</th><th>Demo</th></tr></thead>
+        <tbody>
+          <tr><td>M1</td><td>Repo scaffold, docker-compose, Prisma schema + first migration, <code>/health</code>, pino, CI.</td><td><code>docker-compose up</code>, <code>/health</code> green, migrate runs.</td></tr>
+          <tr><td>M2</td><td>Auth (login/refresh, bcrypt, JWT) + CRUD for contacts, lists, templates with Zod validation.</td><td>Create a template via API + Postman collection.</td></tr>
+          <tr><td>M3</td><td><code>EmailProvider</code> interface + MockProvider + render/sanitise module + <code>POST /templates/:id/preview</code> + "send test email" endpoint.</td><td>Test email lands in <code>.mail-outbox/</code>.</td></tr>
+          <tr><td>M4</td><td>BullMQ wiring, <code>send-email</code> queue, worker with idempotency + suppression + rate limit + retries + DLQ. Scheduler + campaign fan-out.</td><td>Schedule a campaign 2 min out; watch it send at 1/sec.</td></tr>
+          <tr><td>M5</td><td>Trigger model + <code>/api/webhooks/trigger/:eventKey</code> + API key auth + condition evaluation.</td><td><code>curl</code> the webhook, email appears; duplicate call &rarr; one send.</td></tr>
+          <tr><td>M6</td><td>Tracking pixel, click redirect, unsubscribe page, <code>/api/webhooks/ses</code> ingestion + auto-suppression, <code>/stats</code>.</td><td>Open the outbox email's pixel URL &rarr; status flips to <span class="pill ok">OPENED</span>.</td></tr>
+          <tr><td>M7</td><td>Frontend: auth, contacts, lists, templates screens.</td><td>Manage audience + templates from the UI.</td></tr>
+          <tr><td>M8</td><td>Frontend: campaign wizard, trigger management, stats dashboards, settings.</td><td>Whole flow, UI only.</td></tr>
+          <tr><td>M9</td><td>Hardening: Sentry, Bull Board, <code>/metrics</code>, public-endpoint rate limits, full test suite, deploy notes, SES adapter finished + integration-tested behind the flag.</td><td>Flip <code>EMAIL_PROVIDER=ses</code> in staging against a verified address.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="open">
+      <h2><span class="num">13</span>Still open</h2>
+      <p>None of these block M1&ndash;M4. They need an answer before the milestone in brackets.</p>
+      <div class="box risk">
+        <span class="tag">Needs a decision</span>
+        <ul>
+          <li><strong>Sender identity</strong> &mdash; which domain sends, and who owns the DNS to add SPF/DKIM/DMARC records? <em>[before M9]</em></li>
+          <li><strong>Open/click tracking consent</strong> &mdash; is implicit consent acceptable for this audience, or does tracking need to be opt-in per contact / per campaign? Affects the <code>Contact</code> and <code>Campaign</code> models. <em>[before M6]</em></li>
+          <li><strong>Role split</strong> &mdash; the model has <code>admin</code>/<code>editor</code>; confirm the actual capability difference (proposed: only <code>admin</code> can <code>send-now</code>, manage API keys, and manage users). <em>[before M2]</em></li>
+          <li><strong>EmailLog retention</strong> &mdash; keep forever, or prune/aggregate after N days? Drives whether <code>/stats</code> reads the log table or a rollup. <em>[before M6]</em></li>
+          <li><strong>CSV import semantics</strong> &mdash; on duplicate email: skip, update, or error the row? <em>[before M2]</em></li>
+          <li><strong>Production host</strong> &mdash; single VM with compose, or a managed platform? Affects the zero-downtime deploy notes. <em>[before M9]</em></li>
+        </ul>
+      </div>
+    </section>
+
+    <hr class="divider">
+    <p class="footnote">Dispatch &mdash; technical design, draft 2026-09-02. Author code against milestones,
+    not against this document as a whole. When a milestone's assumptions no longer hold, revise this
+    file and note it in the commit.</p>
+
+  </main>
+</div>

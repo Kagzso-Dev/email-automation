@@ -1,0 +1,191 @@
+// Dispatch — single-organization email automation platform.
+// See docs/technical-design.html §4 for the model rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- auth
+
+enum Role {
+  ADMIN
+  EDITOR
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(EDITOR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model ApiKey {
+  id        String    @id @default(cuid())
+  name      String
+  keyHash   String    @unique // sha-256 of the raw key; raw value shown once at creation
+  prefix    String // first 8 chars of the raw key, for display
+  lastUsed  DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// ---------------------------------------------------------------- audience
+
+enum ContactStatus {
+  ACTIVE
+  UNSUBSCRIBED
+  BOUNCED
+  COMPLAINED
+}
+
+model Contact {
+  id           String           @id @default(cuid())
+  email        String           @unique
+  firstName    String?
+  lastName     String?
+  customFields Json             @default("{}")
+  status       ContactStatus    @default(ACTIVE)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  memberships  ListMembership[]
+  emailLogs    EmailLog[]
+  unsubscribe  Unsubscribe?
+}
+
+model List {
+  id          String           @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  members     ListMembership[]
+  campaigns   Campaign[]
+}
+
+model ListMembership {
+  listId    String
+  contactId String
+  addedAt   DateTime @default(now())
+  list      List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([listId, contactId])
+  @@index([contactId])
+}
+
+// ---------------------------------------------------------------- content
+
+model Template {
+  id        String     @id @default(cuid())
+  name      String
+  subject   String
+  htmlBody  String // stored raw; sanitised at render time
+  textBody  String?
+  variables Json       @default("[]") // declared variable names for the editor helper
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  campaigns Campaign[]
+  triggers  Trigger[]
+}
+
+// ---------------------------------------------------------------- scheduled sends
+
+enum ScheduleType {
+  ONCE
+  RECURRING
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PAUSED
+  FAILED
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  name           String
+  templateId     String
+  listId         String
+  scheduleType   ScheduleType
+  sendAt         DateTime? // for ONCE
+  cronExpression String? // for RECURRING
+  status         CampaignStatus @default(DRAFT)
+  repeatJobKey   String? // BullMQ repeatable-job key once scheduled
+  lastRunAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  template       Template       @relation(fields: [templateId], references: [id])
+  list           List           @relation(fields: [listId], references: [id])
+  emailLogs      EmailLog[]
+}
+
+// ---------------------------------------------------------------- event-triggered sends
+
+model Trigger {
+  id         String     @id @default(cuid())
+  name       String
+  eventKey   String     @unique // path segment of the webhook URL
+  templateId String
+  conditions Json       @default("[]") // array of { field, op, value } predicates on the payload
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  template   Template   @relation(fields: [templateId], references: [id])
+  emailLogs  EmailLog[]
+}
+
+// ---------------------------------------------------------------- the ledger
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  COMPLAINED
+  FAILED
+}
+
+model EmailLog {
+  id                String      @id @default(cuid())
+  campaignId        String?
+  triggerId         String?
+  contactId         String
+  idempotencyKey    String      @unique
+  status            EmailStatus @default(QUEUED)
+  providerMessageId String?
+  subject           String?
+  errorMessage      String?
+  openedAt          DateTime?
+  clickedAt         DateTime?
+  sentAt            DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  campaign          Campaign?   @relation(fields: [campaignId], references: [id])
+  trigger           Trigger?    @relation(fields: [triggerId], references: [id])
+  contact           Contact     @relation(fields: [contactId], references: [id])
+
+  @@index([campaignId, status])
+  @@index([triggerId, status])
+  @@index([contactId])
+  @@index([providerMessageId])
+}
+
+model Unsubscribe {
+  id        String   @id @default(cuid())
+  contactId String   @unique
+  reason    String?
+  token     String   @unique // opaque token embedded in the unsubscribe link
+  createdAt DateTime @default(now())
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}

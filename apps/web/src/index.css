@@ -1,0 +1,37 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#f6f7f9] text-ink font-sans antialiased;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-3.5 py-2 text-sm font-medium transition disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-ink;
+  }
+  .btn-ghost {
+    @apply btn border-[#d5d9e2] bg-white text-ink hover:bg-[#f0f2f6];
+  }
+  .btn-danger {
+    @apply btn border-[#e6c3bf] bg-white text-crit hover:bg-[#faece9];
+  }
+  .input {
+    @apply w-full rounded-lg border border-[#d5d9e2] bg-white px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent-soft;
+  }
+  .label {
+    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-550;
+  }
+  .card {
+    @apply rounded-xl border border-[#e3e6ec] bg-white p-5 shadow-[0_1px_2px_rgba(20,23,30,0.04),0_10px_30px_rgba(20,23,30,0.05)];
+  }
+  .field-error {
+    @apply mt-1 text-xs text-crit;
+  }
+}
