@@ -1,109 +1,115 @@
-import { QueueEvents } from "bullmq";
+import cronParser from "cron-parser";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
-import { redis } from "../redis.js";
-import { campaignDispatchQueue, connection } from "./queues.js";
+import { enqueueCampaignDispatch } from "./queues.js";
+import { pruneJobs } from "./engine.js";
 
-const LOCK_KEY = "dispatch:scheduler:lock";
-const LOCK_TTL = 30; // seconds
+/**
+ * Polls the campaigns table and enqueues a dispatch job whenever a campaign is
+ * due. No repeatable-job machinery: a ONCE campaign is due when `sendAt` has
+ * passed; a RECURRING one is due when its cron expression has an occurrence
+ * between `lastRunAt` and now. Dispatch jobs carry a dedupe key so a double
+ * tick never double-sends.
+ *
+ * Assumes a single scheduler instance (one worker process). Running two is
+ * safe-ish thanks to the dedupe key, but not designed for.
+ */
 
-export function repeatKey(campaignId: string): string {
-  return `campaign_${campaignId}`;
-}
+const TICK_MS = 15_000;
 
-/** Register (or refresh) the BullMQ trigger for a scheduled campaign. */
-export async function scheduleCampaign(campaignId: string): Promise<string> {
+export async function scheduleCampaign(campaignId: string): Promise<void> {
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
-  await unscheduleCampaign(campaignId);
-
-  const jobName = repeatKey(campaignId);
-  if (campaign.scheduleType === "ONCE") {
-    if (!campaign.sendAt) throw new Error("ONCE campaign missing sendAt");
-    const delay = Math.max(0, campaign.sendAt.getTime() - Date.now());
-    await campaignDispatchQueue.add(
-      jobName,
-      { campaignId, runDate: campaign.sendAt.toISOString().slice(0, 10) },
-      { delay, jobId: `once_${campaignId}` },
-    );
-  } else {
+  if (campaign.scheduleType === "RECURRING") {
     if (!campaign.cronExpression) throw new Error("RECURRING campaign missing cronExpression");
-    await campaignDispatchQueue.add(
-      jobName,
-      { campaignId, runDate: "" }, // runDate filled in at fire time below
-      {
-        repeat: { pattern: campaign.cronExpression, tz: env.SCHEDULER_TIMEZONE, key: jobName },
-      },
-    );
+    cronParser.parseExpression(campaign.cronExpression, { tz: env.SCHEDULER_TIMEZONE });
+  } else if (!campaign.sendAt) {
+    throw new Error("ONCE campaign missing sendAt");
   }
   await prisma.campaign.update({
     where: { id: campaignId },
-    data: { status: "SCHEDULED", repeatJobKey: jobName },
+    data: { status: "SCHEDULED", lastRunAt: null },
   });
   logger.info({ campaignId, type: campaign.scheduleType }, "campaign scheduled");
-  return jobName;
+  // The next tick picks it up; also nudge immediately for near-term ONCE sends.
+  await tick();
 }
 
 export async function unscheduleCampaign(campaignId: string): Promise<void> {
-  const jobName = repeatKey(campaignId);
-  const repeatables = await campaignDispatchQueue.getRepeatableJobs();
-  for (const r of repeatables) {
-    if (r.name === jobName || r.key.includes(jobName)) {
-      await campaignDispatchQueue.removeRepeatableByKey(r.key);
-    }
-  }
-  await campaignDispatchQueue.remove(`once_${campaignId}`).catch(() => undefined);
+  // Nothing queued yet lives outside the Job table; pending dispatch jobs for a
+  // paused campaign are cheap no-ops (fanOutCampaign checks status), but clear
+  // them anyway to keep the table tidy.
+  await prisma.job.deleteMany({
+    where: { queue: "campaign-dispatch", status: "PENDING", dedupeKey: { startsWith: `disp:${campaignId}:` } },
+  });
 }
 
-/**
- * Singleton scheduler loop. Guarded by a Redis lock so multiple worker
- * replicas don't double-schedule. Also self-heals: re-registers repeatables
- * for any campaign that is SCHEDULED in the DB but missing from the queue.
- */
-export function startScheduler(): { stop: () => Promise<void> } {
-  let stopped = false;
-  const events = new QueueEvents(campaignDispatchQueue.name, { connection });
+let running = false;
 
-  const tick = async () => {
-    if (stopped) return;
-    const gotLock = await redis.set(LOCK_KEY, process.pid.toString(), "EX", LOCK_TTL, "NX");
-    if (!gotLock) return;
-    try {
-      await reconcile();
-    } catch (err) {
-      logger.error({ err }, "scheduler tick failed");
-    } finally {
-      await redis.del(LOCK_KEY);
+async function tick(): Promise<void> {
+  if (running) return;
+  running = true;
+  try {
+    const now = new Date();
+    const scheduled = await prisma.campaign.findMany({ where: { status: "SCHEDULED" } });
+
+    for (const c of scheduled) {
+      if (c.scheduleType === "ONCE") {
+        if (c.sendAt && c.sendAt <= now && !c.lastRunAt) {
+          await enqueueCampaignDispatch(
+            { campaignId: c.id, runDate: c.sendAt.toISOString().slice(0, 10) },
+            { dedupeKey: `disp:${c.id}:once` },
+          );
+          await prisma.campaign.update({ where: { id: c.id }, data: { lastRunAt: now } });
+          logger.info({ campaignId: c.id }, "one-time campaign due → dispatched");
+        }
+        continue;
+      }
+
+      // RECURRING: walk occurrences after the cursor up to now.
+      if (!c.cronExpression) continue;
+      let cursor = c.lastRunAt ?? c.createdAt;
+      let fired = 0;
+      for (;;) {
+        let next: Date;
+        try {
+          next = cronParser
+            .parseExpression(c.cronExpression, { currentDate: cursor, tz: env.SCHEDULER_TIMEZONE })
+            .next()
+            .toDate();
+        } catch (err) {
+          logger.error({ campaignId: c.id, err }, "bad cron expression");
+          break;
+        }
+        if (next > now || fired >= 10) break;
+        const occ = next.toISOString();
+        await enqueueCampaignDispatch(
+          { campaignId: c.id, runDate: occ.slice(0, 10) },
+          { dedupeKey: `disp:${c.id}:${occ}` },
+        );
+        cursor = next;
+        fired++;
+      }
+      if (fired > 0) {
+        await prisma.campaign.update({ where: { id: c.id }, data: { lastRunAt: cursor } });
+        logger.info({ campaignId: c.id, occurrences: fired }, "recurring campaign due → dispatched");
+      }
     }
-  };
+  } catch (err) {
+    logger.error({ err }, "scheduler tick failed");
+  } finally {
+    running = false;
+  }
+}
 
-  const interval = setInterval(tick, 15_000);
+export function startScheduler(): { stop: () => Promise<void> } {
+  const interval = setInterval(() => void tick(), TICK_MS);
+  const prune = setInterval(() => void pruneJobs().catch(() => undefined), 60 * 60 * 1000);
   void tick();
-
   return {
     stop: async () => {
-      stopped = true;
       clearInterval(interval);
-      await events.close();
+      clearInterval(prune);
     },
   };
-}
-
-async function reconcile(): Promise<void> {
-  const scheduled = await prisma.campaign.findMany({ where: { status: "SCHEDULED" } });
-  const repeatables = await campaignDispatchQueue.getRepeatableJobs();
-  const delayed = await campaignDispatchQueue.getJobs(["delayed", "waiting"]);
-  for (const c of scheduled) {
-    const jobName = repeatKey(c.id);
-    const hasRepeat = repeatables.some((r) => r.name === jobName);
-    const hasOnce = delayed.some((j) => j.id === `once_${c.id}`);
-    if (c.scheduleType === "RECURRING" && !hasRepeat) {
-      logger.warn({ campaignId: c.id }, "scheduler: re-registering missing repeatable");
-      await scheduleCampaign(c.id);
-    }
-    if (c.scheduleType === "ONCE" && !hasOnce && c.sendAt && c.sendAt.getTime() > Date.now()) {
-      logger.warn({ campaignId: c.id }, "scheduler: re-registering missing one-time job");
-      await scheduleCampaign(c.id);
-    }
-  }
 }

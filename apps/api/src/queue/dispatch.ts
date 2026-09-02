@@ -1,14 +1,15 @@
-import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 import { campaignKey, queueJobId } from "../domain/idempotency.js";
-import { sendEmailQueue, type SendEmailJob } from "./queues.js";
+import { enqueueSend, type SendEmailJob } from "./queues.js";
 
 const BATCH = 500;
 
 /**
  * Expand a campaign into one send-email job per list member. Batched so a huge
- * list doesn't build one giant job, and each contact retries independently.
+ * list doesn't build one giant unit of work, and each contact retries
+ * independently. Idempotent per (campaign, contact, occurrence) via the job
+ * dedupe key.
  */
 export async function fanOutCampaign(campaignId: string, runDate: string): Promise<number> {
   const campaign = await prisma.campaign.findUnique({ where: { id: campaignId } });
@@ -36,33 +37,25 @@ export async function fanOutCampaign(campaignId: string, runDate: string): Promi
       select: { contactId: true },
       orderBy: { contactId: "asc" },
       take: BATCH,
-      ...(cursor ? { skip: 1, cursor: { listId_contactId: { listId: campaign.listId, contactId: cursor } } } : {}),
+      ...(cursor
+        ? { skip: 1, cursor: { listId_contactId: { listId: campaign.listId, contactId: cursor } } }
+        : {}),
     });
     if (members.length === 0) break;
 
-    const jobs = members.map((m) => {
+    for (const m of members) {
+      const key = campaignKey(campaignId, m.contactId, runDay);
       const source: SendEmailJob["source"] = { type: "campaign", campaignId, runDate };
-      return {
-        name: "send",
-        data: {
-          idempotencyKey: campaignKey(campaignId, m.contactId, runDay),
-          contactId: m.contactId,
-          source,
-        } satisfies SendEmailJob,
-        opts: {
-          jobId: queueJobId(campaignKey(campaignId, m.contactId, runDay)), // dedupe identical enqueues
-          attempts: env.SEND_MAX_ATTEMPTS,
-          backoff: { type: "exponential" as const, delay: env.SEND_BACKOFF_MS },
-        },
-      };
-    });
-    await sendEmailQueue.addBulk(jobs);
-    total += jobs.length;
+      await enqueueSend(
+        { idempotencyKey: key, contactId: m.contactId, source },
+        { dedupeKey: queueJobId(key) },
+      );
+    }
+    total += members.length;
     cursor = members[members.length - 1]!.contactId;
     if (members.length < BATCH) break;
   }
 
-  // ONCE campaigns are done after a single fan-out; RECURRING stay SCHEDULED.
   await prisma.campaign.update({
     where: { id: campaignId },
     data: { status: campaign.scheduleType === "ONCE" ? "SENT" : "SCHEDULED" },

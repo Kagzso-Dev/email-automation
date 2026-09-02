@@ -22,14 +22,12 @@ const schema = z.object({
   LINK_SIGNING_SECRET: z.string().min(8),
 
   DATABASE_URL: z.string(),
-  REDIS_URL: z.string().default("redis://localhost:6379"),
 
   EMAIL_PROVIDER: z.enum(["mock", "ses"]).default("mock"),
   EMAIL_FROM: z.string().default("Dispatch <no-reply@example.com>"),
   EMAIL_SENDER_ADDRESS: z.string().default("123 Example St, Example City, EX 00000"),
   SEND_RATE_PER_SEC: z.coerce.number().default(1),
   SEND_DAILY_CAP: z.coerce.number().default(200),
-  SEND_WORKER_CONCURRENCY: z.coerce.number().default(2),
   SEND_MAX_ATTEMPTS: z.coerce.number().default(5),
   SEND_BACKOFF_MS: z.coerce.number().default(30_000),
   SCHEDULER_TIMEZONE: z.string().default("UTC"),
@@ -41,10 +39,6 @@ const schema = z.object({
   SES_CONFIGURATION_SET: z.string().optional(),
 
   SENTRY_DSN: z.string().optional(),
-  BULL_BOARD_ENABLED: z
-    .string()
-    .default("true")
-    .transform((v) => v === "true"),
 
   SEED_ADMIN_EMAIL: z.string().email().default("admin@example.com"),
   SEED_ADMIN_PASSWORD: z.string().min(8).default("changeme12345"),

@@ -84,7 +84,6 @@ CREATE TABLE `Campaign` (
     `sendAt` DATETIME(3) NULL,
     `cronExpression` VARCHAR(191) NULL,
     `status` ENUM('DRAFT', 'SCHEDULED', 'SENDING', 'SENT', 'PAUSED', 'FAILED') NOT NULL DEFAULT 'DRAFT',
-    `repeatJobKey` VARCHAR(191) NULL,
     `lastRunAt` DATETIME(3) NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
@@ -145,6 +144,28 @@ CREATE TABLE `Unsubscribe` (
 
     UNIQUE INDEX `Unsubscribe_contactId_key`(`contactId`),
     UNIQUE INDEX `Unsubscribe_token_key`(`token`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `Job` (
+    `id` VARCHAR(191) NOT NULL,
+    `queue` VARCHAR(191) NOT NULL,
+    `payload` JSON NOT NULL,
+    `status` ENUM('PENDING', 'ACTIVE', 'COMPLETED', 'FAILED', 'DEAD') NOT NULL DEFAULT 'PENDING',
+    `runAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `attempts` INTEGER NOT NULL DEFAULT 0,
+    `maxAttempts` INTEGER NOT NULL DEFAULT 1,
+    `dedupeKey` VARCHAR(191) NULL,
+    `result` JSON NULL,
+    `lastError` TEXT NULL,
+    `lockedAt` DATETIME(3) NULL,
+    `lockedBy` VARCHAR(191) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    UNIQUE INDEX `Job_dedupeKey_key`(`dedupeKey`),
+    INDEX `Job_queue_status_runAt_idx`(`queue`, `status`, `runAt`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

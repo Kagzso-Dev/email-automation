@@ -1,13 +1,10 @@
-import { Queue } from "bullmq";
-import { createRedis } from "../redis.js";
-
-export const connection = createRedis();
+import { env } from "../env.js";
+import { enqueue } from "./engine.js";
 
 export const QUEUE = {
   campaignDispatch: "campaign-dispatch",
   sendEmail: "send-email",
   csvImport: "csv-import",
-  sendEmailDlq: "send-email-dlq",
 } as const;
 
 export interface CampaignDispatchJob {
@@ -28,31 +25,24 @@ export interface CsvImportJob {
   listId?: string;
 }
 
-export interface DlqJob extends SendEmailJob {
-  reason: string;
-  failedAt: string;
+export function enqueueSend(job: SendEmailJob, opts: { dedupeKey: string }) {
+  return enqueue(QUEUE.sendEmail, job, {
+    dedupeKey: opts.dedupeKey,
+    maxAttempts: env.SEND_MAX_ATTEMPTS,
+  });
 }
 
-const defaultJobOptions = {
-  removeOnComplete: { count: 1000, age: 60 * 60 * 24 },
-  removeOnFail: { count: 5000 },
-};
+export function enqueueCampaignDispatch(
+  job: CampaignDispatchJob,
+  opts?: { dedupeKey?: string; runAt?: Date },
+) {
+  return enqueue(QUEUE.campaignDispatch, job, {
+    dedupeKey: opts?.dedupeKey,
+    runAt: opts?.runAt,
+    maxAttempts: 3,
+  });
+}
 
-export const campaignDispatchQueue = new Queue<CampaignDispatchJob>(QUEUE.campaignDispatch, {
-  connection,
-  defaultJobOptions,
-});
-export const sendEmailQueue = new Queue<SendEmailJob>(QUEUE.sendEmail, {
-  connection,
-  defaultJobOptions,
-});
-export const csvImportQueue = new Queue<CsvImportJob>(QUEUE.csvImport, {
-  connection,
-  defaultJobOptions,
-});
-export const dlqQueue = new Queue<DlqJob>(QUEUE.sendEmailDlq, {
-  connection,
-  defaultJobOptions: { removeOnComplete: false, removeOnFail: false },
-});
-
-export const allQueues = [campaignDispatchQueue, sendEmailQueue, csvImportQueue, dlqQueue];
+export function enqueueCsvImport(job: CsvImportJob) {
+  return enqueue(QUEUE.csvImport, job, { maxAttempts: 1 });
+}

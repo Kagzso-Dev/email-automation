@@ -131,14 +131,77 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">Ops</h2>
-        <div className="card text-sm">
-          <a className="text-accent-ink hover:underline" href="/admin/queues" target="_blank" rel="noreferrer">
-            Open the queue dashboard (Bull Board) →
-          </a>
-        </div>
-      </section>
+      {isAdmin && <JobsSection />}
     </div>
+  );
+}
+
+interface Job {
+  id: string;
+  queue: string;
+  status: string;
+  attempts: number;
+  maxAttempts: number;
+  runAt: string;
+  lastError?: string | null;
+  updatedAt: string;
+}
+
+function JobsSection() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => api<{ items: Job[]; counts: { queue: string; status: string; _count: { _all: number } }[] }>("/api/jobs?limit=25"),
+    refetchInterval: 5000,
+  });
+  const retry = useMutation({
+    mutationFn: (id: string) => api(`/api/jobs/${id}/retry`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
+  });
+
+  return (
+    <section className="mt-8">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">
+        Job queue
+      </h2>
+      {isLoading || !data ? (
+        <Spinner />
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1 font-mono text-xs text-slate-550">
+            {data.counts.map((c) => (
+              <span key={c.queue + c.status}>
+                {c.queue}/{c.status} <b className="text-ink">{c._count._all}</b>
+              </span>
+            ))}
+          </div>
+          <Table head={["Queue", "Status", "Attempts", "Run at", "Error", ""]}>
+            {data.items.map((j) => (
+              <tr key={j.id} className="border-b border-[#f0f2f6] last:border-0">
+                <td className="px-4 py-2 font-mono text-xs">{j.queue}</td>
+                <td className="px-4 py-2">{j.status}</td>
+                <td className="px-4 py-2 font-mono tabular-nums">
+                  {j.attempts}/{j.maxAttempts}
+                </td>
+                <td className="px-4 py-2 text-slate-550">{new Date(j.runAt).toLocaleString()}</td>
+                <td className="max-w-[16rem] truncate px-4 py-2 text-xs text-crit">
+                  {j.lastError ?? ""}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  {(j.status === "DEAD" || j.status === "FAILED") && (
+                    <button
+                      className="text-xs text-accent-ink hover:underline"
+                      onClick={() => retry.mutate(j.id)}
+                    >
+                      Retry
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </Table>
+        </>
+      )}
+    </section>
   );
 }

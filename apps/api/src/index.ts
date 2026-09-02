@@ -2,7 +2,6 @@ import "./http/types.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
 import { prisma } from "./prisma.js";
-import { redis } from "./redis.js";
 import { createApp } from "./http/app.js";
 import { initSentry } from "./observability/sentry.js";
 
@@ -19,7 +18,7 @@ const server = app.listen(env.API_PORT, () => {
 async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down API");
   server.close();
-  await Promise.allSettled([prisma.$disconnect(), redis.quit()]);
+  await prisma.$disconnect();
   process.exit(0);
 }
 process.on("SIGINT", () => void shutdown("SIGINT"));

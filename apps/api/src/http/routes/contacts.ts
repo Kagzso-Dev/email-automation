@@ -7,7 +7,7 @@ import {
   updateContactInput,
 } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
-import { csvImportQueue } from "../../queue/queues.js";
+import { enqueueCsvImport } from "../../queue/queues.js";
 import { authRequired } from "../middleware/auth.js";
 import { badRequest, notFound, wrap } from "../errors.js";
 
@@ -104,25 +104,24 @@ contactsRouter.post(
   wrap(async (req, res) => {
     if (!req.file) throw badRequest("CSV file required (multipart field 'file')");
     const listId = typeof req.body.listId === "string" && req.body.listId ? req.body.listId : undefined;
-    const job = await csvImportQueue.add("import", {
+    const jobId = await enqueueCsvImport({
       fileContent: req.file.buffer.toString("utf8"),
       listId,
     });
-    res.status(202).json({ jobId: job.id, status: "queued" });
+    res.status(202).json({ jobId, status: "queued" });
   }),
 );
 
 contactsRouter.get(
   "/import/:jobId",
   wrap(async (req, res) => {
-    const job = await csvImportQueue.getJob(req.params.jobId);
-    if (!job) throw notFound("Import job");
+    const job = await prisma.job.findUnique({ where: { id: req.params.jobId } });
+    if (!job || job.queue !== "csv-import") throw notFound("Import job");
     res.json({
       jobId: job.id,
-      state: await job.getState(),
-      progress: job.progress,
-      result: job.returnvalue,
-      failedReason: job.failedReason,
+      state: job.status,
+      result: job.result,
+      failedReason: job.lastError,
     });
   }),
 );

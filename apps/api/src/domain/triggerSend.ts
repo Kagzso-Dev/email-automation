@@ -1,11 +1,10 @@
 import type { TriggerWebhookInput } from "@dispatch/shared";
-import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 import { evaluateConditions } from "./conditions.js";
 import { queueJobId, triggerKey } from "./idempotency.js";
 import { isSuppressed } from "./suppression.js";
-import { sendEmailQueue, type SendEmailJob } from "../queue/queues.js";
+import { enqueueSend, type SendEmailJob } from "../queue/queues.js";
 import type { TriggerCondition } from "@dispatch/shared";
 
 export type TriggerResult =
@@ -59,14 +58,9 @@ export async function fireTrigger(
     triggerId: trigger.id,
     payload: input.payload as Record<string, unknown>,
   };
-  await sendEmailQueue.add(
-    "send",
+  await enqueueSend(
     { idempotencyKey, contactId: contact.id, source },
-    {
-      jobId: queueJobId(idempotencyKey),
-      attempts: env.SEND_MAX_ATTEMPTS,
-      backoff: { type: "exponential", delay: env.SEND_BACKOFF_MS },
-    },
+    { dedupeKey: queueJobId(idempotencyKey) },
   );
 
   return { status: "queued", idempotencyKey };

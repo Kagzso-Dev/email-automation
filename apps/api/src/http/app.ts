@@ -18,7 +18,7 @@ import { unsubscribeRouter } from "./routes/unsubscribe.js";
 import { apiKeysRouter } from "./routes/apiKeys.js";
 import { healthRouter } from "./routes/health.js";
 import { statsRouter } from "./routes/stats.js";
-import { mountBullBoard } from "./bullBoard.js";
+import { jobsRouter } from "./routes/jobs.js";
 
 export function createApp() {
   const app = express();
@@ -53,9 +53,8 @@ export function createApp() {
   app.use("/api/track", trackRouter);
   app.use("/api/unsubscribe", unsubscribeRouter);
   app.use("/api/api-keys", apiKeysRouter);
+  app.use("/api/jobs", jobsRouter);
   app.use("/api", statsRouter);
-
-  if (env.BULL_BOARD_ENABLED) mountBullBoard(app);
 
   app.use(errorHandler);
   return app;

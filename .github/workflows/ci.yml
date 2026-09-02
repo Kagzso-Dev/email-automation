@@ -18,16 +18,9 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -h localhost -proot"
           --health-interval 5s --health-timeout 5s --health-retries 15
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 5s --health-retries 10
 
     env:
       DATABASE_URL: mysql://root:root@localhost:3306/dispatch
-      REDIS_URL: redis://localhost:6379
       JWT_ACCESS_SECRET: ci-access-secret
       JWT_REFRESH_SECRET: ci-refresh-secret
       LINK_SIGNING_SECRET: ci-link-secret

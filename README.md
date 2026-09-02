@@ -4,26 +4,26 @@ Single-organization platform for **scheduled campaigns** and **event-triggered t
 Queue-backed sending, template rendering with `{{variables}}`, delivery/open/click tracking, and
 suppression enforcement. See [`docs/technical-design.html`](docs/technical-design.html) for the design.
 
+**MySQL is the only infrastructure.** No Redis, no Docker — the job queue is a table.
+
 ## Stack
 
 | Area | Choice |
 | --- | --- |
 | API | Node 20, TypeScript, Express, Prisma (MySQL 8) |
-| Queue | BullMQ on Redis — scheduler, fan-out, rate-limited send workers, DLQ |
+| Queue | MySQL-backed `Job` table + polling workers — scheduler, campaign fan-out, rate-limited send worker, dead-letter (`status = DEAD`) |
 | Email | Provider interface; `mock` adapter (writes to `.mail-outbox/`) by default, `ses` adapter built but off |
 | Web | React + Vite, React Query, Tailwind |
 | Auth | JWT access token + httpOnly refresh cookie; `ADMIN` / `EDITOR` roles |
 
 ## Quick start
 
-Prerequisites: Node 20+, a local **MySQL 8** server, and Docker (for Redis only — or run
-Redis yourself on `:6379`).
+Prerequisites: **Node 20+** and a local **MySQL 8** server. That's it.
 
 ```bash
-cp .env.example .env                 # set DATABASE_URL to your MySQL, edit secrets
+cp .env.example .env                 # set DATABASE_URL, edit secrets
 npm install
 mysql -u root -p -e "CREATE DATABASE dispatch CHARACTER SET utf8mb4;"
-docker compose up -d redis           # just Redis
 npm run prisma:deploy                # apply migrations
 npm run db:seed                      # admin user + sample data
 npm run dev                          # api :4000, worker, web :5173
@@ -34,17 +34,11 @@ Log in at http://localhost:5173 with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
 ### Processes
 
 - `npm run dev:api` — REST API + webhook ingestion (`apps/api/src/index.ts`)
-- `npm run dev:worker` — BullMQ workers + the singleton scheduler (`apps/api/src/worker.ts`)
+- `npm run dev:worker` — polling job workers + the scheduler (`apps/api/src/worker.ts`)
 - `npm run dev:web` — dashboard
 
-### Everything in Docker
-
-```bash
-docker compose --profile app up --build   # redis + api + worker; DB stays on the host
-```
-
-The containers reach the host's MySQL via `host.docker.internal` — override with
-`DATABASE_URL_DOCKER` in `.env` if your MySQL isn't on the default host port.
+Run **one** worker process. The queue engine is safe under concurrent workers (jobs are
+claimed with a conditional `UPDATE`), but the scheduler assumes a single instance.
 
 ## Try the pipeline
 
@@ -74,13 +68,20 @@ curl -X POST http://localhost:4000/api/webhooks/dev/simulate/<emailLogId>/bounce
 npm test        # unit: rendering, conditions, idempotency
 ```
 
-Integration tests against real MySQL + Redis are stubbed for milestone M9 (see design doc §11).
+Integration tests against a real MySQL are stubbed for milestone M9 (see design doc §11).
 
 ## Ops
 
-- `GET /health` — DB + Redis reachability (200 / 503)
-- `/admin/queues` — Bull Board, requires an `ADMIN` JWT
+- `GET /health` — MySQL reachability (200 / 503)
+- `GET /api/jobs` — queue state (pending / active / dead counts + recent rows), requires an `ADMIN` JWT;
+  `POST /api/jobs/:id/retry` requeues one
 - Structured logs via pino; set `SENTRY_DSN` to enable error tracking
+
+## Deployment
+
+Plain Node processes plus a managed MySQL. Run `apps/api` twice (one `start:api`, one
+`start:worker`), point `DATABASE_URL` at the database, run `npm run prisma:deploy` on release.
+No broker to operate.
 
 ## Environment
 

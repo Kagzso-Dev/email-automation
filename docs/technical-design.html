@@ -345,7 +345,7 @@
       <div><dt>Status</dt><dd>M1&ndash;M8 built &amp; verified</dd></div>
       <div><dt>Date</dt><dd>2026-09-02</dd></div>
       <div><dt>Scope</dt><dd>Single org, SES sandbox</dd></div>
-      <div><dt>Datastore</dt><dd>MySQL 8 + Redis</dd></div>
+      <div><dt>Datastore</dt><dd>MySQL 8 (sole dependency)</dd></div>
       <div><dt>Supersedes</dt><dd>Build Prompt v1</dd></div>
     </dl>
   </header>
@@ -385,6 +385,14 @@
           server, not a container. Prisma provider <code>mysql</code>; long text columns get explicit
           <code>@db.Text</code>/<code>@db.LongText</code>, and <code>contains</code> filters rely on the
           <code>utf8mb4_*_ci</code> collation since Prisma's <code>mode: "insensitive"</code> is Postgres-only.</span>
+        </div>
+        <div class="row">
+          <span class="q">Infrastructure</span>
+          <span class="a"><b>MySQL is the only dependency &mdash; no Redis, no Docker.</b> The job queue
+          (originally BullMQ/Redis) is a <code>Job</code> table: workers poll, claim a row with a
+          conditional <code>UPDATE</code>, and process. Rate limiting is a sleep between sends; the daily
+          cap is a <code>COUNT</code>; retries/backoff and the dead-letter state live in columns.
+          Sized for the sandbox volume, not for a high-throughput broker.</span>
         </div>
         <div class="row">
           <span class="q">Repository</span>
@@ -441,8 +449,7 @@
     <section id="architecture">
       <h2><span class="num">03</span>Architecture overview</h2>
       <p>One Node process type runs the API; a second runs the queue workers and the scheduler.
-      Both share the Prisma client and the Redis connection. MySQL is the source of truth;
-      Redis holds only transient queue state.</p>
+      Both share one Prisma client against MySQL, which is the source of truth <em>and</em> the queue.</p>
 
       <figure class="diagram">
         <pre class="mermaid">
@@ -450,16 +457,14 @@
 flowchart LR
   UI["Dashboard<br/>React + Vite SPA"] -->|JWT| API
   EXT["External systems"] -->|API key| API
-  API["API service<br/>Express + Prisma"] --> PG[("MySQL 8")]
-  API --> RS[("Redis")]
-  SCHED["Scheduler<br/>BullMQ repeatable jobs"] --> RS
-  RS --> WRK["Send workers<br/>rate-limited, concurrency N"]
-  WRK --> PG
+  API["API service<br/>Express + Prisma"] -->|"enqueue rows"| DB[("MySQL 8<br/>data + Job table")]
+  SCHED["Scheduler<br/>polls campaigns"] --> DB
+  WRK["Send worker<br/>polls Job table, rate-limited"] --> DB
   WRK --> ADP{"Provider adapter"}
   ADP -->|default| MOCK["Console / mock"]
   ADP -.->|"when verified"| SES["AWS SES"]
   SES -.->|"SNS notifications"| API
-  WRK -->|permanent failure| DLQ[["Dead-letter queue"]]
+  WRK -->|"permanent failure"| DLQ["Job.status = DEAD"]
         </pre>
         <figcaption>fig. 3.1 &mdash; component topology</figcaption>
       </figure>
@@ -471,24 +476,20 @@ flowchart LR
           <tbody>
             <tr><td><code>api</code></td><td>REST endpoints, auth, webhook ingestion, enqueues jobs</td><td>request latency</td></tr>
             <tr><td><code>worker</code></td><td>Consumes send jobs, renders, checks suppression, calls provider, writes <code>EmailLog</code></td><td>queue depth</td></tr>
-            <tr><td><code>scheduler</code></td><td>Owns BullMQ repeatable jobs; promotes due campaigns into the send queue. Runs inside the <code>worker</code> process, guarded by a Redis lock so only one instance schedules.</td><td>n/a (singleton)</td></tr>
-            <tr><td><code>mysql</code></td><td>Primary datastore (developer's local server, not containerised)</td><td>connections, disk</td></tr>
-            <tr><td><code>redis</code></td><td>BullMQ queues + scheduler lock</td><td>memory</td></tr>
+            <tr><td><code>scheduler</code></td><td>Polls the campaigns table on a 15s tick; enqueues a dispatch job when one is due. Runs inside the <code>worker</code> process; assumes a single instance.</td><td>n/a (singleton)</td></tr>
+            <tr><td><code>mysql</code></td><td>Primary datastore <em>and</em> the job queue (<code>Job</code> table). Developer's local server, not containerised.</td><td>connections, disk</td></tr>
           </tbody>
         </table>
       </div>
 
       <h3>Local development</h3>
-      <p><code>docker-compose</code> brings up <code>redis</code> (and optionally
-      <a href="https://github.com/felixmosh/bull-board">Bull Board</a>); MySQL is expected on the host.
-      The Node services run on the host
-      (<code>npm run dev</code>) for fast reload, or in the compose file behind a profile. A single
-      <code>.env</code> at the repo root is read by every service; <code>.env.example</code> is committed,
-      <code>.env</code> is git-ignored.</p>
+      <p>No containers. Install Node and MySQL 8, create the <code>dispatch</code> database, run
+      <code>npm run prisma:deploy</code> then <code>npm run dev</code> (API + worker + web in parallel).
+      A single <code>.env</code> at the repo root is read by every process; <code>.env.example</code> is
+      committed, <code>.env</code> is git-ignored.</p>
 
       <h3>Repository layout</h3>
       <pre><code>email-automation-platform/
-├── docker-compose.yml
 ├── .env.example
 ├── package.json            # workspaces: api, web, shared
 ├── prisma/
@@ -501,7 +502,7 @@ flowchart LR
 │   │   ├── src/
 │   │   │   ├── http/       # express routers, middleware
 │   │   │   ├── domain/     # contacts, templates, campaigns, triggers, suppression
-│   │   │   ├── queue/      # BullMQ queues, workers, scheduler
+│   │   │   ├── queue/      # MySQL job engine, workers, scheduler
 │   │   │   ├── provider/   # EmailProvider interface + mock + ses adapters
 │   │   │   ├── render/     # template rendering + sanitisation
 │   │   │   └── observability/  # pino logger, request-id, sentry
@@ -594,7 +595,7 @@ model Campaign {
   sendAt         DateTime?      // for ONCE
   cronExpression String?        // for RECURRING
   status         CampaignStatus @default(DRAFT)
-  repeatJobKey   String?        // BullMQ repeatable-job key, set when scheduled
+  lastRunAt      DateTime?      // occurrence cursor for RECURRING; last dispatch for ONCE
   template       Template @relation(fields: [templateId], references: [id])
   list           List     @relation(fields: [listId], references: [id])
   emailLogs      EmailLog[]
@@ -641,6 +642,23 @@ model Unsubscribe {
   token     String   @unique          // opaque token in the unsubscribe link
   createdAt DateTime @default(now())
   contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+// ---- the queue (there is no Redis) ----
+model Job {
+  id          String    @id @default(cuid())
+  queue       String                              // "send-email" | "campaign-dispatch" | "csv-import"
+  payload     Json
+  status      JobStatus @default(PENDING)         // PENDING ACTIVE COMPLETED FAILED DEAD
+  runAt       DateTime  @default(now())           // not eligible until this time (delay + backoff)
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(1)
+  dedupeKey   String?   @unique                   // repeat enqueues collapse to one row
+  result      Json?
+  lastError   String?   @db.Text
+  lockedAt    DateTime?
+  lockedBy    String?
+  @@index([queue, status, runAt])
 }</code></pre>
 
       <h3>Notes</h3>
@@ -648,7 +666,15 @@ model Unsubscribe {
         <li><strong><code>idempotencyKey</code></strong> is the spine of exactly-once delivery. Format:
           <code>{campaign|trigger}:{sourceId}:{contactId}:{occurrenceISODate}</code>. For a recurring
           campaign, <code>occurrenceISODate</code> is the scheduled run's date, so the same contact can
-          receive Monday's and Tuesday's digest but never two of Monday's.</li>
+          receive Monday's and Tuesday's digest but never two of Monday's. (The queue can't store a
+          <code>:</code> in a dedupe key cheaply, so <code>Job.dedupeKey</code> is the same value with
+          <code>:</code>&nbsp;&rarr;&nbsp;<code>_</code>.)</li>
+        <li><strong>The <code>Job</code> table is the whole queue.</strong> A worker <code>SELECT</code>s
+          due rows for its queue, claims each with <code>UPDATE ... SET status='ACTIVE' WHERE id=? AND
+          status='PENDING'</code> (0 rows &rarr; lost the race, skip), processes, then marks
+          <code>COMPLETED</code> / re-schedules with backoff / marks <code>DEAD</code>. A row stuck
+          <code>ACTIVE</code> past 5&nbsp;min is reclaimed. Safe with N workers; the scheduler still
+          assumes one.</li>
         <li><strong>Status is a lattice, not a strict line.</strong> <code>OPENED</code> implies delivered;
           a later <code>COMPLAINED</code> can supersede <code>OPENED</code>. The worker only ever advances
           status; provider webhooks apply terminal states. See fig. 6.2.</li>
@@ -703,8 +729,8 @@ model Unsubscribe {
         <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
         <tbody>
           <tr><td class="method">GET / POST / PUT</td><td><code>/api/campaigns</code></td><td>List / create / update (draft only)</td><td>JWT</td></tr>
-          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/schedule</code></td><td>Validate + move to <span class="pill ok">SCHEDULED</span>, register repeatable job</td><td>JWT</td></tr>
-          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/pause</code></td><td><span class="pill warn">PAUSED</span>, remove repeatable job, leave in-flight jobs</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/schedule</code></td><td>Validate + move to <span class="pill ok">SCHEDULED</span>; the scheduler's next tick picks it up</td><td>JWT</td></tr>
+          <tr><td class="method">POST</td><td><code>/api/campaigns/:id/pause</code></td><td><span class="pill warn">PAUSED</span>, clear pending dispatch jobs, leave in-flight sends</td><td>JWT</td></tr>
           <tr><td class="method">POST</td><td><code>/api/campaigns/:id/send-now</code></td><td>Fan out immediately (still rate-limited + suppression-checked)</td><td>JWT admin</td></tr>
           <tr><td class="method">GET</td><td><code>/api/campaigns/:id/stats</code></td><td>Counts by <code>EmailStatus</code> + open/click/bounce rates</td><td>JWT</td></tr>
         </tbody>
@@ -734,7 +760,8 @@ model Unsubscribe {
       <div class="table-wrap"><table>
         <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth</th></tr></thead>
         <tbody>
-          <tr><td class="method">GET</td><td><code>/health</code></td><td>DB + Redis reachability, returns 200/503</td><td>none</td></tr>
+          <tr><td class="method">GET</td><td><code>/health</code></td><td>MySQL reachability, returns 200/503</td><td>none</td></tr>
+          <tr><td class="method">GET</td><td><code>/api/jobs</code></td><td>Queue state: per-queue/status counts + recent rows. <code>POST /api/jobs/:id/retry</code> requeues one.</td><td>JWT admin</td></tr>
           <tr><td class="method">GET / POST / DELETE</td><td><code>/api/api-keys</code></td><td>Manage webhook API keys (raw key shown once)</td><td>JWT admin</td></tr>
         </tbody>
       </table></div>
@@ -747,13 +774,15 @@ model Unsubscribe {
       with the same guarantees.</p>
 
       <h3>Queues</h3>
+      <p>All three are <code>Job</code> rows distinguished by the <code>queue</code> column; each has one
+      poller loop. No separate dead-letter queue &mdash; a permanently failed row stays as
+      <code>status = DEAD</code> and is surfaced at <code>/api/jobs</code>.</p>
       <div class="table-wrap"><table>
-        <thead><tr><th>Queue</th><th>Producer</th><th>Job</th><th>Settings</th></tr></thead>
+        <thead><tr><th>Queue</th><th>Producer</th><th>Job</th><th>Poller settings</th></tr></thead>
         <tbody>
-          <tr><td><code>campaign-dispatch</code></td><td>scheduler (repeatable) / <code>send-now</code></td><td>one job per due campaign; fans out into <code>send-email</code> in batches of 500</td><td>concurrency 1 per campaign</td></tr>
-          <tr><td><code>send-email</code></td><td>fan-out + trigger webhook</td><td>one job per <code>(source, contact, occurrence)</code></td><td>rate limit <code>max: 1, duration: 1000</code> (sandbox); backoff exponential, attempts 5</td></tr>
-          <tr><td><code>csv-import</code></td><td><code>/api/contacts/import</code></td><td>parse + upsert contacts</td><td>concurrency 1</td></tr>
-          <tr><td><code>send-email-dlq</code></td><td>worker on final failure</td><td>records permanent failure, logs at <code>error</code>, increments an alert metric</td><td>manual drain</td></tr>
+          <tr><td><code>campaign-dispatch</code></td><td>scheduler tick / <code>send-now</code></td><td>one job per due campaign occurrence; fans out into <code>send-email</code> in batches of 500</td><td>poll 3s, batch 5, retries 3</td></tr>
+          <tr><td><code>send-email</code></td><td>fan-out + trigger webhook</td><td>one job per <code>(source, contact, occurrence)</code>, deduped on the idempotency key</td><td>poll 1s, batch 25, <code>minInterval = 1000/SEND_RATE_PER_SEC</code> ms between sends, backoff exponential, attempts 5</td></tr>
+          <tr><td><code>csv-import</code></td><td><code>/api/contacts/import</code></td><td>parse + upsert contacts</td><td>poll 2s, batch 1</td></tr>
         </tbody>
       </table></div>
 
@@ -792,13 +821,14 @@ sequenceDiagram
       <div class="table-wrap"><table>
         <thead><tr><th>Property</th><th>Mechanism</th></tr></thead>
         <tbody>
-          <tr><td>Idempotency</td><td>Unique <code>EmailLog.idempotencyKey</code>. Worker does <code>INSERT ... ON CONFLICT DO NOTHING</code>; if the row is already <code>SENT</code>/terminal, the job acks without sending. Safe under retry and duplicate webhook calls.</td></tr>
-          <tr><td>Rate limiting</td><td>BullMQ queue-level limiter, value from <code>SEND_RATE_PER_SEC</code> (default 1 in sandbox). Applies across all workers via Redis.</td></tr>
-          <tr><td>Daily cap</td><td>Redis counter keyed by UTC date, checked before <code>provider.send</code>. Over cap &rarr; job is delayed to the next window rather than failed.</td></tr>
-          <tr><td>Retries</td><td><code>attempts: 5</code>, <code>backoff: { type: 'exponential', delay: 30_000 }</code>. Provider errors are classified: <em>transient</em> (throttling, 5xx) retry; <em>permanent</em> (invalid address, sandbox-unverified) go straight to DLQ.</td></tr>
+          <tr><td>Idempotency</td><td>Two layers: <code>Job.dedupeKey</code> collapses repeat enqueues to one row, and unique <code>EmailLog.idempotencyKey</code> means the worker's <code>upsert</code> + terminal-status check never sends twice even if a row slips through. Safe under retry and duplicate webhook calls.</td></tr>
+          <tr><td>Rate limiting</td><td>The send poller sleeps <code>1000 / SEND_RATE_PER_SEC</code> ms after each send (default 1/sec in sandbox). One worker process, so this is the global rate; running two would double it.</td></tr>
+          <tr><td>Daily cap</td><td><code>COUNT(*) FROM EmailLog WHERE sentAt &gt;= todayUTC</code> checked before each send. Over cap &rarr; the job is deferred (<code>runAt</code> = next UTC midnight) without consuming a retry.</td></tr>
+          <tr><td>Retries</td><td>Up to <code>SEND_MAX_ATTEMPTS</code> (5); <code>runAt = now + SEND_BACKOFF_MS · 2^(attempt-1)</code>. Provider errors are classified: <em>transient</em> (throttling, 5xx) retry; <em>permanent</em> (invalid address, sandbox-unverified, render error) go straight to <code>DEAD</code>.</td></tr>
           <tr><td>Suppression</td><td><code>isSuppressed()</code> called inside the worker immediately before render. Never trust the enqueue-time check &mdash; a contact can unsubscribe while the job sits in the queue.</td></tr>
-          <tr><td>Partial retry</td><td>Fan-out is per-contact jobs, so one bad address never blocks the campaign; only that job retries or dead-letters.</td></tr>
-          <tr><td>Poison-message safety</td><td>Render errors (bad template syntax, missing required var) are permanent &rarr; DLQ with the offending variable named in <code>errorMessage</code>.</td></tr>
+          <tr><td>Partial retry</td><td>Fan-out is per-contact jobs, so one bad address never blocks the campaign; only that job retries or goes <code>DEAD</code>.</td></tr>
+          <tr><td>Poison-message safety</td><td>Render errors (bad template syntax, missing declared var) are permanent &rarr; <code>DEAD</code> with the offending variable named in <code>lastError</code>.</td></tr>
+          <tr><td>Crash recovery</td><td><code>attempts</code> is incremented at claim time, so a worker that dies mid-send still burns an attempt &mdash; no infinite poison loop. A row left <code>ACTIVE</code> &gt; 5&nbsp;min is reset to <code>PENDING</code>.</td></tr>
         </tbody>
       </table></div>
 
@@ -820,12 +850,13 @@ stateDiagram-v2
       </figure>
 
       <h3>Scheduler detail</h3>
-      <p>Each scheduled campaign registers one BullMQ <strong>repeatable job</strong> keyed by
-      <code>campaign:{id}</code>. For <code>ONCE</code>, a single delayed job at <code>sendAt</code>.
-      For <code>RECURRING</code>, a repeatable job on <code>cronExpression</code> (evaluated in a fixed
-      configured timezone). When the job fires it re-reads the campaign from MySQL &mdash; if status
-      is no longer <code>SCHEDULED</code>/<code>SENDING</code>, it exits. This makes pause/resume a pure
-      database operation with the repeatable job as an idempotent trigger.</p>
+      <p>No repeatable-job machinery &mdash; a 15&nbsp;s tick reads every <code>SCHEDULED</code> campaign
+      straight from MySQL. A <code>ONCE</code> campaign is due once <code>sendAt</code> has passed and
+      <code>lastRunAt</code> is null. A <code>RECURRING</code> one walks <code>cron-parser</code>
+      occurrences after <code>lastRunAt</code> (in <code>SCHEDULER_TIMEZONE</code>) up to now, enqueuing
+      a <code>campaign-dispatch</code> job per missed occurrence, then advances <code>lastRunAt</code>.
+      Each dispatch job carries a dedupe key (<code>disp:{id}:{occurrenceISO}</code>) so a double tick is
+      a no-op, and <code>fanOutCampaign</code> re-checks status, so pause/resume is a pure DB write.</p>
     </section>
 
     <section id="provider">
@@ -938,9 +969,10 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
           request and every job carries a <code>requestId</code> / <code>jobId</code>; the send path logs
           <code>emailLogId</code> so a single email is greppable end to end.</li>
         <li><strong>Error tracking</strong> &mdash; Sentry in <code>api</code> and <code>worker</code>;
-          DLQ arrivals raise a Sentry event with the classified cause.</li>
-        <li><strong>Queue visibility</strong> &mdash; Bull Board mounted at <code>/admin/queues</code>
-          behind JWT admin, or as a separate container in dev.</li>
+          a job going <code>DEAD</code> logs at <code>error</code> and raises a Sentry event.</li>
+        <li><strong>Queue visibility</strong> &mdash; <code>GET /api/jobs</code> (JWT admin) returns
+          per-queue/status counts and the most recent rows; the dashboard's Settings page renders it
+          with a one-click retry. No external dashboard to run.</li>
         <li><strong>Metrics</strong> &mdash; counters for sent / failed / suppressed / dead-lettered and a
           gauge for daily-cap usage, exposed at <code>/metrics</code> (Prometheus text format).</li>
         <li><strong>Secrets</strong> &mdash; all via environment; <code>.env</code> git-ignored;
@@ -957,13 +989,13 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
         <thead><tr><th>Layer</th><th>What</th><th>Tooling</th></tr></thead>
         <tbody>
           <tr><td>Unit</td><td>Template rendering (substitution, missing-var error, sanitisation, link rewrite, HMAC signing); <code>isSuppressed</code> truth table; idempotency-key construction; provider error classification.</td><td>Vitest</td></tr>
-          <tr><td>Integration</td><td>Trigger webhook &rarr; job enqueued &rarr; worker &rarr; <code>EmailLog</code> row, against a real MySQL + Redis (Testcontainers) and the MockProvider. Duplicate webhook call produces exactly one send.</td><td>Vitest + Testcontainers</td></tr>
+          <tr><td>Integration</td><td>Trigger webhook &rarr; <code>Job</code> row &rarr; worker &rarr; <code>EmailLog</code> row, against a real MySQL (Testcontainers) and the MockProvider. Duplicate webhook call produces exactly one send.</td><td>Vitest + Testcontainers</td></tr>
           <tr><td>Integration</td><td>Campaign schedule &rarr; fan-out &rarr; rate limiting observed &rarr; suppressed contact skipped &rarr; stats endpoint reflects counts.</td><td>Vitest + Testcontainers</td></tr>
           <tr><td>Contract</td><td>SNS payload fixtures (delivery / hard bounce / complaint) drive <code>parseWebhook</code> and assert auto-suppression.</td><td>Vitest fixtures</td></tr>
           <tr><td>E2E (smoke)</td><td>Login &rarr; create template &rarr; create list + contact &rarr; schedule campaign &rarr; see it in outbox.</td><td>Playwright, optional in CI</td></tr>
         </tbody>
       </table></div>
-      <p class="footnote">CI: lint &rarr; typecheck &rarr; unit &rarr; integration (Testcontainers) on every PR; migrations checked for drift.</p>
+      <p class="footnote">CI (GitHub Actions, <code>mysql:8.4</code> service): <code>prisma:deploy</code> &rarr; typecheck &rarr; unit tests &rarr; web build on every PR.</p>
     </section>
 
     <section id="buildorder">
@@ -972,15 +1004,15 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
       <div class="table-wrap"><table>
         <thead><tr><th>#</th><th>Milestone</th><th>Demo</th></tr></thead>
         <tbody>
-          <tr><td>M1</td><td>Repo scaffold, docker-compose (redis), Prisma schema + first migration, <code>/health</code>, pino, CI.</td><td><code>/health</code> green against local MySQL + Redis, migrate runs.</td></tr>
+          <tr><td>M1</td><td>Repo scaffold, Prisma schema + first migration, <code>/health</code>, pino, CI.</td><td><code>/health</code> green against local MySQL, migrate runs.</td></tr>
           <tr><td>M2</td><td>Auth (login/refresh, bcrypt, JWT) + CRUD for contacts, lists, templates with Zod validation.</td><td>Create a template via API + Postman collection.</td></tr>
           <tr><td>M3</td><td><code>EmailProvider</code> interface + MockProvider + render/sanitise module + <code>POST /templates/:id/preview</code> + "send test email" endpoint.</td><td>Test email lands in <code>.mail-outbox/</code>.</td></tr>
-          <tr><td>M4</td><td>BullMQ wiring, <code>send-email</code> queue, worker with idempotency + suppression + rate limit + retries + DLQ. Scheduler + campaign fan-out.</td><td>Schedule a campaign 2 min out; watch it send at 1/sec.</td></tr>
+          <tr><td>M4</td><td>MySQL job engine, <code>send-email</code> poller with idempotency + suppression + rate limit + retries + <code>DEAD</code>. Scheduler + campaign fan-out.</td><td>Schedule a campaign 2 min out; watch it send at 1/sec.</td></tr>
           <tr><td>M5</td><td>Trigger model + <code>/api/webhooks/trigger/:eventKey</code> + API key auth + condition evaluation.</td><td><code>curl</code> the webhook, email appears; duplicate call &rarr; one send.</td></tr>
           <tr><td>M6</td><td>Tracking pixel, click redirect, unsubscribe page, <code>/api/webhooks/ses</code> ingestion + auto-suppression, <code>/stats</code>.</td><td>Open the outbox email's pixel URL &rarr; status flips to <span class="pill ok">OPENED</span>.</td></tr>
           <tr><td>M7</td><td>Frontend: auth, contacts, lists, templates screens.</td><td>Manage audience + templates from the UI.</td></tr>
           <tr><td>M8</td><td>Frontend: campaign wizard, trigger management, stats dashboards, settings.</td><td>Whole flow, UI only.</td></tr>
-          <tr><td>M9</td><td>Hardening: Sentry, Bull Board, <code>/metrics</code>, public-endpoint rate limits, full test suite, deploy notes, SES adapter finished + integration-tested behind the flag.</td><td>Flip <code>EMAIL_PROVIDER=ses</code> in staging against a verified address.</td></tr>
+          <tr><td>M9</td><td>Hardening: Sentry, <code>/metrics</code>, public-endpoint rate limits, full test suite, deploy notes, SES adapter finished + integration-tested behind the flag.</td><td>Flip <code>EMAIL_PROVIDER=ses</code> in staging against a verified address.</td></tr>
         </tbody>
       </table></div>
     </section>
@@ -996,7 +1028,7 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
           <li><strong>Role split</strong> &mdash; the model has <code>admin</code>/<code>editor</code>; confirm the actual capability difference (proposed: only <code>admin</code> can <code>send-now</code>, manage API keys, and manage users). <em>[before M2]</em></li>
           <li><strong>EmailLog retention</strong> &mdash; keep forever, or prune/aggregate after N days? Drives whether <code>/stats</code> reads the log table or a rollup. <em>[before M6]</em></li>
           <li><strong>CSV import semantics</strong> &mdash; on duplicate email: skip, update, or error the row? <em>[before M2]</em></li>
-          <li><strong>Production host</strong> &mdash; single VM with compose, or a managed platform? Affects the zero-downtime deploy notes. <em>[before M9]</em></li>
+          <li><strong>Production host</strong> &mdash; where do the two Node processes and the managed MySQL run? Affects the deploy notes. <em>[before M9]</em></li>
         </ul>
       </div>
     </section>

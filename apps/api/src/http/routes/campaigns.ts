@@ -2,7 +2,7 @@ import { Router } from "express";
 import cronParser from "cron-parser";
 import { createCampaignInput, idParam, updateCampaignInput } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
-import { campaignDispatchQueue } from "../../queue/queues.js";
+import { enqueueCampaignDispatch } from "../../queue/queues.js";
 import { scheduleCampaign, unscheduleCampaign } from "../../queue/scheduler.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { badRequest, conflict, notFound, wrap } from "../errors.js";
@@ -96,7 +96,7 @@ campaignsRouter.post(
     const c = await prisma.campaign.findUnique({ where: { id } });
     if (!c) throw notFound("Campaign");
     await unscheduleCampaign(id);
-    res.json(await prisma.campaign.update({ where: { id }, data: { status: "PAUSED", repeatJobKey: null } }));
+    res.json(await prisma.campaign.update({ where: { id }, data: { status: "PAUSED" } }));
   }),
 );
 
@@ -108,11 +108,11 @@ campaignsRouter.post(
     const c = await prisma.campaign.findUnique({ where: { id } });
     if (!c) throw notFound("Campaign");
     await assertRefs(c.templateId, c.listId);
-    await prisma.campaign.update({ where: { id }, data: { status: "SCHEDULED" } });
-    await campaignDispatchQueue.add("send-now", {
-      campaignId: id,
-      runDate: new Date().toISOString().slice(0, 10),
-    });
+    await prisma.campaign.update({ where: { id }, data: { status: "SCHEDULED", lastRunAt: null } });
+    await enqueueCampaignDispatch(
+      { campaignId: id, runDate: new Date().toISOString().slice(0, 10) },
+      { dedupeKey: `disp:${id}:manual:${Date.now()}` },
+    );
     res.status(202).json({ status: "dispatching" });
   }),
 );
