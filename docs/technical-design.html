@@ -503,7 +503,7 @@ flowchart LR
 │   │   │   ├── http/       # express routers, middleware
 │   │   │   ├── domain/     # contacts, templates, campaigns, triggers, suppression
 │   │   │   ├── queue/      # MySQL job engine, workers, scheduler
-│   │   │   ├── provider/   # EmailProvider interface + mock + ses adapters
+│   │   │   ├── provider/   # EmailProvider interface + mock + smtp + ses adapters
 │   │   │   ├── render/     # template rendering + sanitisation
 │   │   │   └── observability/  # pino logger, request-id, sentry
 │   │   └── test/
@@ -862,7 +862,10 @@ stateDiagram-v2
     <section id="provider">
       <h2><span class="num">07</span>Provider abstraction</h2>
       <p>The worker depends only on this interface. The concrete adapter is chosen at boot from
-      <code>EMAIL_PROVIDER</code> (<code>mock</code> | <code>ses</code>).</p>
+      <code>EMAIL_PROVIDER</code> (<code>mock</code> | <code>smtp</code> | <code>ses</code>). The
+      <code>smtp</code> adapter (nodemailer) reads <code>SMTP_HOST/PORT/SECURE/USER/PASS</code> and
+      classifies 5xx / <code>EAUTH</code> / <code>EENVELOPE</code> as permanent, 4xx and connection
+      errors as transient; like <code>mock</code> it has no delivery callback.</p>
       <pre><code>interface EmailProvider {
   readonly name: string;
 

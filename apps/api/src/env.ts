@@ -29,7 +29,7 @@ const schema = z.object({
   DB_USER: z.string().default("root"),
   DB_PASSWORD: z.string().default(""),
 
-  EMAIL_PROVIDER: z.enum(["mock", "ses"]).default("mock"),
+  EMAIL_PROVIDER: z.enum(["mock", "ses", "smtp"]).default("mock"),
   EMAIL_FROM: z.string().default("Dispatch <no-reply@example.com>"),
   EMAIL_SENDER_ADDRESS: z.string().default("123 Example St, Example City, EX 00000"),
   SEND_RATE_PER_SEC: z.coerce.number().default(1),
@@ -43,6 +43,16 @@ const schema = z.object({
   AWS_ACCESS_KEY_ID: z.string().optional(),
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
   SES_CONFIGURATION_SET: z.string().optional(),
+
+  // Only needed when EMAIL_PROVIDER=smtp.
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().default(587),
+  SMTP_SECURE: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
 
   SENTRY_DSN: z.string().optional(),
 

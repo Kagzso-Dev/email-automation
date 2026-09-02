@@ -12,7 +12,7 @@ suppression enforcement. See [`docs/technical-design.html`](docs/technical-desig
 | --- | --- |
 | API | Node 20, TypeScript, Express, Prisma (MySQL 8) |
 | Queue | MySQL-backed `Job` table + polling workers — scheduler, campaign fan-out, rate-limited send worker, dead-letter (`status = DEAD`) |
-| Email | Provider interface; `mock` adapter (writes to `.mail-outbox/`) by default, `ses` adapter built but off |
+| Email | Provider interface — `mock` (writes to `.mail-outbox/`, default), `smtp` (nodemailer), `ses` (AWS); selected by `EMAIL_PROVIDER` |
 | Web | React + Vite, React Query, Tailwind |
 | Auth | JWT access token + httpOnly refresh cookie; `ADMIN` / `EDITOR` roles |
 
