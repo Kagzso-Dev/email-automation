@@ -1,20 +1,23 @@
-import { parse as parseCsv } from "csv-parse/sync";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 import { deliverEmail } from "../domain/delivery.js";
 import { PermanentSendError } from "../provider/index.js";
 import { DeferJobError, PermanentJobError, QueueWorker } from "./engine.js";
-import { QUEUE, type CampaignDispatchJob, type CsvImportJob, type SendEmailJob } from "./queues.js";
+import { QUEUE, type CampaignDispatchJob, type ContactImportJob, type SendEmailJob } from "./queues.js";
 import { dailyCapReached, msUntilNextWindow } from "./dailyCap.js";
+import { processManualBulkSend } from "./manualBulkSend.js";
+import { processWhatsAppBulkSend } from "./whatsappBulkSend.js";
 import { fanOutCampaign } from "./dispatch.js";
+import { parseContactFile } from "../domain/contactImport.js";
+import { domainAllowed, loadAllowedDomains } from "../domain/allowedDomains.js";
 
 /* ----------------------------------------------------- send-email */
 
 const sendEmailWorker = new QueueWorker({
   queue: QUEUE.sendEmail,
   batch: 25,
-  // Rate limit: one send per (1000 / rate) ms. SES sandbox default is 1/sec.
+  // Rate limit: one send per (1000 / rate) ms. Default 1/sec (SEND_RATE_PER_SEC).
   minIntervalMs: Math.ceil(1000 / Math.max(1, env.SEND_RATE_PER_SEC)),
   backoffMs: env.SEND_BACKOFF_MS,
   pollMs: 1000,
@@ -48,42 +51,63 @@ const campaignDispatchWorker = new QueueWorker({
   },
 });
 
-/* ----------------------------------------------------- csv-import */
+/* ----------------------------------------------------- manual-bulk-send (drip) */
 
-const csvImportWorker = new QueueWorker({
+const manualBulkSendWorker = new QueueWorker({
+  queue: QUEUE.manualBulkSend,
+  batch: 1, // one batch job at a time per tick; each job sends exactly one contact
+  pollMs: 1000,
+  backoffMs: 5000,
+  processor: (payload) => processManualBulkSend(payload),
+});
+
+/* ----------------------------------------------------- whatsapp-bulk-send (drip) */
+
+const whatsappBulkSendWorker = new QueueWorker({
+  queue: QUEUE.whatsappBulkSend,
+  batch: 1, // one batch job per tick; each job sends exactly one message
+  pollMs: 1000,
+  backoffMs: 5000,
+  processor: (payload) => processWhatsAppBulkSend(payload),
+});
+
+/* ----------------------------------------------------- contact-import (csv / xlsx / pdf) */
+
+const contactImportWorker = new QueueWorker({
   queue: QUEUE.csvImport,
   batch: 1,
   pollMs: 2000,
   processor: async (payload) => {
-    const job = payload as unknown as CsvImportJob;
-    const rows = parseCsv(job.fileContent, {
-      columns: true,
-      skip_empty_lines: true,
-      trim: true,
-    }) as Record<string, string>[];
+    const job = payload as unknown as ContactImportJob;
+    const parsed = await parseContactFile(Buffer.from(job.fileBase64, "base64"), job.format);
+    const allowedDomains = await loadAllowedDomains();
 
     let created = 0;
     let updated = 0;
-    let skipped = 0;
-    for (const row of rows) {
-      const email = (row.email ?? row.Email ?? "").toLowerCase().trim();
+    let skipped = 0; // no usable email address
+    let rejectedDomain = 0; // email domain not on the approved list
+    for (const row of parsed) {
+      const email = row.email.toLowerCase().trim();
       if (!email || !email.includes("@")) {
         skipped++;
         continue;
       }
-      const { first_name, last_name, firstName, lastName, ...rest } = row;
-      delete (rest as Record<string, string>).email;
-      delete (rest as Record<string, string>).Email;
+      if (!domainAllowed(email, allowedDomains)) {
+        rejectedDomain++;
+        continue;
+      }
       const data = {
-        firstName: firstName || first_name || undefined,
-        lastName: lastName || last_name || undefined,
-        customFields: rest as Record<string, string>,
+        firstName: row.firstName || undefined,
+        lastName: row.lastName || undefined,
+        phone: row.phone || undefined,
+        businessName: row.businessName || undefined,
+        customFields: row.customFields,
       };
       const existing = await prisma.contact.findUnique({ where: { email } });
       const contact = await prisma.contact.upsert({
         where: { email },
         create: { email, ...data },
-        update: data, // CSV import = upsert on email (design §13)
+        update: data, // import = upsert on email (design §13)
       });
       if (existing) updated++;
       else created++;
@@ -95,11 +119,20 @@ const csvImportWorker = new QueueWorker({
         });
       }
     }
-    logger.info({ created, updated, skipped }, "csv import complete");
-    return { created, updated, skipped, total: rows.length };
+    logger.info(
+      { format: job.format, created, updated, skipped, rejectedDomain },
+      "contact import complete",
+    );
+    return { created, updated, skipped, rejectedDomain, total: parsed.length };
   },
 });
 
 export function startAllWorkers(): QueueWorker[] {
-  return [sendEmailWorker.start(), campaignDispatchWorker.start(), csvImportWorker.start()];
+  return [
+    sendEmailWorker.start(),
+    campaignDispatchWorker.start(),
+    contactImportWorker.start(),
+    manualBulkSendWorker.start(),
+    whatsappBulkSendWorker.start(),
+  ];
 }

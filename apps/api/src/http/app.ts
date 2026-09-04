@@ -5,9 +5,11 @@ import { pinoHttp } from "pino-http";
 import { randomUUID } from "node:crypto";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
+import { uploadsRoot } from "../domain/imageUpload.js";
 import { errorHandler } from "./errors.js";
 import { authRouter } from "./routes/auth.js";
 import { contactsRouter } from "./routes/contacts.js";
+import { whatsappRouter } from "./routes/whatsapp.js";
 import { listsRouter } from "./routes/lists.js";
 import { templatesRouter } from "./routes/templates.js";
 import { campaignsRouter } from "./routes/campaigns.js";
@@ -19,6 +21,7 @@ import { apiKeysRouter } from "./routes/apiKeys.js";
 import { healthRouter } from "./routes/health.js";
 import { statsRouter } from "./routes/stats.js";
 import { jobsRouter } from "./routes/jobs.js";
+import { settingsRouter } from "./routes/settings.js";
 
 export function createApp() {
   const app = express();
@@ -37,14 +40,19 @@ export function createApp() {
   );
   app.use(cors({ origin: env.WEB_ORIGIN.split(","), credentials: true }));
   app.use(cookieParser());
-  // SES/SNS posts text/plain; capture the raw body for that route only.
-  app.use("/api/webhooks/ses", express.text({ type: () => true, limit: "1mb" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false }));
+
+  // Uploaded template images — immutable, content-addressed filenames.
+  app.use(
+    "/uploads",
+    express.static(uploadsRoot(), { index: false, maxAge: "365d", immutable: true }),
+  );
 
   app.use("/health", healthRouter);
   app.use("/api/auth", authRouter);
   app.use("/api/contacts", contactsRouter);
+  app.use("/api/whatsapp", whatsappRouter);
   app.use("/api/lists", listsRouter);
   app.use("/api/templates", templatesRouter);
   app.use("/api/campaigns", campaignsRouter);
@@ -54,6 +62,7 @@ export function createApp() {
   app.use("/api/unsubscribe", unsubscribeRouter);
   app.use("/api/api-keys", apiKeysRouter);
   app.use("/api/jobs", jobsRouter);
+  app.use("/api/settings", settingsRouter);
   app.use("/api", statsRouter);
 
   app.use(errorHandler);

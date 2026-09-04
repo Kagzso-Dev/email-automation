@@ -1,5 +1,6 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
+import multer from "multer";
 import {
   createTemplateInput,
   idParam,
@@ -8,14 +9,73 @@ import {
   updateTemplateInput,
 } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
-import { render } from "../../render/render.js";
+import { render, letterToHtml, type RenderInput } from "../../render/render.js";
+import { inlineLocalImages } from "../../render/inlineImages.js";
 import { getProvider } from "../../provider/index.js";
 import { env } from "../../env.js";
+import {
+  IMAGE_UPLOAD_MAX_BYTES,
+  ImageUploadError,
+  storeTemplateImage,
+} from "../../domain/imageUpload.js";
 import { authRequired } from "../middleware/auth.js";
 import { badRequest, conflict, notFound, wrap } from "../errors.js";
 
 export const templatesRouter = Router();
 templatesRouter.use(authRequired);
+
+/**
+ * The editor sends the message as a plain letter (`bodyText` + optional
+ * `signature`); the render-ready `htmlBody` column is derived from it here so
+ * the renderer and delivery path stay unchanged. A caller may still pass
+ * `htmlBody` directly (escape hatch) when `bodyText` is absent.
+ */
+function deriveHtmlBody<T extends { bodyText?: string; signature?: string; htmlBody?: string }>(
+  body: T,
+): T & { htmlBody?: string } {
+  if (body.bodyText && body.bodyText.trim()) {
+    return { ...body, htmlBody: letterToHtml(body.bodyText, body.signature) };
+  }
+  return body;
+}
+
+/**
+ * Template image upload. Stores the file via `storeTemplateImage` and returns
+ * its public URL — the client drops that into the same `imageUrl` field a
+ * pasted URL uses, so nothing downstream changes.
+ */
+const uploadImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: IMAGE_UPLOAD_MAX_BYTES, files: 1 },
+});
+
+const acceptImage = (req: Request, res: Response, next: NextFunction) =>
+  uploadImage.single("file")(req, res, (err: unknown) => {
+    if (!err) return next();
+    const code = (err as { code?: string }).code;
+    next(
+      badRequest(
+        code === "LIMIT_FILE_SIZE"
+          ? "Image is too large — maximum size is 5 MB"
+          : "Could not read the uploaded file",
+      ),
+    );
+  });
+
+templatesRouter.post(
+  "/uploads/image",
+  acceptImage,
+  wrap(async (req, res) => {
+    if (!req.file) throw badRequest("File required (multipart field 'file')");
+    try {
+      const { url } = await storeTemplateImage(req.file);
+      res.status(201).json({ url });
+    } catch (err) {
+      if (err instanceof ImageUploadError) throw badRequest(err.message);
+      throw err;
+    }
+  }),
+);
 
 templatesRouter.get(
   "/",
@@ -32,8 +92,11 @@ templatesRouter.get(
 templatesRouter.post(
   "/",
   wrap(async (req, res) => {
-    const body = createTemplateInput.parse(req.body);
-    res.status(201).json(await prisma.template.create({ data: body }));
+    const parsed = deriveHtmlBody(createTemplateInput.parse(req.body));
+    // superRefine guarantees bodyText or htmlBody; deriveHtmlBody fills htmlBody
+    // from bodyText, so at this point it is always set.
+    const htmlBody = parsed.htmlBody!;
+    res.status(201).json(await prisma.template.create({ data: { ...parsed, htmlBody } }));
   }),
 );
 
@@ -51,7 +114,7 @@ templatesRouter.put(
   "/:id",
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    const body = updateTemplateInput.parse(req.body);
+    const body = deriveHtmlBody(updateTemplateInput.parse(req.body));
     res.json(await prisma.template.update({ where: { id }, data: body }));
   }),
 );
@@ -89,6 +152,9 @@ templatesRouter.post(
         declaredVariables: declared,
         vars: variables,
         unsubscribeUrl: `${env.PUBLIC_API_URL}/api/unsubscribe/preview`,
+        kind: tpl.kind,
+        links: tpl.links as RenderInput["links"],
+        meeting: tpl.meeting as RenderInput["meeting"],
       });
       res.json(out);
     } catch (err) {
@@ -114,13 +180,20 @@ templatesRouter.post(
       vars: variables,
       emailLogId: fakeLogId,
       unsubscribeUrl: `${env.PUBLIC_API_URL}/api/unsubscribe/preview`,
+      kind: tpl.kind,
+      links: tpl.links as RenderInput["links"],
+      meeting: tpl.meeting as RenderInput["meeting"],
+      imageUrl: tpl.imageUrl,
+      videoUrl: tpl.videoUrl,
     });
+    const { html, attachments } = await inlineLocalImages(out.html, out.attachments);
     const result = await getProvider().send({
       to,
       from: env.EMAIL_FROM,
       subject: `[TEST] ${out.subject}`,
-      html: out.html,
+      html,
       text: out.text,
+      attachments,
       headers: {},
       tags: { emailLogId: fakeLogId },
     });

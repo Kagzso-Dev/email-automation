@@ -1,3 +1,13 @@
+export interface OutboundAttachment {
+  filename: string;
+  /** UTF-8 string, or base64 when `encoding` is "base64" (e.g. an inlined image). */
+  content: string;
+  contentType: string;
+  encoding?: "base64";
+  /** Set for inline images referenced from the HTML as `<img src="cid:...">`. */
+  cid?: string;
+}
+
 export interface OutboundMessage {
   to: string;
   from: string;
@@ -6,6 +16,7 @@ export interface OutboundMessage {
   text: string;
   headers: Record<string, string>;
   tags: { emailLogId: string };
+  attachments?: OutboundAttachment[];
 }
 
 export interface SendResult {
@@ -20,8 +31,6 @@ export type DeliveryEvent =
 export interface EmailProvider {
   readonly name: string;
   send(msg: OutboundMessage): Promise<SendResult>;
-  /** Parse a raw provider callback body into normalised events. */
-  parseWebhook(body: unknown, headers: Record<string, string | string[] | undefined>): Promise<DeliveryEvent[]>;
 }
 
 /** Transient — retry with backoff. */

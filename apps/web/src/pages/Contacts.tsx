@@ -1,14 +1,20 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
+import { useConfirm } from "../components/confirm";
+import { useToast } from "../components/toast";
+import { SendWhatsApp } from "../components/SendWhatsApp";
+import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp";
 
 interface Contact {
   id: string;
   email: string;
   firstName?: string | null;
   lastName?: string | null;
+  phone?: string | null;
+  businessName?: string | null;
   status: string;
   createdAt: string;
 }
@@ -19,6 +25,11 @@ interface Page {
   pageSize: number;
 }
 
+interface Template {
+  id: string;
+  name: string;
+}
+
 const statusTone: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   ACTIVE: "ok",
   UNSUBSCRIBED: "warn",
@@ -26,12 +37,24 @@ const statusTone: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   COMPLAINED: "crit",
 };
 
+/** Empty is allowed (phone is optional); otherwise it must be exactly 10 digits. */
+const phoneOk = (s: string) => s.trim() === "" || s.replace(/\D/g, "").length === 10;
+
 export function ContactsPage() {
   const qc = useQueryClient();
+  const confirm = useConfirm();
+  const whatsAppConfig = useWhatsAppConfig();
+  const [waSendOpen, setWaSendOpen] = useState(false);
+  // Shown when a send button is clicked with nothing usable selected — the
+  // buttons themselves stay enabled (a click always does something).
+  const [sendHint, setSendHint] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const [showAdd, setShowAdd] = useState(false);
+  const [sendTargets, setSendTargets] = useState<Contact[] | null>(null);
+  const [editContact, setEditContact] = useState<Contact | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const query = useQuery({
@@ -42,6 +65,86 @@ export function ContactsPage() {
       if (status) p.set("status", status);
       return api<Page>(`/api/contacts?${p}`);
     },
+  });
+
+  // Selection is scoped to the visible page, so reset it whenever the page or
+  // filters change to keep the count and the actual send in sync.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [search, status, page]);
+
+  const items = query.data?.items ?? [];
+  // Only ACTIVE contacts are eligible for a send; the rest are filtered out by
+  // suppression on the server anyway.
+  const selectableIds = items.filter((c) => c.status === "ACTIVE").map((c) => c.id);
+  const selectedOnPage = selectableIds.filter((id) => selectedIds.has(id));
+  const allSelected = selectableIds.length > 0 && selectedOnPage.length === selectableIds.length;
+
+  function toggleOne(id: string, on: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+  function toggleAll(on: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const id of selectableIds) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+  // Clear the "nothing selected" hint as soon as the selection changes.
+  useEffect(() => {
+    setSendHint(null);
+  }, [selectedIds]);
+
+  // WhatsApp bulk send — a fully separate code path. Eligible = selected contacts
+  // that have a phone number; the rest are shown as skipped.
+  const waConfigured = whatsAppConfig.data?.configured ?? false;
+  const waEligible = items.filter((c) => selectedIds.has(c.id) && c.status === "ACTIVE" && c.phone);
+  const waSkippedNoPhone = selectedIds.size - waEligible.length;
+  const waRecipients =
+    waSendOpen && waEligible.length
+      ? waEligible.map((c) => ({
+          id: c.id,
+          phone: c.phone,
+          firstName: c.firstName,
+          lastName: c.lastName,
+          businessName: c.businessName,
+        }))
+      : null;
+
+  function openBulkSend() {
+    const selected = items.filter((c) => selectedIds.has(c.id) && c.status === "ACTIVE");
+    if (!selected.length) {
+      setSendHint("Select at least one active contact to send to, or use “Select all”.");
+      return;
+    }
+    setSendHint(null);
+    setSendTargets(selected);
+  }
+
+  function openWaSend() {
+    if (waEligible.length) {
+      setSendHint(null);
+      setWaSendOpen(true);
+      return;
+    }
+    setSendHint(
+      selectedIds.size === 0
+        ? "Select at least one active contact to send to, or use “Select all”."
+        : "None of the selected contacts have a phone number — WhatsApp needs one.",
+    );
+  }
+
+  const del = useMutation({
+    mutationFn: (id: string) => api(`/api/contacts/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["contacts"] }),
   });
 
   const importMut = useMutation({
@@ -60,9 +163,28 @@ export function ContactsPage() {
       <PageHeader
         title="Contacts"
         action={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn-ghost"
+              title="Send a template to the selected active contacts"
+              onClick={openBulkSend}
+            >
+              Send email{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
+            </button>
+            <button
+              className="btn-whatsapp"
+              disabled={!waConfigured}
+              title={
+                waConfigured
+                  ? "Send a WhatsApp template to the selected contacts that have a phone number"
+                  : WHATSAPP_NOT_CONFIGURED_HINT
+              }
+              onClick={openWaSend}
+            >
+              Send WhatsApp{waEligible.length > 0 ? ` (${waEligible.length})` : ""}
+            </button>
             <button className="btn-ghost" onClick={() => fileRef.current?.click()}>
-              Import CSV
+              Import file
             </button>
             <button className="btn-primary" onClick={() => setShowAdd(true)}>
               Add contact
@@ -70,7 +192,7 @@ export function ContactsPage() {
             <input
               ref={fileRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.xlsx,.pdf"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -82,14 +204,60 @@ export function ContactsPage() {
         }
       />
 
-      {importMut.isPending && <div className="mb-3 text-sm text-slate-550">Uploading CSV…</div>}
+      {importMut.isPending && <div className="mb-3 text-sm text-slate-550">Uploading file…</div>}
       {importMut.isSuccess && (
         <div className="mb-3 text-sm text-ok">Import queued — refreshing shortly.</div>
       )}
+      {importMut.error && (
+        <div className="mb-3">
+          <ErrorNote error={importMut.error} />
+        </div>
+      )}
+      {del.error && (
+        <div className="mb-3">
+          <ErrorNote error={del.error} />
+        </div>
+      )}
+      <p className="mb-4 text-xs text-slate-550">
+        Import a <b>.csv</b> or <b>.xlsx</b> file with an <code>email</code> column (plus optional{" "}
+        <code>first name</code>, <code>last name</code>, <code>phone</code>, <code>business name</code>),
+        or a <b>.pdf</b> to pull every email address out of its text. Rows whose domain is not on the
+        approved sending list (Settings) are skipped.
+      </p>
 
-      <div className="mb-4 flex gap-2">
+      {waConfigured && selectedIds.size > 0 && waSkippedNoPhone > 0 && (
+        <div className="mb-3 text-xs text-warn">
+          {waSkippedNoPhone} contact{waSkippedNoPhone === 1 ? "" : "s"} skipped for WhatsApp — no
+          phone number.
+        </div>
+      )}
+
+      {sendHint && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-[#eef0f4] px-3 py-2 text-sm">
+          <span className="text-ink">{sendHint}</span>
+          {selectableIds.length > 0 && (
+            <button
+              className="text-xs font-medium text-accent-ink hover:underline"
+              onClick={() => {
+                toggleAll(true);
+                setSendHint(null);
+              }}
+            >
+              Select all on this page
+            </button>
+          )}
+          <button
+            className="ml-auto text-xs text-slate-550 hover:underline"
+            onClick={() => setSendHint(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <input
-          className="input max-w-xs"
+          className="input sm:max-w-xs"
           placeholder="Search email or name"
           value={search}
           onChange={(e) => {
@@ -98,7 +266,7 @@ export function ContactsPage() {
           }}
         />
         <select
-          className="input max-w-[12rem]"
+          className="input sm:max-w-[12rem]"
           value={status}
           onChange={(e) => {
             setStatus(e.target.value);
@@ -118,18 +286,80 @@ export function ContactsPage() {
         <ErrorNote error={query.error} />
       ) : (
         <>
-          <Table head={["Email", "Name", "Status", "Added"]}>
-            {query.data!.items.map((c) => (
+          <Table
+            head={[
+              <input
+                key="all"
+                type="checkbox"
+                className="align-middle"
+                aria-label="Select all active contacts on this page"
+                checked={allSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = selectedOnPage.length > 0 && !allSelected;
+                }}
+                disabled={selectableIds.length === 0}
+                onChange={(e) => toggleAll(e.target.checked)}
+              />,
+              "Email",
+              "Name",
+              "Business",
+              "Phone",
+              "Status",
+              "Added",
+              "",
+            ]}
+          >
+            {items.map((c) => (
               <tr key={c.id} className="border-b border-[#f0f2f6] last:border-0">
+                <td className="px-4 py-2.5">
+                  <input
+                    type="checkbox"
+                    className="align-middle"
+                    aria-label={`Select ${c.email}`}
+                    checked={selectedIds.has(c.id)}
+                    disabled={c.status !== "ACTIVE"}
+                    title={c.status === "ACTIVE" ? undefined : "Contact is not active"}
+                    onChange={(e) => toggleOne(c.id, e.target.checked)}
+                  />
+                </td>
                 <td className="px-4 py-2.5 font-mono text-xs">{c.email}</td>
                 <td className="px-4 py-2.5">
                   {[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}
                 </td>
+                <td className="px-4 py-2.5">{c.businessName || "—"}</td>
+                <td className="px-4 py-2.5">{c.phone || "—"}</td>
                 <td className="px-4 py-2.5">
                   <Badge tone={statusTone[c.status] ?? "neutral"}>{c.status}</Badge>
                 </td>
                 <td className="px-4 py-2.5 text-slate-550">
                   {new Date(c.createdAt).toLocaleDateString()}
+                </td>
+                <td className="px-4 py-2.5">
+                  <div className="flex items-center justify-end gap-3">
+                    <button
+                      className="text-xs text-accent-ink hover:underline"
+                      title="Edit this contact"
+                      onClick={() => setEditContact(c)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="text-xs text-crit hover:underline disabled:opacity-50"
+                      disabled={del.isPending}
+                      title="Delete this contact"
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: `Delete ${c.email}?`,
+                          body: "This removes the contact and its email history.",
+                          confirmText: "Delete",
+                          tone: "danger",
+                        });
+                        if (ok) del.mutate(c.id);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -143,8 +373,173 @@ export function ContactsPage() {
         </>
       )}
 
+      <SendWhatsApp
+        recipients={waRecipients}
+        source="contacts"
+        onClose={() => setWaSendOpen(false)}
+        onSelectionConsumed={() => setSelectedIds(new Set())}
+      />
+
       <AddContactModal open={showAdd} onClose={() => setShowAdd(false)} />
+      <EditContactModal contact={editContact} onClose={() => setEditContact(null)} />
+      <SendEmailModal
+        contacts={sendTargets}
+        onClose={() => setSendTargets(null)}
+        onSent={() => setSelectedIds(new Set())}
+      />
     </div>
+  );
+}
+
+function useTemplateOptions(enabled: boolean) {
+  return useQuery({
+    queryKey: ["templates"],
+    queryFn: () => api<{ items: Template[] }>("/api/templates"),
+    enabled,
+  });
+}
+
+function TemplateSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const templates = useTemplateOptions(true);
+  return (
+    <>
+      <label className="label">Template</label>
+      <select
+        className="input mb-3"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        required
+      >
+        <option value="">Select…</option>
+        {templates.data?.items.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+/**
+ * "Send email" for one or more selected contacts. Confirming creates a
+ * server-side paced drip batch (one send at a time with a random gap — see
+ * Settings → Bulk send pacing) and hands off immediately: the modal closes, the
+ * selection clears, and progress is tracked on the Send Queue page. Even a single
+ * recipient goes through a batch so every send shows up there.
+ */
+function SendEmailModal({
+  contacts,
+  onClose,
+  onSent,
+}: {
+  contacts: Contact[] | null;
+  onClose: () => void;
+  /** The send has been kicked off — clear the selection. */
+  onSent: () => void;
+}) {
+  const open = !!contacts && contacts.length > 0;
+  const count = contacts?.length ?? 0;
+  const only = count === 1 ? contacts?.[0] : undefined;
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={only ? `Send email to ${only.email}` : `Send email to ${count} contacts`}
+    >
+      {open ? (
+        <SendEmailBody
+          key={contacts!.map((c) => c.id).join(",")}
+          contacts={contacts!}
+          onClose={onClose}
+          onSent={onSent}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+function SendEmailBody({
+  contacts,
+  onClose,
+  onSent,
+}: {
+  contacts: Contact[];
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const toast = useToast();
+  const [templateId, setTemplateId] = useState("");
+  const [purgeAfter, setPurgeAfter] = useState(true);
+
+  const start = useMutation({
+    mutationFn: () =>
+      api<{ batchId: string }>("/api/contacts/send", {
+        method: "POST",
+        json: { templateId, contactIds: contacts.map((c) => c.id), purgeAfter },
+        notify: false,
+      }),
+    onSuccess: () => {
+      toast.success("Send started", [
+        "Track progress on the Send Queue page (Email tab).",
+        ...(purgeAfter ? ["These contacts will be deleted once the batch finishes."] : []),
+      ]);
+      onSent();
+      onClose();
+    },
+  });
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        start.mutate();
+      }}
+    >
+      <p className="mb-3 text-sm text-slate-550">
+        Sends the selected template to all <b>{contacts.length}</b> selected contact
+        {contacts.length === 1 ? "" : "s"}, one at a time with a random gap between each (Settings →
+        Bulk send pacing). Contacts that are unsubscribed, bounced or whose domain isn't on the
+        approved sending list are skipped. Once you start, this window closes — follow the batch on
+        the <b>Send Queue</b> page.
+      </p>
+      <TemplateSelect value={templateId} onChange={setTemplateId} disabled={start.isPending} />
+      <label className="mb-3 flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={purgeAfter}
+          disabled={start.isPending}
+          onChange={(e) => setPurgeAfter(e.target.checked)}
+        />
+        <span>
+          Remove these contacts after the batch finishes
+          <span className="block text-xs text-slate-550">
+            For lead-generation blasts — deletes all {contacts.length} recipient
+            {contacts.length === 1 ? "" : "s"} (and their email history) once every send is done.
+          </span>
+        </span>
+      </label>
+      {start.error && <ErrorNote error={start.error} />}
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className="btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary" disabled={start.isPending || !templateId}>
+          {start.isPending ? "Starting…" : `Start sending (${contacts.length})`}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -183,17 +578,27 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
   const [email, setEmail] = useState("");
   const [firstName, setFirst] = useState("");
   const [lastName, setLast] = useState("");
+  const [phone, setPhone] = useState("");
+  const [businessName, setBusiness] = useState("");
   const mut = useMutation({
     mutationFn: () =>
       api("/api/contacts", {
         method: "POST",
-        json: { email, firstName: firstName || undefined, lastName: lastName || undefined },
+        json: {
+          email,
+          firstName: firstName || undefined,
+          lastName: lastName || undefined,
+          phone: phone || undefined,
+          businessName: businessName || undefined,
+        },
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["contacts"] });
       setEmail("");
       setFirst("");
       setLast("");
+      setPhone("");
+      setBusiness("");
       onClose();
     },
   });
@@ -208,7 +613,7 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
       >
         <label className="label">Email</label>
         <input className="input mb-3" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <div className="mb-3 grid grid-cols-2 gap-3">
+        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="label">First name</label>
             <input className="input" value={firstName} onChange={(e) => setFirst(e.target.value)} />
@@ -218,16 +623,157 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
             <input className="input" value={lastName} onChange={(e) => setLast(e.target.value)} />
           </div>
         </div>
+        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">Phone number <span className="text-slate-550">(optional)</span></label>
+            <input
+              className="input"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              aria-invalid={!phoneOk(phone)}
+            />
+            {!phoneOk(phone) && (
+              <p className="mt-1 text-xs text-crit">Phone number must contain exactly 10 digits.</p>
+            )}
+          </div>
+          <div>
+            <label className="label">Business name <span className="text-slate-550">(optional)</span></label>
+            <input
+              className="input"
+              value={businessName}
+              onChange={(e) => setBusiness(e.target.value)}
+            />
+          </div>
+        </div>
         {mut.error && <ErrorNote error={mut.error} />}
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn-primary" disabled={mut.isPending}>
+          <button className="btn-primary" disabled={mut.isPending || !phoneOk(phone)}>
             Add
           </button>
         </div>
       </form>
     </Modal>
+  );
+}
+
+const CONTACT_STATUSES = ["ACTIVE", "UNSUBSCRIBED", "BOUNCED", "COMPLAINED"];
+
+function EditContactModal({ contact, onClose }: { contact: Contact | null; onClose: () => void }) {
+  return (
+    <Modal open={!!contact} onClose={onClose} title={`Edit ${contact?.email ?? "contact"}`}>
+      {contact ? <EditContactForm key={contact.id} contact={contact} onClose={onClose} /> : null}
+    </Modal>
+  );
+}
+
+function EditContactForm({ contact, onClose }: { contact: Contact; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({
+    email: contact.email,
+    firstName: contact.firstName ?? "",
+    lastName: contact.lastName ?? "",
+    phone: contact.phone ?? "",
+    businessName: contact.businessName ?? "",
+    status: contact.status,
+  });
+  const mut = useMutation({
+    mutationFn: () =>
+      api(`/api/contacts/${contact.id}`, {
+        method: "PUT",
+        json: {
+          email: form.email,
+          firstName: form.firstName || null,
+          lastName: form.lastName || null,
+          phone: form.phone || null,
+          businessName: form.businessName || null,
+          status: form.status,
+        },
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["contacts"] });
+      onClose();
+    },
+  });
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        mut.mutate();
+      }}
+    >
+      <label className="label">Email</label>
+      <input
+        className="input mb-3"
+        type="email"
+        value={form.email}
+        onChange={(e) => setForm({ ...form, email: e.target.value })}
+        required
+      />
+      <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">First name</label>
+          <input
+            className="input"
+            value={form.firstName}
+            onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className="label">Last name</label>
+          <input
+            className="input"
+            value={form.lastName}
+            onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+          />
+        </div>
+      </div>
+      <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">Phone number <span className="text-slate-550">(optional)</span></label>
+          <input
+            className="input"
+            type="tel"
+            value={form.phone}
+            onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            aria-invalid={!phoneOk(form.phone)}
+          />
+          {!phoneOk(form.phone) && (
+            <p className="mt-1 text-xs text-crit">Phone number must contain exactly 10 digits.</p>
+          )}
+        </div>
+        <div>
+          <label className="label">Business name <span className="text-slate-550">(optional)</span></label>
+          <input
+            className="input"
+            value={form.businessName}
+            onChange={(e) => setForm({ ...form, businessName: e.target.value })}
+          />
+        </div>
+      </div>
+      <label className="label">Status</label>
+      <select
+        className="input mb-3"
+        value={form.status}
+        onChange={(e) => setForm({ ...form, status: e.target.value })}
+      >
+        {CONTACT_STATUSES.map((s) => (
+          <option key={s}>{s}</option>
+        ))}
+      </select>
+      {mut.error && <ErrorNote error={mut.error} />}
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className="btn-ghost" onClick={onClose}>
+          Cancel
+        </button>
+        <button className="btn-primary" disabled={mut.isPending || !phoneOk(form.phone)}>
+          {mut.isPending ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </form>
   );
 }

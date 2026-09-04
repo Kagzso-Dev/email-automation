@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import {
-  type DeliveryEvent,
   type EmailProvider,
   type OutboundMessage,
   type SendResult,
@@ -32,13 +31,14 @@ export class MockProvider implements EmailProvider {
     })
       .map(([k, v]) => `${k}: ${v}`)
       .join("\n");
-    await writeFile(file, `${headerLines}\n\n<!-- text -->\n${msg.text}\n\n<!-- html -->\n${msg.html}\n`);
+    const attachmentBlock = (msg.attachments ?? [])
+      .map((a) => `\n\n<!-- attachment: ${a.filename} (${a.contentType}) -->\n${a.content}`)
+      .join("");
+    await writeFile(
+      file,
+      `${headerLines}\n\n<!-- text -->\n${msg.text}\n\n<!-- html -->\n${msg.html}${attachmentBlock}\n`,
+    );
     logger.info({ to: msg.to, subject: msg.subject, file, providerMessageId: id }, "mock email written");
     return { providerMessageId: id };
-  }
-
-  async parseWebhook(): Promise<DeliveryEvent[]> {
-    // No real callbacks; delivery events are simulated via the dev endpoint.
-    return [];
   }
 }

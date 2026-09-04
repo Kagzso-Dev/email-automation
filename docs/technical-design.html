@@ -926,6 +926,9 @@ class TransientSendError extends Error {}   // -> retry with backoff</code></pre
         <li>Every <code>&lt;a href&gt;</code> is rewritten to <code>/api/track/click/:logId?u=&lt;signed&gt;</code>.
           The original URL is HMAC-signed so the redirect cannot be turned into an open redirect.</li>
         <li>A tracking pixel <code>&lt;img src="/api/track/open/:logId.png"&gt;</code> is appended before <code>&lt;/body&gt;</code>.</li>
+        <li>Both the link rewriting and the pixel are gated on <code>EMAIL_TRACKING</code> (default on).
+          Set it to <code>false</code> to send clean, untracked mail for better primary-inbox placement,
+          trading away all open/click stats.</li>
         <li>Every message gets a <code>List-Unsubscribe</code> header and a visible unsubscribe link
           (<code>/api/unsubscribe/:token</code>) &mdash; template validation rejects a template that omits
           the <code>{{unsubscribe_url}}</code> variable.</li>

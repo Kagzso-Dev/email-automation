@@ -6,7 +6,7 @@ function startOfUtcDay(): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 }
 
-/** Emails actually sent since 00:00 UTC — the SES 24h sandbox window. */
+/** Emails actually sent since 00:00 UTC — checked against SEND_DAILY_CAP. */
 export async function todaysCount(): Promise<number> {
   return prisma.emailLog.count({ where: { sentAt: { gte: startOfUtcDay() } } });
 }

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
+import { useConfirm } from "../components/confirm";
 
 interface Trigger {
   id: string;
@@ -22,6 +23,7 @@ interface Template {
 
 export function TriggersPage() {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [show, setShow] = useState(false);
   const { data, isLoading, error } = useQuery({
     queryKey: ["triggers"],
@@ -57,24 +59,29 @@ export function TriggersPage() {
         <div className="flex flex-col gap-4">
           {data!.items.map((t) => (
             <div key={t.id} className="card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{t.name}</span>
                     <Badge tone={t.active ? "ok" : "neutral"}>{t.active ? "ACTIVE" : "OFF"}</Badge>
                   </div>
-                  <div className="mt-0.5 font-mono text-xs text-slate-550">
+                  <div className="mt-0.5 break-all font-mono text-xs text-slate-550">
                     event: {t.eventKey} · template: {t.template?.name}
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button className="btn-ghost" onClick={() => toggle.mutate(t)}>
                     {t.active ? "Disable" : "Enable"}
                   </button>
                   <button
                     className="btn-danger"
-                    onClick={() => {
-                      if (confirm(`Delete trigger "${t.name}"?`)) del.mutate(t.id);
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: `Delete trigger "${t.name}"?`,
+                        confirmText: "Delete",
+                        tone: "danger",
+                      });
+                      if (ok) del.mutate(t.id);
                     }}
                   >
                     Delete

@@ -13,6 +13,22 @@ export function onTokenChange(fn: (t: string | null) => void) {
   return () => listeners.delete(fn);
 }
 
+/**
+ * A UI layer (the toast provider) registers here so every successful mutating
+ * request — POST / PUT / PATCH / DELETE — can raise a "saved" notification
+ * without each call site wiring it up. Pass `notify: false` to opt a call out,
+ * or `notify: "…"` to override the headline.
+ */
+export interface MutationNotice {
+  method: string;
+  path: string;
+  message?: string;
+}
+let mutationNotifier: ((n: MutationNotice) => void) | null = null;
+export function setMutationNotifier(fn: ((n: MutationNotice) => void) | null) {
+  mutationNotifier = fn;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -44,9 +60,9 @@ async function tryRefresh(): Promise<boolean> {
 
 export async function api<T = unknown>(
   path: string,
-  opts: RequestInit & { json?: unknown; retry?: boolean } = {},
+  opts: RequestInit & { json?: unknown; retry?: boolean; notify?: boolean | string } = {},
 ): Promise<T> {
-  const { json, retry = true, ...init } = opts;
+  const { json, retry = true, notify, ...init } = opts;
   const headers = new Headers(init.headers);
   if (json !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -65,6 +81,21 @@ export async function api<T = unknown>(
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, body.error ?? res.statusText, body.details);
   }
+
+  const method = (init.method ?? "GET").toUpperCase();
+  if (
+    notify !== false &&
+    method !== "GET" &&
+    method !== "HEAD" &&
+    !path.includes("/auth/")
+  ) {
+    mutationNotifier?.({
+      method,
+      path,
+      message: typeof notify === "string" ? notify : undefined,
+    });
+  }
+
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") ?? "";
   return (ct.includes("application/json") ? res.json() : res.text()) as Promise<T>;

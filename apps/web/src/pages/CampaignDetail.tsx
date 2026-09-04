@@ -2,6 +2,8 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { Badge, campaignTone, ErrorNote, Spinner } from "../components/ui";
+import { describeCron, formatDateTime } from "../lib/schedule";
+import { AreaChart, ChartCard, Donut, Funnel, Legend, SERIES } from "../components/charts";
 
 interface Campaign {
   id: string;
@@ -16,6 +18,7 @@ interface Campaign {
 }
 interface Stats {
   counts: Record<string, number>;
+  series: { date: string; sent: number; opened: number; clicked: number }[];
   sent: number;
   openRate: number;
   clickRate: number;
@@ -63,19 +66,19 @@ export function CampaignDetailPage() {
       <Link to="/campaigns" className="text-sm text-accent-ink hover:underline">
         ← Campaigns
       </Link>
-      <div className="mb-6 mt-2 flex items-center justify-between">
-        <div>
+      <div className="mb-6 mt-2 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold">{c.name}</h1>
-          <div className="mt-1 flex items-center gap-2 text-sm text-slate-550">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-550">
             <Badge tone={campaignTone[c.status] ?? "neutral"}>{c.status}</Badge>
             <span>
               {c.scheduleType === "ONCE"
-                ? c.sendAt && new Date(c.sendAt).toLocaleString()
-                : c.cronExpression}
+                ? c.sendAt && formatDateTime(c.sendAt)
+                : describeCron(c.cronExpression)}
             </span>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {["SCHEDULED", "SENDING"].includes(c.status) && (
             <button className="btn-ghost" onClick={() => pause.mutate()} disabled={pause.isPending}>
               Pause
@@ -108,7 +111,7 @@ export function CampaignDetailPage() {
         <div className="card">
           <div className="label">Last run</div>
           <div className="font-medium">
-            {c.lastRunAt ? new Date(c.lastRunAt).toLocaleString() : "—"}
+            {c.lastRunAt ? formatDateTime(c.lastRunAt) : "—"}
           </div>
         </div>
       </div>
@@ -117,32 +120,85 @@ export function CampaignDetailPage() {
       {stats.isLoading ? (
         <Spinner />
       ) : stats.data ? (
-        <>
-          <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {[
-              ["Sent", stats.data.sent],
-              ["Open rate", `${stats.data.openRate}%`],
-              ["Click rate", `${stats.data.clickRate}%`],
-              ["Bounce rate", `${stats.data.bounceRate}%`],
-            ].map(([k, v]) => (
-              <div key={k as string} className="card">
-                <div className="label">{k}</div>
-                <div className="font-mono text-xl font-semibold tabular-nums">{v}</div>
-              </div>
-            ))}
-          </div>
-          <div className="card">
-            <div className="flex flex-wrap gap-x-8 gap-y-2 font-mono text-sm">
-              {Object.entries(stats.data.counts).map(([k, v]) => (
-                <div key={k}>
-                  <span className="text-slate-550">{k}</span>{" "}
-                  <span className="tabular-nums">{v}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
+        <CampaignStats stats={stats.data} />
       ) : null}
+    </div>
+  );
+}
+
+const SERIES_ITEMS = [
+  { key: "sent", label: "Sent", color: SERIES.sent },
+  { key: "opened", label: "Opened", color: SERIES.opened },
+  { key: "clicked", label: "Clicked", color: SERIES.clicked },
+];
+
+function CampaignStats({ stats }: { stats: Stats }) {
+  const c = stats.counts;
+  const reached =
+    (c.SENT ?? 0) + (c.DELIVERED ?? 0) + (c.OPENED ?? 0) + (c.CLICKED ?? 0) + (c.BOUNCED ?? 0) + (c.COMPLAINED ?? 0);
+  const delivered = (c.DELIVERED ?? 0) + (c.OPENED ?? 0) + (c.CLICKED ?? 0);
+  const opened = (c.OPENED ?? 0) + (c.CLICKED ?? 0);
+  const hasActivity = stats.series.some((p) => p.sent + p.opened + p.clicked > 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {[
+          ["Sent", stats.sent.toLocaleString()],
+          ["Open rate", `${stats.openRate}%`],
+          ["Click rate", `${stats.clickRate}%`],
+          ["Bounce rate", `${stats.bounceRate}%`],
+        ].map(([k, v]) => (
+          <div key={k} className="card">
+            <div className="label">{k}</div>
+            <div className="metric-value mt-1">{v}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ChartCard title="Last 14 days" subtitle="Daily send, open and click events">
+          {hasActivity ? (
+            <>
+              <AreaChart data={stats.series} series={SERIES_ITEMS} height={200} />
+              <div className="mt-3">
+                <Legend items={SERIES_ITEMS} />
+              </div>
+            </>
+          ) : (
+            <div className="grid h-[200px] place-items-center text-sm text-slate-550">
+              No activity in the last 14 days.
+            </div>
+          )}
+        </ChartCard>
+
+        <ChartCard title="Conversion funnel" subtitle="How far this campaign's messages got">
+          <Funnel
+            stages={[
+              { label: "Reached provider", value: reached, color: "#9ec5f4" },
+              { label: "Delivered", value: delivered, color: SERIES.sent },
+              { label: "Opened", value: opened, color: SERIES.opened },
+              { label: "Clicked", value: c.CLICKED ?? 0, color: SERIES.clicked },
+            ]}
+          />
+        </ChartCard>
+      </div>
+
+      <ChartCard title="Status breakdown" subtitle="Every message in this campaign">
+        <Donut
+          centerLabel="messages"
+          centerValue={Object.values(c).reduce((a, b) => a + b, 0).toLocaleString()}
+          segments={[
+            { label: "Delivered", value: c.DELIVERED ?? 0, color: SERIES.clicked },
+            { label: "Opened", value: c.OPENED ?? 0, color: SERIES.opened },
+            { label: "Clicked", value: c.CLICKED ?? 0, color: SERIES.sent },
+            { label: "Sent", value: c.SENT ?? 0, color: "#9ec5f4" },
+            { label: "Queued", value: c.QUEUED ?? 0, color: "#c9ccd6" },
+            { label: "Bounced", value: c.BOUNCED ?? 0, color: "#d03b3b" },
+            { label: "Failed", value: c.FAILED ?? 0, color: "#8b93a3" },
+          ].filter((s) => s.value > 0)}
+        />
+      </ChartCard>
     </div>
   );
 }

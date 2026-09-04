@@ -29,7 +29,8 @@ model User {
 model ApiKey {
   id        String    @id @default(cuid())
   name      String
-  keyHash   String    @unique // sha-256 of the raw key; raw value shown once at creation
+  keyHash   String    @unique // sha-256 of the raw key, used for auth lookups
+  rawKey    String?   @db.Text // full raw key, stored so admins can reveal/copy it later; null for keys created before this was added
   prefix    String // first 10 chars of the raw key, for display
   lastUsed  DateTime?
   createdAt DateTime  @default(now())
@@ -49,6 +50,8 @@ model Contact {
   email        String           @unique
   firstName    String?
   lastName     String?
+  phone        String?
+  businessName String?
   customFields Json
   status       ContactStatus    @default(ACTIVE)
   createdAt    DateTime         @default(now())
@@ -56,6 +59,15 @@ model Contact {
   memberships  ListMembership[]
   emailLogs    EmailLog[]
   unsubscribe  Unsubscribe?
+}
+
+// Approved recipient domains. When the table is empty there is no restriction;
+// when it has rows, a contact may only be emailed if its address domain matches
+// one. Enforced at import time and again at send time (see domain/allowedDomains).
+model AllowedDomain {
+  id        String   @id @default(cuid())
+  domain    String   @unique // bare, lowercased, no leading '@' — e.g. "gmail.com"
+  createdAt DateTime @default(now())
 }
 
 model List {
@@ -81,17 +93,38 @@ model ListMembership {
 
 // ---------------------------------------------------------------- content
 
+enum TemplateKind {
+  LETTER
+  MEETING
+}
+
 model Template {
-  id        String     @id @default(cuid())
+  id        String       @id @default(cuid())
   name      String
-  subject   String     @db.VarChar(300)
-  htmlBody  String     @db.LongText // stored raw; sanitised at render time
-  textBody  String?    @db.Text
+  kind      TemplateKind @default(LETTER)
+  subject   String       @db.VarChar(300)
+  bodyText  String?      @db.LongText // the message as a plain letter (paragraphs + {{vars}})
+  signature String?      @db.Text // closing / regards block, appended after the body
+  htmlBody  String       @db.LongText // render-ready HTML, derived from bodyText; sanitised at render time
+  textBody  String?      @db.Text
+  // Call-to-action links rendered as a button panel after the body:
+  // [{ label, url }]. `url` may contain {{variables}}.
+  links     Json?
+  // Structured meeting details, rendered as a card with calendar links when
+  // kind = MEETING: { title?, location?, joinUrl?, startAt?, endAt?, timezone?,
+  // description? }. Date fields accept an ISO 8601 string or a {{variable}}.
+  meeting   Json?
+  // Optional image URL embedded in the body ({{image}} placeholder or top of body).
+  imageUrl  String?      @db.VarChar(2000)
+  // Optional video link, rendered as a "▶ Watch video" button ({{video_link}}
+  // placeholder or after the body).
+  videoUrl  String?      @db.VarChar(2000)
   variables Json // declared variable names for the editor helper
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
   campaigns Campaign[]
   triggers  Trigger[]
+  manualBatches ManualSendBatch[]
 }
 
 // ---------------------------------------------------------------- scheduled sends
@@ -192,6 +225,176 @@ model Unsubscribe {
   token     String   @unique // opaque token embedded in the unsubscribe link
   createdAt DateTime @default(now())
   contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------- key-value settings
+
+// Small operator-tunable settings that would otherwise be hardcoded or env-only.
+// One row per setting; `value` is JSON so a setting can hold a small object.
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------- manual drip sends
+
+enum ManualBatchStatus {
+  RUNNING
+  DONE
+  CANCELLED
+}
+
+enum ManualBatchItemStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+// A "send this template to N selected contacts, one at a time with a random gap"
+// job kicked off from the Contacts page. The orchestrator job in the
+// `manual-bulk-send` queue walks the items one per iteration (see
+// queue/manualBulkSend.ts). Delays are snapshotted at creation so a mid-flight
+// Settings change never alters a running batch.
+model ManualSendBatch {
+  id          String                @id @default(cuid())
+  templateId  String
+  minDelaySec Int
+  maxDelaySec Int
+  status      ManualBatchStatus     @default(RUNNING)
+  total       Int
+  nextItemAt  DateTime? // when the next send is scheduled — drives the "next in Ns" countdown
+  retryOfId   String? // set when this batch is a "retry failed" of an earlier one
+  // Lead-generation flow: when true, every contact this batch targeted is
+  // deleted once the batch finishes (see queue/manualBulkSend finish()).
+  purgeAfter  Boolean               @default(false)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  template    Template              @relation(fields: [templateId], references: [id])
+  items       ManualSendBatchItem[]
+
+  @@index([status])
+}
+
+model ManualSendBatchItem {
+  id        String                @id @default(cuid())
+  batchId   String
+  contactId String
+  email     String // snapshot, so the row still reads if the contact is later deleted
+  name      String? // snapshot "First Last", so the Send Queue detail still reads after a purge
+  status    ManualBatchItemStatus @default(PENDING)
+  error     String?               @db.Text
+  sentAt    DateTime?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
+  batch     ManualSendBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, status])
+}
+
+// ---------------------------------------------------------------- whatsapp (isolated from email)
+// A parallel, self-contained WhatsApp capability. It shares nothing with the
+// email models above — its own contacts, templates, batches and ledger — so
+// changes here cannot affect email Contacts / Templates / Campaigns / sending.
+// See docs + apps/api/src/{config,services}/whatsapp.ts.
+
+enum WhatsAppContactStatus {
+  ACTIVE
+  UNSUBSCRIBED
+  BLOCKED
+}
+
+model WhatsAppContact {
+  id           String                @id @default(cuid())
+  phone        String                @unique // E.164 digits, no '+' or punctuation
+  firstName    String?
+  lastName     String?
+  businessName String?
+  status       WhatsAppContactStatus @default(ACTIVE)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  sends        WhatsAppSend[]
+
+  @@map("whatsapp_contacts")
+}
+
+model WhatsAppTemplate {
+  id           String              @id @default(cuid())
+  name         String
+  contentSid   String              // Twilio Content SID (HX…), created in the Twilio console
+  body         String              @db.Text // preview text with {{first_name}} etc.
+  variables    Json                // ordered string[] → Twilio positional {{1}}, {{2}}
+  buttonLabels Json                // string[] e.g. ["Interested", "Not Interested"]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  batches      WhatsAppSendBatch[]
+
+  @@map("whatsapp_templates")
+}
+
+enum WhatsAppBatchStatus {
+  RUNNING
+  DONE
+  CANCELLED
+}
+
+// A "send this template to N selected recipients, one at a time with a random
+// gap" job. Mirrors ManualSendBatch but for WhatsApp; walked by the
+// `whatsapp-bulk-send` queue worker (see queue/whatsappBulkSend.ts).
+model WhatsAppSendBatch {
+  id          String              @id @default(cuid())
+  templateId  String
+  minDelaySec Int
+  maxDelaySec Int
+  status      WhatsAppBatchStatus @default(RUNNING)
+  total       Int
+  nextItemAt  DateTime? // when the next send is scheduled — drives the "next in Ns" countdown
+  // Lead-generation flow: when true, every recipient this batch targeted is
+  // deleted once the batch finishes (see queue/whatsappBulkSend finish()).
+  purgeAfter  Boolean             @default(false)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  template    WhatsAppTemplate    @relation(fields: [templateId], references: [id])
+  items       WhatsAppSend[]
+
+  @@index([status])
+  @@map("whatsapp_send_batches")
+}
+
+enum WhatsAppSendStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  FAILED
+  SKIPPED
+}
+
+// One WhatsApp message. Also the send ledger (phone/name/business/status/times).
+model WhatsAppSend {
+  id                String             @id @default(cuid())
+  batchId           String?
+  whatsappContactId String?
+  templateId        String?
+  phone             String // snapshot, survives contact deletion
+  name              String? // snapshot "First Last"
+  businessName      String? // snapshot
+  body              String             @db.Text // rendered preview snapshot
+  contentVariables  Json? // resolved Twilio positional vars, snapshotted at batch creation
+  status            WhatsAppSendStatus @default(QUEUED)
+  providerMessageId String?
+  error             String?            @db.Text
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  batch             WhatsAppSendBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  contact           WhatsAppContact?   @relation(fields: [whatsappContactId], references: [id], onDelete: SetNull)
+
+  @@index([batchId, status])
+  @@map("whatsapp_sends")
 }
 
 // ---------------------------------------------------------------- job queue (MySQL-backed)

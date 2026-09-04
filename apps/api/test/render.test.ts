@@ -55,9 +55,149 @@ describe("render", () => {
     expect(real.html).toContain("/api/track/open/log_1.png");
   });
 
+  it("skips link rewriting and the pixel when tracking is disabled", () => {
+    const out = render({ ...base, emailLogId: "log_1", tracking: false });
+    expect(out.html).toContain("https://example.com/a");
+    expect(out.html).not.toContain("/api/track/click/");
+    expect(out.html).not.toContain("/api/track/open/");
+  });
+
   it("appends an unsubscribe footer when a url is supplied", () => {
     const out = render({ ...base, unsubscribeUrl: "https://x/u/abc" });
     expect(out.html).toContain("https://x/u/abc");
     expect(out.text).toContain("Unsubscribe: https://x/u/abc");
+  });
+
+  it("omits the compliance footer when includeComplianceFooter is false", () => {
+    const out = render({
+      ...base,
+      unsubscribeUrl: "https://x/u/abc",
+      includeComplianceFooter: false,
+    });
+    expect(out.html).not.toContain("https://x/u/abc");
+    expect(out.html).not.toContain("Unsubscribe");
+    expect(out.text).not.toContain("Unsubscribe");
+  });
+
+  it("renders the link panel with variable-substituted URLs", () => {
+    const out = render({
+      ...base,
+      declaredVariables: ["first_name", "portal"],
+      vars: { first_name: "Ada", portal: "https://portal.example.com/ada" },
+      links: [{ label: "Open your portal", url: "{{portal}}" }],
+    });
+    expect(out.html).toContain('href="https://portal.example.com/ada"');
+    expect(out.html).toContain("Open your portal");
+    expect(out.text).toContain("Open your portal: https://portal.example.com/ada");
+  });
+
+  it("renders a meeting card and an invite.ics attachment for MEETING templates", () => {
+    const out = render({
+      ...base,
+      kind: "MEETING",
+      meeting: {
+        title: "Kickoff call",
+        startAt: "2026-09-15T14:00:00Z",
+        joinUrl: "https://meet.example.com/xyz",
+      },
+    });
+    expect(out.html).toContain("Kickoff call");
+    expect(out.html).toContain("calendar.google.com/calendar/render");
+    expect(out.html).toContain("Join the meeting");
+    const ics = out.attachments?.find((a) => a.filename === "invite.ics");
+    expect(ics).toBeTruthy();
+    expect(ics!.content).toContain("BEGIN:VEVENT");
+    expect(ics!.content).toContain("DTSTART:20260915T140000Z");
+    expect(ics!.content).toContain("SUMMARY:Kickoff call");
+  });
+
+  it("substitutes variables in meeting fields, resolved per recipient", () => {
+    const out = render({
+      ...base,
+      kind: "MEETING",
+      declaredVariables: ["first_name", "slot"],
+      vars: { first_name: "Ada", slot: "2026-10-01T09:30:00Z" },
+      meeting: { title: "1:1 with {{first_name}}", startAt: "{{slot}}" },
+    });
+    expect(out.html).toContain("1:1 with Ada");
+    const ics = out.attachments?.find((a) => a.filename === "invite.ics");
+    expect(ics!.content).toContain("DTSTART:20261001T093000Z");
+  });
+
+  it("embeds the image at the top of the body by default", () => {
+    const out = render({ ...base, imageUrl: "https://cdn.example.com/hero.jpg" });
+    expect(out.html).toContain('<img src="https://cdn.example.com/hero.jpg"');
+    // before the body paragraph
+    expect(out.html.indexOf("hero.jpg")).toBeLessThan(out.html.indexOf("Hi Ada"));
+    expect(out.text).toContain("Image: https://cdn.example.com/hero.jpg");
+  });
+
+  it("places the image at a {{image}} placeholder when the body has one", () => {
+    const out = render({
+      ...base,
+      htmlBody: "<p>intro</p><p>{{image}}</p><p>outro</p>",
+      imageUrl: "https://cdn.example.com/mid.png",
+    });
+    expect(out.html.indexOf("intro")).toBeLessThan(out.html.indexOf("mid.png"));
+    expect(out.html.indexOf("mid.png")).toBeLessThan(out.html.indexOf("outro"));
+    // not also prepended
+    expect(out.html.match(/mid\.png/g)).toHaveLength(1);
+  });
+
+  it("drops a {{image}} placeholder when no image URL is set", () => {
+    const out = render({ ...base, htmlBody: "<p>a{{image}}b</p>" });
+    expect(out.html).toContain("ab");
+    expect(out.html).not.toContain("{{image}}");
+  });
+
+  it("renders the video link as a button after the body by default", () => {
+    const out = render({ ...base, videoUrl: "https://youtu.be/abc123" });
+    expect(out.html).toContain('href="https://youtu.be/abc123"');
+    expect(out.html).toContain("Watch video");
+    expect(out.html.indexOf("Hi Ada")).toBeLessThan(out.html.indexOf("Watch video"));
+    expect(out.text).toContain("Watch video: https://youtu.be/abc123");
+  });
+
+  it("places the video button at a {{video_link}} placeholder when present", () => {
+    const out = render({
+      ...base,
+      htmlBody: "<p>watch this: {{video_link}}</p><p>thanks</p>",
+      videoUrl: "https://vimeo.com/999",
+    });
+    expect(out.html.indexOf("watch this")).toBeLessThan(out.html.indexOf("Watch video"));
+    expect(out.html.indexOf("Watch video")).toBeLessThan(out.html.indexOf("thanks"));
+  });
+
+  it("ignores an image/video URL with a disallowed scheme", () => {
+    const out = render({
+      ...base,
+      imageUrl: "javascript:alert(1)",
+      videoUrl: "javascript:alert(2)",
+    });
+    expect(out.html).not.toContain("javascript:");
+    expect(out.html).not.toContain("<img");
+    expect(out.html).not.toContain("Watch video");
+  });
+
+  it("leaves the body untouched when no image or video is set", () => {
+    const out = render(base);
+    expect(out.html).not.toContain("<img");
+    expect(out.html).not.toContain("Watch video");
+  });
+
+  it("skips the meeting card for LETTER templates even if meeting data is present", () => {
+    const out = render({ ...base, kind: "LETTER", meeting: { title: "Hidden", startAt: "2026-09-15T14:00:00Z" } });
+    expect(out.html).not.toContain("Hidden");
+    expect(out.attachments).toBeUndefined();
+  });
+
+  it("renders the meeting card without an attachment when the start time can't be parsed", () => {
+    const out = render({
+      ...base,
+      kind: "MEETING",
+      meeting: { title: "TBD sync", startAt: "next tuesday" },
+    });
+    expect(out.html).toContain("TBD sync");
+    expect(out.attachments).toBeUndefined();
   });
 });

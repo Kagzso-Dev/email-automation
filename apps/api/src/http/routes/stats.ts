@@ -1,7 +1,13 @@
 import { Router } from "express";
 import { idParam } from "@dispatch/shared";
 import { authRequired } from "../middleware/auth.js";
-import { campaignStats, dashboardOverview, triggerStats } from "../../domain/stats.service.js";
+import {
+  campaignStats,
+  dashboardInsights,
+  dashboardOverview,
+  dashboardTimeseries,
+  triggerStats,
+} from "../../domain/stats.service.js";
 import { todaysCount } from "../../queue/dailyCap.js";
 import { env } from "../../env.js";
 import { wrap } from "../errors.js";
@@ -30,5 +36,19 @@ statsRouter.get(
   wrap(async (_req, res) => {
     const [overview, sentInWindow] = await Promise.all([dashboardOverview(), todaysCount()]);
     res.json({ ...overview, dailyCap: { used: sentInWindow, limit: env.SEND_DAILY_CAP } });
+  }),
+);
+
+statsRouter.get(
+  "/dashboard/timeseries",
+  wrap(async (req, res) => {
+    res.json(await dashboardTimeseries(Number(req.query.days)));
+  }),
+);
+
+statsRouter.get(
+  "/dashboard/insights",
+  wrap(async (_req, res) => {
+    res.json(await dashboardInsights());
   }),
 );

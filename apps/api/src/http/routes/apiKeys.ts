@@ -3,7 +3,7 @@ import { createApiKeyInput, idParam } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { createApiKey } from "../../domain/apiKeys.service.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
-import { wrap } from "../errors.js";
+import { notFound, wrap } from "../errors.js";
 
 export const apiKeysRouter = Router();
 apiKeysRouter.use(authRequired, requireRole("ADMIN"));
@@ -20,11 +20,21 @@ apiKeysRouter.get(
   }),
 );
 
+apiKeysRouter.get(
+  "/:id/reveal",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const key = await prisma.apiKey.findUnique({ where: { id }, select: { rawKey: true } });
+    if (!key) throw notFound("API key");
+    if (!key.rawKey) throw notFound("Stored key value (created before key storage was enabled)");
+    res.json({ key: key.rawKey });
+  }),
+);
+
 apiKeysRouter.post(
   "/",
   wrap(async (req, res) => {
     const { name } = createApiKeyInput.parse(req.body);
-    // `key` (the raw value) is present in this response only, never again.
     res.status(201).json(await createApiKey(name));
   }),
 );

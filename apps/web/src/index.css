@@ -4,34 +4,167 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    /* Never let a stray wide child force the whole page to scroll sideways on
+       small screens. Vertical sticky positioning is unaffected. */
+    @apply overflow-x-hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
-    @apply bg-[#f6f7f9] text-ink font-sans antialiased;
+    @apply bg-surface-sunken text-ink font-sans antialiased;
+  }
+
+  /* Media and embeds shrink to their container instead of overflowing it. */
+  img,
+  svg,
+  video,
+  canvas,
+  iframe {
+    max-width: 100%;
+  }
+
+  /* Consistent, visible keyboard focus for every interactive element. Mouse
+     clicks stay clean thanks to :focus-visible. */
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  [tabindex] {
+    @apply outline-none;
+  }
+  a:focus-visible,
+  button:focus-visible,
+  [tabindex]:focus-visible {
+    @apply rounded-[6px] ring-2 ring-accent ring-offset-2 ring-offset-surface-sunken;
   }
 }
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-3.5 py-2 text-sm font-medium transition disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-3.5 py-2 text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none;
   }
   .btn-primary {
     @apply btn bg-accent text-white hover:bg-accent-ink;
   }
   .btn-ghost {
-    @apply btn border-[#d5d9e2] bg-white text-ink hover:bg-[#f0f2f6];
+    @apply btn border-line-strong bg-surface text-ink hover:bg-surface-muted;
   }
   .btn-danger {
-    @apply btn border-[#e6c3bf] bg-white text-crit hover:bg-[#faece9];
+    @apply btn border-[#e6c3bf] bg-surface text-crit hover:bg-[#faece9];
+  }
+  /* WhatsApp bulk-send action — brand green, distinct from the email buttons. */
+  .btn-whatsapp {
+    @apply btn bg-[#25d366] text-white hover:bg-[#1da851];
   }
   .input {
-    @apply w-full rounded-lg border border-[#d5d9e2] bg-white px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent-soft;
+    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent-soft;
   }
   .label {
     @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-550;
   }
   .card {
-    @apply rounded-xl border border-[#e3e6ec] bg-white p-5 shadow-[0_1px_2px_rgba(20,23,30,0.04),0_10px_30px_rgba(20,23,30,0.05)];
+    @apply rounded-xl border border-line bg-surface p-5 shadow-card;
+  }
+  .card-hover {
+    @apply transition-shadow duration-200 hover:shadow-pop;
   }
   .field-error {
     @apply mt-1 text-xs text-crit;
+  }
+
+  /* Typography scale — use these for a consistent hierarchy across pages. */
+  .page-title {
+    @apply text-xl font-semibold tracking-tight text-ink sm:text-[1.35rem];
+  }
+  .page-subtitle {
+    @apply mt-1 text-sm text-slate-550;
+  }
+  .metric-value {
+    @apply font-mono text-2xl font-semibold tabular-nums text-ink;
+  }
+  .metric-value-empty {
+    @apply font-mono text-2xl font-semibold tabular-nums text-slate-400;
+  }
+
+  /* Sidebar nav item — shared by expanded + collapsed rail states. */
+  .nav-link {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-550 transition-colors duration-150 hover:bg-surface-muted hover:text-ink;
+  }
+  .nav-link-active {
+    @apply bg-accent-soft text-accent-ink hover:bg-accent-soft hover:text-accent-ink;
+  }
+
+  /* --- chart entrance animations (see components/charts.tsx) --- */
+  .line-draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw-line 0.9s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  }
+  .spark-draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw-line 0.7s ease-out forwards;
+  }
+  .area-fade {
+    opacity: 0;
+    animation: fade-in 0.6s ease-out 0.35s forwards;
+  }
+  .donut-arc {
+    opacity: 0;
+    animation: fade-in 0.5s ease-out forwards;
+  }
+  .fade-rise {
+    animation: fade-rise 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  /* Loading skeleton block. */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-line-subtle;
+  }
+  .skeleton::after {
+    content: "";
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/60 to-transparent;
+  }
+}
+
+@keyframes draw-line {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes fade-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* Countdown bar under an auto-dismissing toast (duration set inline). */
+@keyframes toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

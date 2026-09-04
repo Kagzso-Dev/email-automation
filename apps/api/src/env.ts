@@ -15,6 +15,10 @@ const schema = z.object({
   PUBLIC_API_URL: z.string().url().default("http://localhost:4000"),
   WEB_ORIGIN: z.string().default("http://localhost:5173"),
 
+  // Where uploaded assets (template images) are written. Served read-only at
+  // `${PUBLIC_API_URL}/uploads`. Relative paths resolve from the API's CWD.
+  UPLOADS_DIR: z.string().default(".uploads"),
+
   JWT_ACCESS_SECRET: z.string().min(8),
   JWT_REFRESH_SECRET: z.string().min(8),
   JWT_ACCESS_TTL: z.coerce.number().default(900),
@@ -29,20 +33,32 @@ const schema = z.object({
   DB_USER: z.string().default("root"),
   DB_PASSWORD: z.string().default(""),
 
-  EMAIL_PROVIDER: z.enum(["mock", "ses", "smtp"]).default("mock"),
+  // mock = write each message to ./.mail-outbox; smtp = send via SMTP_* below.
+  EMAIL_PROVIDER: z.enum(["mock", "smtp"]).default("mock"),
   EMAIL_FROM: z.string().default("Dispatch <no-reply@example.com>"),
   EMAIL_SENDER_ADDRESS: z.string().default("123 Example St, Example City, EX 00000"),
+  // Open pixel + click-redirect rewriting on outbound mail. Set to false to send
+  // clean, untracked mail: much better odds of landing in the primary inbox
+  // (Gmail reads the pixel + redirect domain as bulk-marketing), at the cost of
+  // all open/click stats. Applies to every send — campaigns, triggers, manual.
+  EMAIL_TRACKING: z
+    .string()
+    .default("true")
+    .transform((v) => v !== "false" && v !== "0"),
+  // Throttle + safety cap on outbound sends — keep these under your SMTP
+  // provider's own limits (e.g. Gmail ~500/day free, ~2000 for Workspace).
   SEND_RATE_PER_SEC: z.coerce.number().default(1),
   SEND_DAILY_CAP: z.coerce.number().default(200),
   SEND_MAX_ATTEMPTS: z.coerce.number().default(5),
   SEND_BACKOFF_MS: z.coerce.number().default(30_000),
+  // Default gap between the individual sends of a manual bulk ("drip") send from
+  // the Contacts page — a random value in [min, max] seconds is waited before
+  // each contact so the batch doesn't look like a burst. Overridable per-deploy
+  // in Settings (stored in the Setting table); these are just the seed values.
+  BULK_SEND_MIN_DELAY_SEC: z.coerce.number().int().min(1).max(3600).default(8),
+  BULK_SEND_MAX_DELAY_SEC: z.coerce.number().int().min(1).max(3600).default(25),
   SCHEDULER_TIMEZONE: z.string().default("UTC"),
   MOCK_FAIL_RATE: z.coerce.number().min(0).max(1).default(0),
-
-  AWS_REGION: z.string().default("us-east-1"),
-  AWS_ACCESS_KEY_ID: z.string().optional(),
-  AWS_SECRET_ACCESS_KEY: z.string().optional(),
-  SES_CONFIGURATION_SET: z.string().optional(),
 
   // Only needed when EMAIL_PROVIDER=smtp.
   SMTP_HOST: z.string().optional(),

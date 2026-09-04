@@ -2,7 +2,6 @@ import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import {
-  type DeliveryEvent,
   type EmailProvider,
   type OutboundMessage,
   PermanentSendError,
@@ -44,12 +43,35 @@ export class SmtpProvider implements EmailProvider {
         html: msg.html,
         text: msg.text,
         headers: msg.headers,
+        attachments: msg.attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+          contentType: a.contentType,
+          ...(a.encoding ? { encoding: a.encoding } : {}),
+          ...(a.cid ? { cid: a.cid, contentDisposition: "inline" as const } : {}),
+        })),
       });
+      logger.info(
+        {
+          to: msg.to,
+          subject: msg.subject,
+          from: msg.from,
+          providerMessageId: info.messageId ?? "",
+          response: info.response,
+          accepted: info.accepted,
+          rejected: info.rejected,
+        },
+        "smtp email sent",
+      );
       return { providerMessageId: info.messageId ?? "" };
     } catch (err) {
       const e = err as { code?: string; responseCode?: number; message?: string };
       const code = e.code ?? "";
       const smtpCode = e.responseCode ?? 0;
+      logger.error(
+        { to: msg.to, subject: msg.subject, code: code || undefined, responseCode: smtpCode || undefined, err: e.message },
+        "smtp send failed",
+      );
 
       if (PERMANENT_ERROR_CODES.has(code) || (smtpCode >= 500 && smtpCode < 600)) {
         throw new PermanentSendError(`SMTP rejected (${code || smtpCode}): ${e.message ?? "send failed"}`);
@@ -60,10 +82,5 @@ export class SmtpProvider implements EmailProvider {
       // Unknown — retry rather than lose the message.
       throw new TransientSendError(`SMTP error: ${e.message ?? String(err)}`);
     }
-  }
-
-  /** SMTP has no asynchronous delivery callbacks. */
-  async parseWebhook(): Promise<DeliveryEvent[]> {
-    return [];
   }
 }

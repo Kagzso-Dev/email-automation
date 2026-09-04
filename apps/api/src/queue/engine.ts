@@ -4,9 +4,9 @@ import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 
 /**
- * A small MySQL-backed job queue. Sized for this workload (SES sandbox: a few
- * hundred emails a day, 1/sec) — no Redis, no external broker. One row per job;
- * workers poll, claim with a conditional UPDATE, and process.
+ * A small MySQL-backed job queue. Sized for this workload (a few hundred to a
+ * few thousand emails a day, ~1/sec) — no Redis, no external broker. One row
+ * per job; workers poll, claim with a conditional UPDATE, and process.
  */
 
 export interface EnqueueOptions {

@@ -10,9 +10,8 @@ export function sha256(input: string): string {
 export async function createApiKey(name: string) {
   const raw = PREFIX + randomBytes(24).toString("hex");
   const key = await prisma.apiKey.create({
-    data: { name, keyHash: sha256(raw), prefix: raw.slice(0, 10) },
+    data: { name, keyHash: sha256(raw), rawKey: raw, prefix: raw.slice(0, 10) },
   });
-  // Raw value is returned exactly once and never stored.
   return { id: key.id, name: key.name, prefix: key.prefix, createdAt: key.createdAt, key: raw };
 }
 

@@ -53,14 +53,24 @@ async function main() {
   });
   console.log(`✓ admin user: ${admin.email} (${admin.role})`);
 
+  // Sample content (demo list, template, contacts, trigger) is only inserted
+  // when SEED_SAMPLE_DATA=true. Production instances seed the admin only.
+  if (process.env.SEED_SAMPLE_DATA !== "true") {
+    console.log("✓ seed complete (admin only — set SEED_SAMPLE_DATA=true for demo content)");
+    return;
+  }
+
   const template = await prisma.template.upsert({
     where: { id: "seed-welcome" },
     create: {
       id: "seed-welcome",
       name: "Welcome email",
       subject: "Welcome, {{first_name}}",
+      bodyText:
+        "Hi {{first_name}},\n\nThanks for joining. Visit https://example.com/start to get started.",
+      signature: "Best regards,\nThe Team",
       htmlBody:
-        "<h1>Welcome, {{first_name}}!</h1><p>Thanks for joining. <a href=\"https://example.com/start\">Get started</a>.</p>",
+        "<p>Hi {{first_name}},</p>\n<p>Thanks for joining. Visit https://example.com/start to get started.</p>\n<div style=\"margin-top:24px\"><p>Best regards,<br>\nThe Team</p></div>",
       textBody: "Welcome, {{first_name}}! Thanks for joining. https://example.com/start",
       variables: ["first_name"],
     },

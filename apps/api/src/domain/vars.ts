@@ -9,6 +9,9 @@ export function buildVars(contact: Contact, payload?: Record<string, unknown>): 
     first_name: contact.firstName ?? "",
     last_name: contact.lastName ?? "",
     full_name: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+    phone: contact.phone ?? "",
+    business_name: contact.businessName ?? "",
+    status: contact.status,
   };
   for (const [k, v] of Object.entries(custom)) {
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") vars[k] = v;

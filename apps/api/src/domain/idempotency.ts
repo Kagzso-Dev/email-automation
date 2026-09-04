@@ -22,6 +22,16 @@ export function queueJobId(idempotencyKey: string): string {
   return idempotencyKey.replace(/:/g, "_");
 }
 
+/**
+ * Manual one-off send from the UI. The occurrence is a wall-clock stamp so each
+ * click is its own send (an operator re-sending on purpose is expected), while a
+ * double-submit within the same second still dedupes.
+ */
+export function manualKey(templateId: string, contactId: string): string {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[^0-9]/g, "");
+  return `manual:${templateId}:${contactId}:${stamp}`;
+}
+
 export function triggerKey(
   triggerId: string,
   contactId: string,

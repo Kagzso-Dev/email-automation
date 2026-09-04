@@ -3,9 +3,11 @@ import { env } from "../env.js";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { getProvider, PermanentSendError } from "../provider/index.js";
-import { render, RenderError } from "../render/render.js";
+import { render, RenderError, type RenderInput } from "../render/render.js";
+import { inlineLocalImages } from "../render/inlineImages.js";
 import { unsubscribeUrl } from "../render/unsubscribe.js";
 import { isSuppressed } from "./suppression.js";
+import { isEmailDomainAllowed } from "./allowedDomains.js";
 import { buildVars } from "./vars.js";
 import type { SendEmailJob } from "../queue/queues.js";
 
@@ -27,6 +29,11 @@ async function resolveTemplate(source: SendEmailJob["source"]): Promise<{
     });
     if (!campaign) throw new PermanentSendError(`Campaign ${source.campaignId} gone`);
     return { template: campaign.template, campaignId: campaign.id, triggerId: null, payload: {} };
+  }
+  if (source.type === "manual") {
+    const template = await prisma.template.findUnique({ where: { id: source.templateId } });
+    if (!template) throw new PermanentSendError(`Template ${source.templateId} gone`);
+    return { template, campaignId: null, triggerId: null, payload: {} };
   }
   const trigger = await prisma.trigger.findUnique({
     where: { id: source.triggerId },
@@ -71,6 +78,22 @@ export async function deliverEmail(job: SendEmailJob): Promise<DeliveryOutcome> 
     return { result: "skipped", emailLogId: log.id, reason: "suppressed" };
   }
 
+  // Approved-domain allowlist — a backstop to the import-time filter. When no
+  // domains are configured this is a no-op (see domain/allowedDomains).
+  if (!(await isEmailDomainAllowed(contact.email))) {
+    await prisma.emailLog.update({
+      where: { id: log.id },
+      data: { status: "FAILED", errorMessage: "domain not approved" },
+    });
+    logger.info({ emailLogId: log.id, contactId, to: contact.email }, "send skipped: domain not approved");
+    return { result: "skipped", emailLogId: log.id, reason: "domain not approved" };
+  }
+
+  // Only bulk marketing (campaigns) carries the CAN-SPAM footer + List-Unsubscribe
+  // headers. Transactional/personal sends (trigger, manual) go out clean so Gmail
+  // is less likely to file them under Promotions.
+  const isBulkCampaign = source.type === "campaign";
+
   const declared = Array.isArray(template.variables) ? (template.variables as string[]) : [];
   let rendered;
   try {
@@ -82,6 +105,12 @@ export async function deliverEmail(job: SendEmailJob): Promise<DeliveryOutcome> 
       vars: buildVars(contact, payload),
       emailLogId: log.id,
       unsubscribeUrl: unsubscribeUrl(contactId),
+      includeComplianceFooter: isBulkCampaign,
+      kind: template.kind,
+      links: template.links as RenderInput["links"],
+      meeting: template.meeting as RenderInput["meeting"],
+      imageUrl: template.imageUrl,
+      videoUrl: template.videoUrl,
     });
   } catch (err) {
     if (err instanceof RenderError) {
@@ -94,17 +123,40 @@ export async function deliverEmail(job: SendEmailJob): Promise<DeliveryOutcome> 
     throw err;
   }
 
+  // Uploaded images live under our /uploads path — inline them as cid: parts so
+  // they render even when PUBLIC_API_URL isn't publicly reachable (e.g. dev).
+  const { html: finalHtml, attachments: finalAttachments } = await inlineLocalImages(
+    rendered.html,
+    rendered.attachments,
+  );
+
+  logger.info(
+    {
+      emailLogId: log.id,
+      to: contact.email,
+      subject: rendered.subject,
+      htmlBytes: finalHtml.length,
+      imgSrcs: [...finalHtml.matchAll(/<img\b[^>]*\bsrc="([^"]+)"/gi)].map((m) => m[1]),
+      attachments: finalAttachments?.map((a) => `${a.filename}${a.cid ? ` (cid:${a.cid})` : ""}`),
+    },
+    "outbound email payload (pre-send)",
+  );
+  logger.debug({ emailLogId: log.id, html: finalHtml }, "outbound email full html");
+
   const provider = getProvider();
   const { providerMessageId } = await provider.send({
     to: contact.email,
     from: env.EMAIL_FROM,
     subject: rendered.subject,
-    html: rendered.html,
+    html: finalHtml,
     text: rendered.text,
-    headers: {
-      "List-Unsubscribe": `<${unsubscribeUrl(contactId)}>`,
-      "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    },
+    attachments: finalAttachments,
+    headers: isBulkCampaign
+      ? {
+          "List-Unsubscribe": `<${unsubscribeUrl(contactId)}>`,
+          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        }
+      : {},
     tags: { emailLogId: log.id },
   });
 

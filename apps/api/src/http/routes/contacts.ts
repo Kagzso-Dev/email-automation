@@ -4,10 +4,22 @@ import {
   createContactInput,
   idParam,
   listContactsQuery,
+  sendBatchHistoryQuery,
+  sendManualBulkInput,
+  sendManualEmailInput,
   updateContactInput,
 } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
-import { enqueueCsvImport } from "../../queue/queues.js";
+import { enqueueContactImport } from "../../queue/queues.js";
+import { formatFromFilename } from "../../domain/contactImport.js";
+import { isEmailDomainAllowed } from "../../domain/allowedDomains.js";
+import {
+  createManualSendBatch,
+  getBatchView,
+  listManualSendBatches,
+  retryFailedItems,
+  sendManualEmail,
+} from "../../domain/manualSend.js";
 import { authRequired } from "../middleware/auth.js";
 import { badRequest, notFound, wrap } from "../errors.js";
 
@@ -52,8 +64,12 @@ contactsRouter.post(
   "/",
   wrap(async (req, res) => {
     const body = createContactInput.parse(req.body);
+    const email = body.email.toLowerCase();
+    if (!(await isEmailDomainAllowed(email))) {
+      throw badRequest(`Email domain is not on the approved sending list: ${email}`);
+    }
     const contact = await prisma.contact.create({
-      data: { ...body, email: body.email.toLowerCase(), customFields: body.customFields ?? {} },
+      data: { ...body, email, customFields: body.customFields ?? {} },
     });
     res.status(201).json(contact);
   }),
@@ -81,9 +97,13 @@ contactsRouter.put(
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = updateContactInput.parse(req.body);
+    const email = body.email?.toLowerCase();
+    if (email && !(await isEmailDomainAllowed(email))) {
+      throw badRequest(`Email domain is not on the approved sending list: ${email}`);
+    }
     const contact = await prisma.contact.update({
       where: { id },
-      data: { ...body, ...(body.email ? { email: body.email.toLowerCase() } : {}) },
+      data: { ...body, ...(email ? { email } : {}) },
     });
     res.json(contact);
   }),
@@ -93,8 +113,92 @@ contactsRouter.delete(
   "/:id",
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    await prisma.contact.delete({ where: { id } });
+    const contact = await prisma.contact.findUnique({ where: { id } });
+    if (!contact) throw notFound("Contact");
+    // Memberships and the unsubscribe row cascade; email logs do not (they have
+    // no onDelete rule), so clear them first or the delete hits a FK constraint.
+    await prisma.$transaction([
+      prisma.emailLog.deleteMany({ where: { contactId: id } }),
+      prisma.contact.delete({ where: { id } }),
+    ]);
     res.status(204).end();
+  }),
+);
+
+contactsRouter.post(
+  "/:id/send",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const { templateId } = sendManualEmailInput.parse(req.body);
+    const contact = await prisma.contact.findUnique({ where: { id } });
+    if (!contact) throw notFound("Contact");
+    const template = await prisma.template.findUnique({ where: { id: templateId } });
+    if (!template) throw badRequest("templateId does not exist");
+    const result = await sendManualEmail(id, templateId);
+    if (result.status === "skipped") throw badRequest(`Cannot send: ${result.reason}`);
+    res.status(202).json(result);
+  }),
+);
+
+/* ------------------------------------------------ drip (sequential) bulk send */
+
+// Send a template to many selected contacts one at a time, with a random gap
+// between each (Settings → Bulk send pacing). Runs server-side as a
+// `manual-bulk-send` queue job, so it survives the tab closing.
+contactsRouter.post(
+  "/send",
+  wrap(async (req, res) => {
+    const { templateId, contactIds, purgeAfter } = sendManualBulkInput.parse(req.body);
+    const template = await prisma.template.findUnique({ where: { id: templateId } });
+    if (!template) throw badRequest("templateId does not exist");
+    const batchId = await createManualSendBatch(templateId, contactIds, { purgeAfter });
+    res.status(202).json({ batchId });
+  }),
+);
+
+// Batch history for the Send Queue page (Email tab). Must be registered before
+// the ":id" route below so "/send/batches" isn't captured as an id.
+contactsRouter.get(
+  "/send/batches",
+  wrap(async (req, res) => {
+    const { status } = sendBatchHistoryQuery.parse(req.query);
+    res.json({ items: await listManualSendBatches(status) });
+  }),
+);
+
+// Progress poll for one batch (Send Queue detail view).
+contactsRouter.get(
+  "/send/batches/:id",
+  wrap(async (req, res) => {
+    const view = await getBatchView(req.params.id);
+    if (!view) throw notFound("Send batch");
+    res.json(view);
+  }),
+);
+
+// Start a fresh batch containing only the contacts that failed in :id.
+contactsRouter.post(
+  "/send/batches/:id/retry",
+  wrap(async (req, res) => {
+    const batchId = await retryFailedItems(req.params.id);
+    if (!batchId) throw badRequest("Nothing to retry — no failed contacts in that batch");
+    res.status(202).json({ batchId });
+  }),
+);
+
+// Stop a running batch; contacts not yet sent are left untouched.
+contactsRouter.post(
+  "/send/batches/:id/cancel",
+  wrap(async (req, res) => {
+    const batch = await prisma.manualSendBatch.findUnique({ where: { id: req.params.id } });
+    if (!batch) throw notFound("Send batch");
+    if (batch.status === "RUNNING") {
+      await prisma.manualSendBatch.update({
+        where: { id: batch.id },
+        data: { status: "CANCELLED", nextItemAt: null },
+      });
+    }
+    res.json({ status: batch.status === "RUNNING" ? "CANCELLED" : batch.status });
   }),
 );
 
@@ -102,10 +206,14 @@ contactsRouter.post(
   "/import",
   upload.single("file"),
   wrap(async (req, res) => {
-    if (!req.file) throw badRequest("CSV file required (multipart field 'file')");
+    if (!req.file) throw badRequest("File required (multipart field 'file')");
+    const format = formatFromFilename(req.file.originalname);
+    if (!format) throw badRequest("Unsupported file type — upload a .csv, .xlsx, or .pdf file");
     const listId = typeof req.body.listId === "string" && req.body.listId ? req.body.listId : undefined;
-    const jobId = await enqueueCsvImport({
-      fileContent: req.file.buffer.toString("utf8"),
+    const jobId = await enqueueContactImport({
+      fileBase64: req.file.buffer.toString("base64"),
+      filename: req.file.originalname,
+      format,
       listId,
     });
     res.status(202).json({ jobId, status: "queued" });

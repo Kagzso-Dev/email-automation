@@ -5,7 +5,6 @@ import { env } from "../../env.js";
 import { logger } from "../../logger.js";
 import { prisma } from "../../prisma.js";
 import { fireTrigger } from "../../domain/triggerSend.js";
-import { getProvider } from "../../provider/index.js";
 import { applyDeliveryEvent } from "../../domain/tracking.js";
 import { apiKeyRequired } from "../middleware/apiKey.js";
 import { wrap } from "../errors.js";
@@ -25,17 +24,6 @@ webhooksRouter.post(
     const result = await fireTrigger(req.params.eventKey, input);
     // Always 202 — a no-op (suppressed / conditions) is a valid outcome, not an error.
     res.status(202).json(result);
-  }),
-);
-
-/* ---------------------------------------------- SES → SNS delivery events */
-
-webhooksRouter.post(
-  "/ses",
-  wrap(async (req, res) => {
-    const events = await getProvider().parseWebhook(req.body, req.headers);
-    for (const ev of events) await applyDeliveryEvent(ev);
-    res.json({ processed: events.length });
   }),
 );
 

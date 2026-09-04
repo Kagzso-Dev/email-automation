@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -9,7 +10,11 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@dispatch/shared": new URL("../../packages/shared/src/index.ts", import.meta.url).pathname,
+      // fileURLToPath handles Windows drive letters and spaces in the path,
+      // which `new URL(...).pathname` mangles (e.g. "/C:/My%20Apps/...").
+      "@dispatch/shared": fileURLToPath(
+        new URL("../../packages/shared/src/index.ts", import.meta.url),
+      ),
     },
   },
 });
