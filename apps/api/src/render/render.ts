@@ -100,13 +100,26 @@ export interface RenderInput {
   /**
    * Optional image URL embedded in the body. Rendered at a `{{image}}`
    * placeholder if the message contains one, otherwise at the top of the body.
+   * Legacy single field — merged ahead of `images`.
    */
   imageUrl?: string | null;
   /**
    * Optional video link, rendered as a "▶ Watch video" button. Placed at a
    * `{{video_link}}` placeholder if present, otherwise after the message body.
+   * Legacy single field — merged ahead of `videos`.
    */
   videoUrl?: string | null;
+  /**
+   * Additional embedded images. Each is placed at its own placeholder —
+   * `{{image}}` for the first, `{{image_2}}`, `{{image_3}}` … for the rest —
+   * or stacked at the top of the body when no placeholder is present.
+   */
+  images?: string[] | null;
+  /**
+   * Additional "▶ Watch video" buttons. Placeholders `{{video_link}}`,
+   * `{{video_link_2}}` … mirror the images; unplaced buttons follow the body.
+   */
+  videos?: Array<{ url: string; label?: string }> | null;
   /**
    * Append the CAN-SPAM footer (physical address + Unsubscribe link) and the
    * text-part unsubscribe block. Required for bulk marketing; omitted for
@@ -199,31 +212,54 @@ export function render(input: RenderInput): RenderedEmail {
     : null;
   const hasMeeting = !!meeting && Object.values(meeting).some((v) => v && String(v).trim());
 
-  // Optional image / video. URLs may hold {{variables}}, resolved like the panels.
-  // The rendered blocks are spliced in after sanitisation (same as the link/
-  // meeting panels), at a {{image}} / {{video_link}} placeholder if the message
-  // has one, otherwise image → top of body, video → after the body.
-  const imageUrl = sub(input.imageUrl)?.trim() ?? "";
-  const videoUrl = sub(input.videoUrl)?.trim() ?? "";
-  const imageBlock = imageUrl ? renderImageHtml(imageUrl) : "";
-  const videoBlock = videoUrl ? renderVideoButtonHtml(videoUrl) : "";
-  const IMAGE_SLOT = "@@DISPATCH_IMAGE_SLOT@@";
-  const VIDEO_SLOT = "@@DISPATCH_VIDEO_SLOT@@";
-  // A placeholder present but no URL → resolves to "" (the slot just disappears).
-  allVars.image = imageBlock ? IMAGE_SLOT : "";
-  allVars.video_link = videoBlock ? VIDEO_SLOT : "";
+  // Optional images / videos. URLs may hold {{variables}}, resolved like the
+  // panels. Legacy single fields (imageUrl / videoUrl) merge ahead of the arrays.
+  // Rendered blocks are spliced in after sanitisation (same as the link/meeting
+  // panels): each gets an indexed placeholder — {{image}} / {{image_2}} … and
+  // {{video_link}} / {{video_link_2}} … — otherwise images stack at the top of
+  // the body and videos follow it, both in order.
+  const imageUrls = [...(input.imageUrl ? [input.imageUrl] : []), ...(input.images ?? [])]
+    .map((u) => sub(u)?.trim() ?? "")
+    .filter(Boolean);
+  const videos = [
+    ...(input.videoUrl ? [{ url: input.videoUrl }] : []),
+    ...(input.videos ?? []),
+  ]
+    .map((v) => ({ url: sub(v.url)?.trim() ?? "", label: sub(v.label)?.trim() || undefined }))
+    .filter((v) => v.url);
+
+  const imageBlocks = imageUrls.map((u) => renderImageHtml(u));
+  const videoBlocks = videos.map((v) => renderVideoButtonHtml(v.url, v.label));
+
+  const slot = (kind: "IMG" | "VID", i: number) => `@@DISPATCH_${kind}_SLOT_${i}@@`;
+  const stripSlots = (s: string) => {
+    let out = s;
+    imageBlocks.forEach((_, i) => (out = out.split(slot("IMG", i)).join("")));
+    videoBlocks.forEach((_, i) => (out = out.split(slot("VID", i)).join("")));
+    return out;
+  };
+  const varKey = (base: string, i: number) => (i === 0 ? base : `${base}_${i + 1}`);
+
+  // A placeholder present but no matching URL → resolves to "" (slot disappears).
+  allVars.image = "";
+  allVars.video_link = "";
+  imageBlocks.forEach((b, i) => (allVars[varKey("image", i)] = b ? slot("IMG", i) : ""));
+  videoBlocks.forEach((b, i) => (allVars[varKey("video_link", i)] = b ? slot("VID", i) : ""));
 
   let bodyHtml = substitute(input.htmlBody, allVars, { htmlContext: true, declared });
   bodyHtml = sanitizeEmailHtml(bodyHtml);
 
-  const imageInBody = bodyHtml.includes(IMAGE_SLOT);
-  const videoInBody = bodyHtml.includes(VIDEO_SLOT);
-  const bodyForText = bodyHtml.split(IMAGE_SLOT).join("").split(VIDEO_SLOT).join("");
-  bodyHtml = bodyHtml.split(IMAGE_SLOT).join(imageBlock).split(VIDEO_SLOT).join(videoBlock);
+  const imgInBody = imageBlocks.map((_, i) => bodyHtml.includes(slot("IMG", i)));
+  const vidInBody = videoBlocks.map((_, i) => bodyHtml.includes(slot("VID", i)));
+  const bodyForText = stripSlots(bodyHtml);
+  imageBlocks.forEach((b, i) => (bodyHtml = bodyHtml.split(slot("IMG", i)).join(b)));
+  videoBlocks.forEach((b, i) => (bodyHtml = bodyHtml.split(slot("VID", i)).join(b)));
 
   let html = bodyHtml;
-  if (imageBlock && !imageInBody) html = imageBlock + "\n" + html;
-  if (videoBlock && !videoInBody) html += "\n" + videoBlock;
+  const leadingImages = imageBlocks.filter((b, i) => b && !imgInBody[i]).join("\n");
+  const trailingVideos = videoBlocks.filter((b, i) => b && !vidInBody[i]).join("\n");
+  if (leadingImages) html = leadingImages + "\n" + html;
+  if (trailingVideos) html += "\n" + trailingVideos;
   html += renderLinkPanelHtml(links);
   if (hasMeeting) html += "\n" + renderMeetingHtml(meeting!);
   if (withFooter) html += footer(input.unsubscribeUrl);
@@ -233,21 +269,17 @@ export function render(input: RenderInput): RenderedEmail {
     html = injectPixel(html, input.emailLogId);
   }
 
-  const textSource = (
-    input.textBody && input.textBody.trim().length > 0
-      ? substitute(input.textBody, allVars, { htmlContext: false, declared })
-      : htmlToText(bodyForText)
-  )
+  const textSource = stripSlots(
     // A {{image}} / {{video_link}} placeholder in the plain-text part has no
     // visual form — drop the internal marker, the URL is appended below.
-    .split(IMAGE_SLOT)
-    .join("")
-    .split(VIDEO_SLOT)
-    .join("");
+    input.textBody && input.textBody.trim().length > 0
+      ? substitute(input.textBody, allVars, { htmlContext: false, declared })
+      : htmlToText(bodyForText),
+  );
   const text =
     textSource +
-    renderImageText(imageUrl) +
-    renderVideoText(videoUrl) +
+    imageUrls.map((u) => renderImageText(u)).join("") +
+    videos.map((v) => renderVideoText(v.url, v.label)).join("") +
     renderLinkPanelText(links) +
     (hasMeeting ? "\n" + renderMeetingText(meeting!) : "") +
     (withFooter && input.unsubscribeUrl

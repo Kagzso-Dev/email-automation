@@ -157,6 +157,7 @@ export type WhatsAppItemStatus =
   | "SENDING"
   | "SENT"
   | "DELIVERED"
+  | "READ"
   | "FAILED"
   | "SKIPPED";
 
@@ -165,6 +166,7 @@ const EMPTY_WA_COUNTS: Record<WhatsAppItemStatus, number> = {
   SENDING: 0,
   SENT: 0,
   DELIVERED: 0,
+  READ: 0,
   FAILED: 0,
   SKIPPED: 0,
 };
@@ -203,7 +205,7 @@ export async function listWhatsAppSendBatches(status?: "RUNNING" | "DONE" | "CAN
       total: b.total,
       status: b.status,
       counts,
-      sent: counts.SENT + counts.DELIVERED,
+      sent: counts.SENT + counts.DELIVERED + counts.READ,
       failed: counts.FAILED,
       purgeAfter: b.purgeAfter,
       startedAt: b.createdAt,
@@ -238,6 +240,8 @@ export async function getWhatsAppBatchView(batchId: string) {
       error: i.error,
       sentAt: i.sentAt,
       deliveredAt: i.deliveredAt,
+      readAt: i.readAt,
+      failedAt: i.failedAt,
     })),
   };
 }

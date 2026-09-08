@@ -9,16 +9,23 @@ import {
   sendWhatsAppBulkInput,
   updateWhatsAppContactInput,
   updateWhatsAppTemplateInput,
+  whatsAppCredentialsInput,
 } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
-import { isWhatsAppConfigured, whatsappConfig } from "../../config/whatsapp.js";
+import { whatsappConfig } from "../../config/whatsapp.js";
+import {
+  clearWhatsAppCredentials,
+  getWhatsAppCredentials,
+  getWhatsAppCredentialsView,
+  setWhatsAppCredentials,
+} from "../../domain/whatsappCredentials.js";
 import { formatFromFilename, parseWhatsAppContactFile } from "../../domain/whatsappImport.js";
 import {
   createWhatsAppSendBatch,
   getWhatsAppBatchView,
   listWhatsAppSendBatches,
 } from "../../domain/whatsappSend.js";
-import { authRequired } from "../middleware/auth.js";
+import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, conflict, notFound, wrap } from "../errors.js";
 
 export const whatsappRouter = Router();
@@ -31,7 +38,35 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 whatsappRouter.get(
   "/config",
   wrap(async (_req, res) => {
-    res.json({ configured: isWhatsAppConfigured(), from: whatsappConfig.from ?? null });
+    const { configured, from } = await getWhatsAppCredentialsView();
+    res.json({ configured, from });
+  }),
+);
+
+// Admin-only: view/set the Twilio credentials from the Settings page. The
+// auth token is write-only — it's never sent back to the browser once saved.
+whatsappRouter.get(
+  "/credentials",
+  requireRole("ADMIN"),
+  wrap(async (_req, res) => {
+    res.json(await getWhatsAppCredentialsView());
+  }),
+);
+
+whatsappRouter.put(
+  "/credentials",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    const body = whatsAppCredentialsInput.parse(req.body);
+    res.json(await setWhatsAppCredentials(body));
+  }),
+);
+
+whatsappRouter.delete(
+  "/credentials",
+  requireRole("ADMIN"),
+  wrap(async (_req, res) => {
+    res.json(await clearWhatsAppCredentials());
   }),
 );
 
@@ -195,7 +230,7 @@ whatsappRouter.post(
   "/send",
   wrap(async (req, res) => {
     const { templateId, contactIds, source, purgeAfter } = sendWhatsAppBulkInput.parse(req.body);
-    if (!isWhatsAppConfigured()) {
+    if (!(await getWhatsAppCredentialsView()).configured) {
       throw new AppError(503, "WhatsApp is not configured — set it up in Settings", "unavailable");
     }
     const template = await prisma.whatsAppTemplate.findUnique({ where: { id: templateId } });

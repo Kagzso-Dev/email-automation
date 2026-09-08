@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Badge, EmptyState, ErrorNote, SkeletonTable, Table, Tabs, type BadgeTone } from "../components/ui";
+import { Icon } from "../components/icons";
+import { useToast } from "../components/toast";
 import { formatDateTime } from "../lib/schedule";
 
 /**
@@ -124,7 +126,70 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-const HEAD = ["", "Batch", "Template", "Recipients", "Status", "Sent", "Failed", "Started", "Completed"];
+const HEAD = ["", "Batch", "Template", "Recipients", "Status", "Sent", "Failed", "Started", "Completed", ""];
+
+/* ------------------------------------------------------------------ CSV download */
+
+/** RFC-4180 quoting: wrap in quotes and double any embedded quote when needed. */
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function toCsv(headers: string[], rows: string[][]): string {
+  return [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+}
+
+/** Save a text blob to the user's machine — no server round-trip. */
+function downloadTextFile(filename: string, text: string) {
+  // Leading BOM so Excel opens the file as UTF-8.
+  const blob = new Blob(["﻿", text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Per-row "download recipients as CSV" button. `buildCsv` fetches the batch
+ * detail and returns the file body; the click is stopped from bubbling so it
+ * doesn't also toggle the row's expanded panel.
+ */
+function DownloadCsvButton({
+  filename,
+  buildCsv,
+}: {
+  filename: string;
+  buildCsv: () => Promise<string>;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Download recipients as CSV"
+      aria-label="Download recipients as CSV"
+      className="btn-ghost px-2 py-1.5"
+      disabled={busy}
+      onClick={async (e) => {
+        e.stopPropagation();
+        setBusy(true);
+        try {
+          downloadTextFile(filename, await buildCsv());
+        } catch (err) {
+          toast.fromError(err, "Could not build the download");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Icon name="download" size={14} className={busy ? "animate-pulse" : undefined} />
+    </button>
+  );
+}
 
 /* ================================================================== EMAIL TAB */
 
@@ -154,6 +219,9 @@ interface EmailBatchDetailView {
     status: EmailItemStatus;
     error: string | null;
     sentAt: string | null;
+    deliveredAt: string | null;
+    openedAt: string | null;
+    failedAt: string | null;
   }[];
 }
 
@@ -222,6 +290,29 @@ function EmailQueue() {
                   <td className="px-4 py-2.5 text-xs text-slate-550">
                     {b.completedAt ? formatDateTime(b.completedAt) : "—"}
                   </td>
+                  <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                    <DownloadCsvButton
+                      filename={`email-batch-${b.id.slice(0, 8)}.csv`}
+                      buildCsv={async () => {
+                        const v = await api<EmailBatchDetailView>(
+                          `/api/contacts/send/batches/${b.id}`,
+                        );
+                        return toCsv(
+                          ["Name", "Email", "Status", "Sent at", "Received at", "Opened at", "Failed at", "Error"],
+                          v.items.map((it) => [
+                            it.name ?? "",
+                            it.email,
+                            it.status,
+                            it.sentAt ?? "",
+                            it.deliveredAt ?? "",
+                            it.openedAt ?? "",
+                            it.failedAt ?? "",
+                            it.error ?? "",
+                          ]),
+                        );
+                      }}
+                    />
+                  </td>
                 </tr>
                 {open && (
                   <tr className="border-b border-[#f0f2f6]">
@@ -281,6 +372,8 @@ function EmailBatchDetail({ id }: { id: string }) {
               <th className="px-3 py-2">Email</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Sent</th>
+              <th className="px-3 py-2">Received</th>
+              <th className="px-3 py-2">Opened</th>
               <th className="px-3 py-2">Error</th>
             </tr>
           </thead>
@@ -296,9 +389,16 @@ function EmailBatchDetail({ id }: { id: string }) {
                   {it.sentAt ? formatDateTime(it.sentAt) : "—"}
                 </td>
                 <td className="px-3 py-1.5 text-xs text-slate-550">
+                  {it.deliveredAt ? formatDateTime(it.deliveredAt) : "—"}
+                </td>
+                <td className="px-3 py-1.5 text-xs text-slate-550">
+                  {it.openedAt ? formatDateTime(it.openedAt) : "—"}
+                </td>
+                <td className="px-3 py-1.5 text-xs text-slate-550">
                   <span className="block max-w-[20rem] truncate" title={it.error ?? undefined}>
                     {it.error || "—"}
                   </span>
+                  {it.failedAt && <span className="block text-[11px] text-slate-400">{formatDateTime(it.failedAt)}</span>}
                 </td>
               </tr>
             ))}
@@ -311,7 +411,7 @@ function EmailBatchDetail({ id }: { id: string }) {
 
 /* =============================================================== WHATSAPP TAB */
 
-type WaItemStatus = "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "FAILED" | "SKIPPED";
+type WaItemStatus = "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" | "SKIPPED";
 
 interface WaBatchRow {
   id: string;
@@ -338,6 +438,8 @@ interface WaBatchDetailView {
     error: string | null;
     sentAt: string | null;
     deliveredAt: string | null;
+    readAt: string | null;
+    failedAt: string | null;
   }[];
 }
 
@@ -346,6 +448,7 @@ const waItemTone: Record<WaItemStatus, BadgeTone> = {
   SENDING: "accent",
   SENT: "ok",
   DELIVERED: "ok",
+  READ: "ok",
   FAILED: "crit",
   SKIPPED: "warn",
 };
@@ -407,6 +510,29 @@ function WhatsAppQueue() {
                   <td className="px-4 py-2.5 text-xs text-slate-550">
                     {b.completedAt ? formatDateTime(b.completedAt) : "—"}
                   </td>
+                  <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                    <DownloadCsvButton
+                      filename={`whatsapp-batch-${b.id.slice(0, 8)}.csv`}
+                      buildCsv={async () => {
+                        const v = await api<WaBatchDetailView>(
+                          `/api/whatsapp/send/batches/${b.id}`,
+                        );
+                        return toCsv(
+                          ["Name", "Phone", "Status", "Sent at", "Delivered at", "Opened at", "Failed at", "Error"],
+                          v.items.map((it) => [
+                            it.name ?? "",
+                            it.phone ?? "",
+                            it.status,
+                            it.sentAt ?? "",
+                            it.deliveredAt ?? "",
+                            it.readAt ?? "",
+                            it.failedAt ?? "",
+                            it.error ?? "",
+                          ]),
+                        );
+                      }}
+                    />
+                  </td>
                 </tr>
                 {open && (
                   <tr className="border-b border-[#f0f2f6]">
@@ -435,7 +561,7 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
   if (q.error || !q.data) return <ErrorNote error={q.error ?? new Error("Batch not found.")} />;
 
   const v = q.data;
-  const done = v.counts.SENT + v.counts.DELIVERED + v.counts.FAILED + v.counts.SKIPPED;
+  const done = v.counts.SENT + v.counts.DELIVERED + v.counts.READ + v.counts.FAILED + v.counts.SKIPPED;
   const pct = v.total ? Math.round((done / v.total) * 100) : 100;
 
   return (
@@ -443,7 +569,7 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
       <ProgressBar pct={pct} barClass="bg-[#25d366]" />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-slate-550">
         <span>
-          <b className="text-ok">{v.counts.SENT + v.counts.DELIVERED}</b> sent
+          <b className="text-ok">{v.counts.SENT + v.counts.DELIVERED + v.counts.READ}</b> sent
         </span>
         <span>
           <b className="text-crit">{v.counts.FAILED}</b> failed
@@ -466,6 +592,8 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
               <th className="px-3 py-2">Phone</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Sent</th>
+              <th className="px-3 py-2">Received</th>
+              <th className="px-3 py-2">Opened</th>
               <th className="px-3 py-2">Error</th>
             </tr>
           </thead>
@@ -481,9 +609,16 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
                   {it.sentAt ? formatDateTime(it.sentAt) : "—"}
                 </td>
                 <td className="px-3 py-1.5 text-xs text-slate-550">
+                  {it.deliveredAt ? formatDateTime(it.deliveredAt) : "—"}
+                </td>
+                <td className="px-3 py-1.5 text-xs text-slate-550">
+                  {it.readAt ? formatDateTime(it.readAt) : "—"}
+                </td>
+                <td className="px-3 py-1.5 text-xs text-slate-550">
                   <span className="block max-w-[20rem] truncate" title={it.error ?? undefined}>
                     {it.error || "—"}
                   </span>
+                  {it.failedAt && <span className="block text-[11px] text-slate-400">{formatDateTime(it.failedAt)}</span>}
                 </td>
               </tr>
             ))}

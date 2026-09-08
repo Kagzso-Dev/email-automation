@@ -3,8 +3,9 @@
 // Isolated from the email provider stack (provider/*, domain/delivery.ts). Uses
 // the global fetch (Node 20+), so there is no new dependency.
 
+import { env } from "../env.js";
 import { logger } from "../logger.js";
-import { isWhatsAppConfigured, whatsappConfig } from "../config/whatsapp.js";
+import { getWhatsAppCredentials } from "../domain/whatsappCredentials.js";
 
 export class WhatsAppNotConfiguredError extends Error {
   constructor() {
@@ -48,8 +49,8 @@ export interface WhatsAppSendResult {
 export async function sendWhatsAppTemplate(
   input: SendWhatsAppTemplateInput,
 ): Promise<WhatsAppSendResult> {
-  if (!isWhatsAppConfigured()) throw new WhatsAppNotConfiguredError();
-  const { apiUrl, accountSid, authToken, from } = whatsappConfig;
+  const { apiUrl, accountSid, authToken, from } = await getWhatsAppCredentials();
+  if (!(accountSid && authToken && from)) throw new WhatsAppNotConfiguredError();
 
   const url = `${apiUrl.replace(/\/$/, "")}/Accounts/${accountSid}/Messages.json`;
   const body = new URLSearchParams({
@@ -57,6 +58,10 @@ export async function sendWhatsAppTemplate(
     To: waAddress(input.to),
     ContentSid: input.contentSid,
     ContentVariables: JSON.stringify(input.contentVariables ?? {}),
+    // Twilio POSTs delivered/read/failed status updates here (see
+    // http/routes/webhooks.ts). PUBLIC_API_URL must be internet-reachable for
+    // Twilio to deliver these — a bare localhost dev server never sees them.
+    StatusCallback: `${env.PUBLIC_API_URL}/api/webhooks/whatsapp/status`,
   });
 
   let res: Response;

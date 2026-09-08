@@ -124,6 +124,13 @@ export const templateLink = z.object({
 });
 export type TemplateLink = z.infer<typeof templateLink>;
 
+/** One "▶ Watch video" button. `url` may hold {{vars}}; `label` overrides the caption. */
+export const templateVideo = z.object({
+  url: z.string().min(1).max(2000),
+  label: z.string().max(120).optional(),
+});
+export type TemplateVideo = z.infer<typeof templateVideo>;
+
 /**
  * Structured meeting details for a MEETING template. Every field is optional so
  * the editor can fill them in incrementally. `startAt` / `endAt` accept either an
@@ -156,14 +163,20 @@ const templateFields = z.object({
   links: z.array(templateLink).max(20).default([]),
   // Meeting card details; only rendered when kind = "MEETING".
   meeting: templateMeeting.optional(),
-  // Optional image embedded in the email body — a hosted image URL. Placed at a
-  // {{image}} placeholder if the message contains one, otherwise at the top of
-  // the body. `nullish` so the editor can clear it.
+  // Legacy single image field, kept for older templates / API callers. New edits
+  // use `images`; the renderer merges this ahead of that array. `nullish` so the
+  // editor can clear it.
   imageUrl: z.string().max(2000).nullish(),
-  // Optional video link. Rendered as a "▶ Watch video" button (email clients
-  // can't embed players). Placed at a {{video_link}} placeholder if present,
-  // otherwise after the message body.
+  // Legacy single video link, kept for older templates. New edits use `videos`.
   videoUrl: z.string().max(2000).nullish(),
+  // Images embedded in the email body — hosted image URLs. Each is placed at its
+  // own placeholder ({{image}}, {{image_2}}, {{image_3}} …) if the message has
+  // one, otherwise stacked at the top of the body in order.
+  images: z.array(z.string().max(2000)).max(10).nullish(),
+  // "▶ Watch video" buttons (email clients can't embed players). Placeholders
+  // {{video_link}}, {{video_link_2}} … mirror the images; unplaced buttons follow
+  // the message body.
+  videos: z.array(templateVideo).max(10).nullish(),
   variables: z.array(z.string()).default([]),
 });
 
@@ -344,13 +357,14 @@ export const createApiKeyInput = z.object({
 export const whatsAppContactStatus = z.enum(["ACTIVE", "UNSUBSCRIBED", "BLOCKED"]);
 
 /**
- * WhatsApp phone: any formatting accepted on input, stored as digits only
- * (country code included, no leading '+'). 8–15 digits per E.164.
+ * WhatsApp "to" (recipient) phone: any formatting accepted on input, stored as
+ * digits only (no leading '+'). India-only: +91 followed by a 10-digit mobile
+ * number starting with 6, 7, 8, or 9 — /^\+91[6-9]\d{9}$/.
  */
 export const whatsAppPhone = z
   .string()
   .transform((s) => s.replace(/[^\d]/g, ""))
-  .refine((s) => s.length >= 8 && s.length <= 15, "Enter a valid phone number with country code");
+  .refine((s) => /^91[6-9]\d{9}$/.test(s), "Enter a valid Indian WhatsApp number: +91 followed by 10 digits starting with 6-9");
 
 export const createWhatsAppContactInput = z.object({
   phone: whatsAppPhone,
@@ -403,6 +417,18 @@ export const sendWhatsAppBulkInput = z.object({
   purgeAfter: z.boolean().default(false),
 });
 export type SendWhatsAppBulkInput = z.infer<typeof sendWhatsAppBulkInput>;
+
+/**
+ * Twilio credentials entered from the Settings page, saved as a DB override on
+ * top of .env. Every field is optional and independent: omit a field to leave
+ * it unchanged, or send "" to clear that override and fall back to .env.
+ */
+export const whatsAppCredentialsInput = z.object({
+  accountSid: z.string().trim().max(64).optional(),
+  authToken: z.string().trim().max(128).optional(),
+  from: z.string().trim().max(40).optional(),
+});
+export type WhatsAppCredentialsInput = z.infer<typeof whatsAppCredentialsInput>;
 
 /* ------------------------------------------------------------------ helpers */
 

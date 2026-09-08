@@ -91,14 +91,21 @@ export async function processManualBulkSend(payload: Record<string, unknown>): P
       where: { id: item.id },
       data:
         outcome.result === "skipped"
-          ? { status: "SKIPPED", error: outcome.reason }
-          : { status: "SENT", sentAt: new Date(), error: null },
+          ? { status: "SKIPPED", error: outcome.reason, emailLogId: outcome.emailLogId }
+          : { status: "SENT", sentAt: new Date(), error: null, emailLogId: outcome.emailLogId },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // deliverEmail() already wrote the failure + failedAt onto its EmailLog row
+    // before throwing (domain/delivery.ts) — link it here so the Send Queue
+    // detail view (which joins through emailLogId) can show that timestamp.
+    const log = await prisma.emailLog.findUnique({
+      where: { idempotencyKey: manualKey(batch.templateId, item.contactId) },
+      select: { id: true },
+    });
     await prisma.manualSendBatchItem.update({
       where: { id: item.id },
-      data: { status: "FAILED", error: message.slice(0, 2000) },
+      data: { status: "FAILED", error: message.slice(0, 2000), emailLogId: log?.id ?? null },
     });
     logger.warn({ batchId, itemId: item.id, err: message }, "drip item failed — continuing batch");
   }

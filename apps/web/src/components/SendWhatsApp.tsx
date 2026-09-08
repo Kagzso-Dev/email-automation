@@ -22,7 +22,7 @@ interface WhatsAppTemplate {
 }
 
 /**
- * "Send WhatsApp message" for one or more selected contacts. Confirming creates a
+ * "Send message" for one or more selected contacts. Confirming creates a
  * server-side paced drip batch (one message at a time with a random gap) and
  * hands off immediately — the modal closes and progress is tracked on the Send
  * Queue page, not here. Used by both the WhatsApp Contacts page and the email
@@ -43,7 +43,7 @@ export function SendWhatsApp({
   const count = recipients?.length ?? 0;
 
   return (
-    <Modal open={open} onClose={onClose} title={`Send WhatsApp message to ${count} contact${count === 1 ? "" : "s"}`}>
+    <Modal open={open} onClose={onClose} title={`Send message to ${count} contact${count === 1 ? "" : "s"}`}>
       {open ? (
         <SendBody
           key={recipients!.map((r) => r.id).join(",")}

@@ -15,6 +15,19 @@ const server = app.listen(env.API_PORT, () => {
   );
 });
 
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    logger.error(
+      { port: env.API_PORT },
+      `Port ${env.API_PORT} is already in use — another API or dev instance is ` +
+        "already running. Stop it (on Windows: `npm run dev:kill`) and retry. " +
+        "The API port is fixed on purpose; do not change API_PORT to work around this.",
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
 async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down API");
   server.close();

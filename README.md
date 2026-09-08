@@ -40,6 +40,17 @@ Log in at http://localhost:5173 with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
 Run **one** worker process. The queue engine is safe under concurrent workers (jobs are
 claimed with a conditional `UPDATE`), but the scheduler assumes a single instance.
 
+`npm run dev` runs a preflight check (`scripts/predev.mjs`): if `:4000` or `:5173` is
+already listening it stops with a message instead of half-starting a second stack (Vite
+drifting to `:5174`, the API crashing with `EADDRINUSE`). Free the ports and retry:
+
+```powershell
+npm run dev:kill   # Windows: stops only this repo's dev processes + frees 4000/5173/5174
+```
+
+The API port (`4000`) and web port (`5173`, `strictPort`) are fixed on purpose — don't
+change them to dodge a conflict; kill the stale process instead.
+
 ## Try the pipeline
 
 **Scheduled campaign** — create a template + list in the UI, then a campaign with a send time a

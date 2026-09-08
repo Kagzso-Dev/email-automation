@@ -8,6 +8,7 @@ import {
   sendTestInput,
   updateTemplateInput,
 } from "@dispatch/shared";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../prisma.js";
 import { render, letterToHtml, type RenderInput } from "../../render/render.js";
 import { inlineLocalImages } from "../../render/inlineImages.js";
@@ -37,6 +38,17 @@ function deriveHtmlBody<T extends { bodyText?: string; signature?: string; htmlB
     return { ...body, htmlBody: letterToHtml(body.bodyText, body.signature) };
   }
   return body;
+}
+
+/**
+ * `images` / `videos` are nullable JSON columns, and Prisma won't accept a bare
+ * `null` for those: map an explicit null (a caller clearing the list) to
+ * `Prisma.JsonNull`, and leave an absent field (`undefined`) untouched.
+ */
+function mediaJson(v: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return Prisma.JsonNull;
+  return v as Prisma.InputJsonValue;
 }
 
 /**
@@ -96,7 +108,16 @@ templatesRouter.post(
     // superRefine guarantees bodyText or htmlBody; deriveHtmlBody fills htmlBody
     // from bodyText, so at this point it is always set.
     const htmlBody = parsed.htmlBody!;
-    res.status(201).json(await prisma.template.create({ data: { ...parsed, htmlBody } }));
+    res.status(201).json(
+      await prisma.template.create({
+        data: {
+          ...parsed,
+          htmlBody,
+          images: mediaJson(parsed.images),
+          videos: mediaJson(parsed.videos),
+        },
+      }),
+    );
   }),
 );
 
@@ -115,7 +136,12 @@ templatesRouter.put(
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = deriveHtmlBody(updateTemplateInput.parse(req.body));
-    res.json(await prisma.template.update({ where: { id }, data: body }));
+    res.json(
+      await prisma.template.update({
+        where: { id },
+        data: { ...body, images: mediaJson(body.images), videos: mediaJson(body.videos) },
+      }),
+    );
   }),
 );
 
@@ -155,6 +181,10 @@ templatesRouter.post(
         kind: tpl.kind,
         links: tpl.links as RenderInput["links"],
         meeting: tpl.meeting as RenderInput["meeting"],
+        imageUrl: tpl.imageUrl,
+        videoUrl: tpl.videoUrl,
+        images: tpl.images as RenderInput["images"],
+        videos: tpl.videos as RenderInput["videos"],
       });
       res.json(out);
     } catch (err) {
@@ -185,6 +215,8 @@ templatesRouter.post(
       meeting: tpl.meeting as RenderInput["meeting"],
       imageUrl: tpl.imageUrl,
       videoUrl: tpl.videoUrl,
+      images: tpl.images as RenderInput["images"],
+      videos: tpl.videos as RenderInput["videos"],
     });
     const { html, attachments } = await inlineLocalImages(out.html, out.attachments);
     const result = await getProvider().send({

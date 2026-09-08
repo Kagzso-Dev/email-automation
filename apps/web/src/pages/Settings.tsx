@@ -160,7 +160,7 @@ export function SettingsPage() {
 
       <SenderSection />
 
-      <WhatsAppSection />
+      <WhatsAppSection isAdmin={isAdmin} />
 
       <BulkSendPacingSection isAdmin={isAdmin} />
 
@@ -255,7 +255,7 @@ function SenderSection() {
   );
 }
 
-function WhatsAppSection() {
+function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ["whatsapp-config"],
     queryFn: () => api<{ configured: boolean; from: string | null }>("/api/whatsapp/config"),
@@ -274,11 +274,9 @@ function WhatsAppSection() {
           </p>
         ) : (
           <p className="rounded-lg bg-[#f8f0e1] p-3 text-warn">
-            Not configured — set <code className={code}>WHATSAPP_ACCOUNT_SID</code>,{" "}
-            <code className={code}>WHATSAPP_AUTH_TOKEN</code> and{" "}
-            <code className={code}>WHATSAPP_FROM</code> in the environment to enable the “Send
-            WhatsApp message” buttons. This is fully separate from email — leaving it blank has no
-            effect on email sending.
+            Not configured — fill in the Twilio Account SID, Auth Token and From number below to
+            enable the “Send message” buttons. This is fully separate from email — leaving it blank
+            has no effect on email sending.
           </p>
         )}
         <p className="text-slate-550">
@@ -286,7 +284,158 @@ function WhatsAppSection() {
           Contacts, Templates or Campaigns.
         </p>
       </div>
+
+      {isAdmin ? (
+        <WhatsAppCredentialsForm />
+      ) : (
+        <p className="mt-2 text-xs text-slate-550">Only admins can manage WhatsApp credentials.</p>
+      )}
     </section>
+  );
+}
+
+interface WhatsAppCredentialsView {
+  accountSid: string | null;
+  from: string | null;
+  hasAuthToken: boolean;
+  configured: boolean;
+  source: "database" | "environment";
+}
+
+/**
+ * Twilio credentials, editable here instead of via .env + restart. Saved to
+ * the DB (Setting table) as an override on top of .env — the auth token is
+ * write-only, it's never sent back to the browser once saved.
+ */
+function WhatsAppCredentialsForm() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["whatsapp-credentials"],
+    queryFn: () => api<WhatsAppCredentialsView>("/api/whatsapp/credentials"),
+  });
+
+  const [accountSid, setAccountSid] = useState("");
+  const [authToken, setAuthToken] = useState("");
+  const [from, setFrom] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  // Seed the visible fields from the server once (or when it changes from
+  // elsewhere) — the auth token field always starts blank since it's write-only.
+  useEffect(() => {
+    if (data) {
+      setAccountSid(data.accountSid ?? "");
+      setFrom(data.from ?? "");
+      setAuthToken("");
+      setDirty(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.accountSid, data?.from]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api<WhatsAppCredentialsView>("/api/whatsapp/credentials", {
+        method: "PUT",
+        // Only send the auth token if the admin actually typed a new one —
+        // an untouched, still-blank field must not wipe out a saved token.
+        json: { accountSid, from, ...(authToken ? { authToken } : {}) },
+      }),
+    onSuccess: (v) => {
+      qc.setQueryData(["whatsapp-credentials"], v);
+      qc.invalidateQueries({ queryKey: ["whatsapp-config"] });
+      setAuthToken("");
+      setDirty(false);
+    },
+  });
+
+  const reset = useMutation({
+    mutationFn: () => api<WhatsAppCredentialsView>("/api/whatsapp/credentials", { method: "DELETE" }),
+    onSuccess: (v) => {
+      qc.setQueryData(["whatsapp-credentials"], v);
+      qc.invalidateQueries({ queryKey: ["whatsapp-config"] });
+      setAuthToken("");
+      setDirty(false);
+    },
+  });
+
+  if (isLoading || !data) return <div className="card mt-3"><Spinner /></div>;
+
+  return (
+    <form
+      className="card mt-3 space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save.mutate();
+      }}
+    >
+      <p className="text-xs text-slate-550">
+        {data.source === "database"
+          ? "Using credentials saved here — they take priority over .env."
+          : "Using credentials from .env — save below to override them without a restart."}
+      </p>
+
+      <div>
+        <label className="label">Account SID</label>
+        <input
+          className="input font-mono text-xs"
+          value={accountSid}
+          placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          disabled={save.isPending || reset.isPending}
+          onChange={(e) => {
+            setAccountSid(e.target.value);
+            setDirty(true);
+          }}
+        />
+      </div>
+
+      <div>
+        <label className="label">Auth Token</label>
+        <input
+          className="input font-mono text-xs"
+          type="password"
+          value={authToken}
+          placeholder={data.hasAuthToken ? "•••••••••••••••• (unchanged — type to replace)" : "Not set"}
+          disabled={save.isPending || reset.isPending}
+          onChange={(e) => {
+            setAuthToken(e.target.value);
+            setDirty(true);
+          }}
+        />
+      </div>
+
+      <div>
+        <label className="label">From (Twilio WhatsApp sender)</label>
+        <input
+          className="input font-mono text-xs"
+          value={from}
+          placeholder="whatsapp:+14155238886"
+          disabled={save.isPending || reset.isPending}
+          onChange={(e) => {
+            setFrom(e.target.value);
+            setDirty(true);
+          }}
+        />
+      </div>
+
+      {save.error && <ErrorNote error={save.error} />}
+      {reset.error && <ErrorNote error={reset.error} />}
+
+      <div className="flex items-center gap-3">
+        <button className="btn-primary" disabled={!dirty || save.isPending || reset.isPending}>
+          {save.isPending ? "Saving…" : "Save"}
+        </button>
+        {data.source === "database" && (
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={save.isPending || reset.isPending}
+            onClick={() => reset.mutate()}
+          >
+            {reset.isPending ? "Resetting…" : "Reset to .env values"}
+          </button>
+        )}
+        {save.isSuccess && !dirty && <span className="text-ok">Saved.</span>}
+      </div>
+    </form>
   );
 }
 

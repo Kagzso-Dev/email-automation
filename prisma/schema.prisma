@@ -114,11 +114,16 @@ model Template {
   // kind = MEETING: { title?, location?, joinUrl?, startAt?, endAt?, timezone?,
   // description? }. Date fields accept an ISO 8601 string or a {{variable}}.
   meeting   Json?
-  // Optional image URL embedded in the body ({{image}} placeholder or top of body).
+  // Legacy single image / video fields, kept for older templates. New edits use
+  // `images` / `videos`; the renderer merges these ahead of those arrays.
   imageUrl  String?      @db.VarChar(2000)
-  // Optional video link, rendered as a "▶ Watch video" button ({{video_link}}
-  // placeholder or after the body).
   videoUrl  String?      @db.VarChar(2000)
+  // Images embedded in the body: ["https://…/a.jpg", …]. Placed at {{image}},
+  // {{image_2}} … placeholders, else stacked at the top of the body.
+  images    Json?
+  // "▶ Watch video" buttons: [{ url, label? }, …]. Placed at {{video_link}},
+  // {{video_link_2}} … placeholders, else appended after the body.
+  videos    Json?
   variables Json // declared variable names for the editor helper
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
@@ -203,6 +208,8 @@ model EmailLog {
   providerMessageId String?
   subject           String?     @db.VarChar(300)
   errorMessage      String?     @db.Text
+  deliveredAt       DateTime?
+  failedAt          DateTime?
   openedAt          DateTime?
   clickedAt         DateTime?
   sentAt            DateTime?
@@ -287,6 +294,9 @@ model ManualSendBatchItem {
   status    ManualBatchItemStatus @default(PENDING)
   error     String?               @db.Text
   sentAt    DateTime?
+  // The EmailLog row this send produced — lets the Send Queue detail show the
+  // per-recipient delivered / opened times without guessing the join.
+  emailLogId String?
   createdAt DateTime              @default(now())
   updatedAt DateTime              @updatedAt
   batch     ManualSendBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
@@ -368,6 +378,7 @@ enum WhatsAppSendStatus {
   SENDING
   SENT
   DELIVERED
+  READ
   FAILED
   SKIPPED
 }
@@ -388,6 +399,8 @@ model WhatsAppSend {
   error             String?            @db.Text
   sentAt            DateTime?
   deliveredAt       DateTime?
+  readAt            DateTime?
+  failedAt          DateTime?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   batch             WhatsAppSendBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)

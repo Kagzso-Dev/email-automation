@@ -7,12 +7,20 @@ import {
 
 describe("createWhatsAppContactInput", () => {
   it("normalises phone to digits and accepts optional names", () => {
-    const out = createWhatsAppContactInput.parse({ phone: "+1 (415) 555-2671", firstName: "Ada" });
-    expect(out).toEqual({ phone: "14155552671", firstName: "Ada" });
+    const out = createWhatsAppContactInput.parse({ phone: "+91 98765 43210", firstName: "Ada" });
+    expect(out).toEqual({ phone: "919876543210", firstName: "Ada" });
   });
 
   it("rejects a too-short phone", () => {
     expect(createWhatsAppContactInput.safeParse({ phone: "12345" }).success).toBe(false);
+  });
+
+  it("rejects a non-Indian phone", () => {
+    expect(createWhatsAppContactInput.safeParse({ phone: "+1 (415) 555-2671" }).success).toBe(false);
+  });
+
+  it("rejects an Indian number not starting with 6-9", () => {
+    expect(createWhatsAppContactInput.safeParse({ phone: "+91 51234 56789" }).success).toBe(false);
   });
 });
 

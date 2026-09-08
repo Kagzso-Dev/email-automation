@@ -111,12 +111,14 @@ export async function deliverEmail(job: SendEmailJob): Promise<DeliveryOutcome> 
       meeting: template.meeting as RenderInput["meeting"],
       imageUrl: template.imageUrl,
       videoUrl: template.videoUrl,
+      images: template.images as RenderInput["images"],
+      videos: template.videos as RenderInput["videos"],
     });
   } catch (err) {
     if (err instanceof RenderError) {
       await prisma.emailLog.update({
         where: { id: log.id },
-        data: { status: "FAILED", errorMessage: err.message },
+        data: { status: "FAILED", errorMessage: err.message, failedAt: new Date() },
       });
       throw new PermanentSendError(`render: ${err.message}`);
     }
@@ -144,25 +146,46 @@ export async function deliverEmail(job: SendEmailJob): Promise<DeliveryOutcome> 
   logger.debug({ emailLogId: log.id, html: finalHtml }, "outbound email full html");
 
   const provider = getProvider();
-  const { providerMessageId } = await provider.send({
-    to: contact.email,
-    from: env.EMAIL_FROM,
-    subject: rendered.subject,
-    html: finalHtml,
-    text: rendered.text,
-    attachments: finalAttachments,
-    headers: isBulkCampaign
-      ? {
-          "List-Unsubscribe": `<${unsubscribeUrl(contactId)}>`,
-          "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-        }
-      : {},
-    tags: { emailLogId: log.id },
-  });
+  let providerMessageId: string;
+  try {
+    ({ providerMessageId } = await provider.send({
+      to: contact.email,
+      from: env.EMAIL_FROM,
+      subject: rendered.subject,
+      html: finalHtml,
+      text: rendered.text,
+      attachments: finalAttachments,
+      headers: isBulkCampaign
+        ? {
+            "List-Unsubscribe": `<${unsubscribeUrl(contactId)}>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          }
+        : {},
+      tags: { emailLogId: log.id },
+    }));
+  } catch (err) {
+    // A synchronous provider rejection (bad recipient, SMTP auth failure, etc.)
+    // must land on the ledger immediately — the queue worker only tracks retry
+    // state on the Job row, not on EmailLog. Rethrown unchanged so the caller's
+    // existing transient/permanent retry handling is unaffected.
+    const message = err instanceof Error ? err.message : String(err);
+    await prisma.emailLog.update({
+      where: { id: log.id },
+      data: { status: "FAILED", errorMessage: message.slice(0, 2000), failedAt: new Date() },
+    });
+    throw err;
+  }
 
   await prisma.emailLog.update({
     where: { id: log.id },
-    data: { status: "SENT", providerMessageId, sentAt: new Date(), subject: rendered.subject, errorMessage: null },
+    data: {
+      status: "SENT",
+      providerMessageId,
+      sentAt: new Date(),
+      subject: rendered.subject,
+      errorMessage: null,
+      failedAt: null,
+    },
   });
   logger.info({ emailLogId: log.id, providerMessageId, to: contact.email }, "email sent");
   return { result: "sent", emailLogId: log.id, providerMessageId };

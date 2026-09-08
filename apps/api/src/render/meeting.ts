@@ -268,16 +268,19 @@ export function renderImageText(url: string): string {
 
 /**
  * A "▶ Watch video" button linking out to the video URL — email clients can't
- * embed a player, so the message just points at one.
+ * embed a player, so the message just points at one. `label` overrides the
+ * default "Watch video" caption.
  */
-export function renderVideoButtonHtml(url: string): string {
+export function renderVideoButtonHtml(url: string, label?: string): string {
   const href = safeHref(url);
   if (!href) return "";
-  return `<div style="margin:20px 0"><a href="${href}" style="${BTN};background:#2563eb;color:#ffffff">&#9654; Watch video</a></div>`;
+  const caption = label?.trim() ? escapeHtml(label.trim()) : "Watch video";
+  return `<div style="margin:20px 0"><a href="${href}" style="${BTN};background:#2563eb;color:#ffffff">&#9654; ${caption}</a></div>`;
 }
 
-export function renderVideoText(url: string): string {
-  return safeHref(url) ? `\nWatch video: ${url.trim()}` : "";
+export function renderVideoText(url: string, label?: string): string {
+  if (!safeHref(url)) return "";
+  return `\n${label?.trim() ? label.trim() : "Watch video"}: ${url.trim()}`;
 }
 
 /** Stable-ish UID for the attached invite, namespaced to this deployment. */

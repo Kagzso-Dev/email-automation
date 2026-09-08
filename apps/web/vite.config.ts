@@ -5,6 +5,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // Fail loudly if 5173 is taken instead of silently drifting to 5174 —
+    // a second dev server on a stray port talks to a stale API and hides
+    // that another instance is already running. Free the port first:
+    //   npm run dev:kill
+    strictPort: true,
     proxy: {
       "/api": { target: "http://localhost:4000", changeOrigin: true },
       "/health": { target: "http://localhost:4000", changeOrigin: true },

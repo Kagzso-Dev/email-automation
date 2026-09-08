@@ -217,6 +217,17 @@ export async function getBatchView(batchId: string) {
     contacts.map((c) => [c.id, [c.firstName, c.lastName].filter(Boolean).join(" ") || null]),
   );
 
+  // Delivered / opened times live on the EmailLog each item produced. A purged
+  // batch has no logs left, so this map is simply empty then.
+  const logIds = batch.items.map((i) => i.emailLogId).filter((v): v is string => !!v);
+  const logs = logIds.length
+    ? await prisma.emailLog.findMany({
+        where: { id: { in: [...new Set(logIds)] } },
+        select: { id: true, deliveredAt: true, openedAt: true, failedAt: true },
+      })
+    : [];
+  const logById = new Map(logs.map((l) => [l.id, l]));
+
   return {
     id: batch.id,
     status: batch.status,
@@ -225,13 +236,19 @@ export async function getBatchView(batchId: string) {
     retryOfId: batch.retryOfId,
     purgeAfter: batch.purgeAfter,
     counts,
-    items: batch.items.map((i) => ({
-      id: i.id,
-      name: i.name ?? nameById.get(i.contactId) ?? null,
-      email: i.email,
-      status: i.status,
-      error: i.error,
-      sentAt: i.sentAt,
-    })),
+    items: batch.items.map((i) => {
+      const log = i.emailLogId ? logById.get(i.emailLogId) : undefined;
+      return {
+        id: i.id,
+        name: i.name ?? nameById.get(i.contactId) ?? null,
+        email: i.email,
+        status: i.status,
+        error: i.error,
+        sentAt: i.sentAt,
+        deliveredAt: log?.deliveredAt ?? null,
+        openedAt: log?.openedAt ?? null,
+        failedAt: log?.failedAt ?? null,
+      };
+    }),
   };
 }

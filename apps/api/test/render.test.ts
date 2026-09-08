@@ -179,6 +179,42 @@ describe("render", () => {
     expect(out.html).not.toContain("Watch video");
   });
 
+  it("stacks multiple images at the top of the body in order", () => {
+    const out = render({
+      ...base,
+      images: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
+    });
+    expect(out.html.indexOf("a.jpg")).toBeLessThan(out.html.indexOf("b.jpg"));
+    expect(out.html.indexOf("b.jpg")).toBeLessThan(out.html.indexOf("Hi Ada"));
+    expect(out.text).toContain("Image: https://cdn.example.com/a.jpg");
+    expect(out.text).toContain("Image: https://cdn.example.com/b.jpg");
+  });
+
+  it("routes extra images/videos to their numbered placeholders", () => {
+    const out = render({
+      ...base,
+      htmlBody: "<p>{{image_2}}</p><p>body</p><p>{{video_link_2}}</p>",
+      imageUrl: "https://cdn.example.com/first.jpg",
+      images: ["https://cdn.example.com/second.jpg"],
+      videoUrl: "https://youtu.be/one",
+      videos: [{ url: "https://youtu.be/two", label: "Watch part two" }],
+    });
+    // first image has no placeholder -> prepended; second lands at {{image_2}}
+    expect(out.html.indexOf("first.jpg")).toBeLessThan(out.html.indexOf("second.jpg"));
+    expect(out.html.indexOf("second.jpg")).toBeLessThan(out.html.indexOf("body"));
+    expect(out.html).toContain("Watch part two");
+    expect(out.html.indexOf("body")).toBeLessThan(out.html.indexOf("Watch part two"));
+    // first video (no placeholder) trails the body
+    expect(out.html.indexOf("Watch part two")).toBeLessThan(out.html.lastIndexOf("Watch video"));
+    expect(out.html.match(/second\.jpg/g)).toHaveLength(1);
+  });
+
+  it("uses a custom label for a video button", () => {
+    const out = render({ ...base, videos: [{ url: "https://vimeo.com/7", label: "See the demo" }] });
+    expect(out.html).toContain("See the demo");
+    expect(out.text).toContain("See the demo: https://vimeo.com/7");
+  });
+
   it("leaves the body untouched when no image or video is set", () => {
     const out = render(base);
     expect(out.html).not.toContain("<img");

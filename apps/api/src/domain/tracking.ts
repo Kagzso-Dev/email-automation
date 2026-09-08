@@ -50,14 +50,20 @@ export async function applyDeliveryEvent(ev: DeliveryEvent): Promise<void> {
   }
   switch (ev.type) {
     case "delivered":
-      await advance(log.id, "DELIVERED");
+      await advance(log.id, "DELIVERED", log.deliveredAt ? {} : { deliveredAt: new Date() });
       break;
     case "bounced":
-      await advance(log.id, "BOUNCED", { errorMessage: ev.detail ?? "bounce" });
+      await advance(log.id, "BOUNCED", {
+        errorMessage: ev.detail ?? "bounce",
+        ...(log.failedAt ? {} : { failedAt: new Date() }),
+      });
       await suppressForBounce(log.contactId, ev.hard);
       break;
     case "complained":
-      await advance(log.id, "COMPLAINED", { errorMessage: ev.detail ?? "complaint" });
+      await advance(log.id, "COMPLAINED", {
+        errorMessage: ev.detail ?? "complaint",
+        ...(log.failedAt ? {} : { failedAt: new Date() }),
+      });
       await suppressForComplaint(log.contactId);
       break;
   }

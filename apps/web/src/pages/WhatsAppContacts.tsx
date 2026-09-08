@@ -30,10 +30,10 @@ const statusTone: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   BLOCKED: "crit",
 };
 
-/** Non-empty, 8–15 digits once punctuation is stripped. */
+/** India-only "to" number: +91 followed by a 10-digit mobile number starting with 6-9. */
 const phoneOk = (s: string) => {
   const d = s.replace(/[^\d]/g, "");
-  return d.length >= 8 && d.length <= 15;
+  return /^91[6-9]\d{9}$/.test(d);
 };
 
 export function WhatsAppContactsPage() {
@@ -154,7 +154,7 @@ export function WhatsAppContactsPage() {
               }
               onClick={openSend}
             >
-              Send WhatsApp message{activeSelectedCount > 0 ? ` (${activeSelectedCount} selected)` : ""}
+              Send message{activeSelectedCount > 0 ? ` (${activeSelectedCount})` : ""}
             </button>
             <button className="btn-ghost" onClick={() => fileRef.current?.click()}>
               Import file
@@ -409,18 +409,18 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
           mut.mutate();
         }}
       >
-        <label className="label">Phone number (with country code)</label>
+        <label className="label">Phone number (India, with +91)</label>
         <input
           className="input mb-1"
           type="tel"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          placeholder="+1 415 555 2671"
+          placeholder="+91 98765 43210"
           aria-invalid={phone !== "" && !phoneOk(phone)}
           required
         />
         {phone !== "" && !phoneOk(phone) && (
-          <p className="mb-2 text-xs text-crit">Enter 8–15 digits including the country code.</p>
+          <p className="mb-2 text-xs text-crit">Enter +91 followed by a 10-digit number starting with 6-9.</p>
         )}
         <div className="mb-3 mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
@@ -494,7 +494,7 @@ function EditContactForm({ contact, onClose }: { contact: WContact; onClose: () 
         mut.mutate();
       }}
     >
-      <label className="label">Phone number (with country code)</label>
+      <label className="label">Phone number (India, with +91)</label>
       <input
         className="input mb-3"
         type="tel"

@@ -13,6 +13,11 @@ interface TemplateLink {
   url: string;
 }
 
+interface TemplateVideo {
+  url: string;
+  label?: string;
+}
+
 interface TemplateMeeting {
   title?: string;
   location?: string;
@@ -34,8 +39,11 @@ interface Template {
   textBody?: string | null;
   links?: TemplateLink[] | null;
   meeting?: TemplateMeeting | null;
+  /** Legacy single fields — migrated into `images` / `videos` on first edit. */
   imageUrl?: string | null;
   videoUrl?: string | null;
+  images?: string[] | null;
+  videos?: TemplateVideo[] | null;
   variables: string[];
   _count?: { campaigns: number; triggers: number };
 }
@@ -49,8 +57,8 @@ const BLANK = {
   textBody: "",
   links: [] as TemplateLink[],
   meeting: {} as TemplateMeeting,
-  imageUrl: "",
-  videoUrl: "",
+  images: [] as string[],
+  videos: [] as TemplateVideo[],
   variables: [] as string[],
 };
 
@@ -170,14 +178,15 @@ function TemplateEditor({
     textBody: initial.textBody ?? "",
     links: (initial.links ?? []) as TemplateLink[],
     meeting: (initial.meeting ?? {}) as TemplateMeeting,
-    imageUrl: initial.imageUrl ?? "",
-    videoUrl: initial.videoUrl ?? "",
+    // Legacy single image / video migrate into the lists on first edit.
+    images: (initial.images ?? (initial.imageUrl ? [initial.imageUrl] : [])) as string[],
+    videos: (initial.videos ??
+      (initial.videoUrl ? [{ url: initial.videoUrl }] : [])) as TemplateVideo[],
     variables: [...(initial.variables ?? [])] as string[],
   });
   const [preview, setPreview] = useState<{ subject: string; html: string } | null>(null);
   const [testTo, setTestTo] = useState("");
-  const [imageMode, setImageMode] = useState<"url" | "upload">("url");
-  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageErrors, setImageErrors] = useState<Record<number, string>>({});
   const confirm = useConfirm();
 
   // De-duplicated, trimmed, non-empty — what actually gets saved / offered as chips.
@@ -187,11 +196,22 @@ function TemplateEditor({
   const updateMeeting = (patch: Partial<TemplateMeeting>) =>
     setForm((f) => ({ ...f, meeting: { ...f.meeting, ...patch } }));
 
+  const setImageAt = (i: number, url: string) =>
+    setForm((f) => ({ ...f, images: f.images.map((x, j) => (j === i ? url : x)) }));
+  const setVideoAt = (i: number, patch: Partial<TemplateVideo>) =>
+    setForm((f) => ({ ...f, videos: f.videos.map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
+  const clearImageError = (i: number) =>
+    setImageErrors((e) => {
+      const next = { ...e };
+      delete next[i];
+      return next;
+    });
+
   const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
   const uploadImage = useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async ({ file }: { file: File; index: number }) => {
       if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
         throw new Error("Unsupported image type — use JPG, PNG, WebP or GIF");
       }
@@ -206,19 +226,16 @@ function TemplateEditor({
         notify: false,
       });
     },
-    onSuccess: (res) => {
-      setImageError(null);
-      setForm((f) => ({ ...f, imageUrl: res.url }));
+    onSuccess: (res, { index }) => {
+      clearImageError(index);
+      setImageAt(index, res.url);
     },
-    onError: (err) =>
-      setImageError(err instanceof Error ? err.message : "Upload failed — please try again"),
+    onError: (err, { index }) =>
+      setImageErrors((e) => ({
+        ...e,
+        [index]: err instanceof Error ? err.message : "Upload failed — please try again",
+      })),
   });
-
-  const handleImageFile = (file: File | undefined | null) => {
-    if (!file) return;
-    setImageError(null);
-    uploadImage.mutate(file);
-  };
 
   const save = useMutation({
     mutationFn: async () => {
@@ -228,14 +245,21 @@ function TemplateEditor({
       const meeting = Object.fromEntries(
         Object.entries(form.meeting).filter(([, v]) => v && String(v).trim()),
       );
+      const images = form.images.map((u) => u.trim()).filter(Boolean);
+      const videos = form.videos
+        .map((v) => ({ url: v.url.trim(), label: v.label?.trim() || undefined }))
+        .filter((v) => v.url);
       const body = {
         ...form,
         variables,
         links,
         meeting,
-        // Send null (not "") so clearing a previously-set field persists.
-        imageUrl: form.imageUrl.trim() || null,
-        videoUrl: form.videoUrl.trim() || null,
+        images,
+        videos,
+        // The lists are canonical now — null out the legacy single fields so a
+        // migrated value isn't rendered twice.
+        imageUrl: null,
+        videoUrl: null,
       };
       if (isNew) return api<Template>("/api/templates", { method: "POST", json: body });
       return api<Template>(`/api/templates/${initial.id}`, { method: "PUT", json: body });
@@ -358,8 +382,12 @@ function TemplateEditor({
               "email",
               "status",
               "unsubscribe_url",
-              ...(form.imageUrl.trim() ? ["image"] : []),
-              ...(form.videoUrl.trim() ? ["video_link"] : []),
+              ...form.images.flatMap((u, i) =>
+                u.trim() ? [i === 0 ? "image" : `image_${i + 1}`] : [],
+              ),
+              ...form.videos.flatMap((v, i) =>
+                v.url.trim() ? [i === 0 ? "video_link" : `video_link_${i + 1}`] : [],
+              ),
               ...variables,
             ]),
           ].map((v) => (
@@ -393,126 +421,119 @@ function TemplateEditor({
         />
 
         <div className="mb-3 border-t border-[#e3e6ec] pt-3">
-          <label className="label">Image (optional)</label>
+          <label className="label">Images (optional)</label>
           <p className="mb-2 text-xs text-slate-550">
-            Embedded in the email — at a <span className="font-mono">{"{{image}}"}</span> placeholder
-            if you add one to the message, otherwise at the top of the body.
+            Embedded in the email. Each image is placed at its own placeholder —{" "}
+            <span className="font-mono">{"{{image}}"}</span>,{" "}
+            <span className="font-mono">{"{{image_2}}"}</span>,{" "}
+            <span className="font-mono">{"{{image_3}}"}</span> … — otherwise they stack at the top of
+            the body in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).
           </p>
-          {form.imageUrl.trim() ? (
-            <div className="flex items-start gap-3">
-              <img
-                src={form.imageUrl}
-                alt=""
-                className="h-20 w-20 shrink-0 rounded-lg border border-[#e3e6ec] object-cover"
-                onError={(e) => (e.currentTarget.style.opacity = "0.3")}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-mono text-xs text-slate-550">{form.imageUrl}</div>
-                <button
-                  type="button"
-                  className="btn-ghost mt-1 text-xs text-crit"
-                  onClick={() => {
-                    setImageError(null);
-                    setForm((f) => ({ ...f, imageUrl: "" }));
-                  }}
-                >
-                  Remove image
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="mb-2 flex gap-1 rounded-lg bg-surface-muted p-1">
-                {(["url", "upload"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => {
-                      setImageMode(m);
-                      setImageError(null);
-                    }}
-                    className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium ${
-                      imageMode === m
-                        ? "bg-white text-ink shadow-sm"
-                        : "text-slate-550 hover:text-ink"
-                    }`}
-                  >
-                    {m === "url" ? "Paste URL" : "Upload image"}
-                  </button>
-                ))}
-              </div>
-
-              {imageMode === "url" ? (
-                <input
-                  className="input font-mono text-xs"
-                  value={form.imageUrl}
-                  placeholder="https://…/photo.jpg"
-                  onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
-                />
-              ) : (
-                <label
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    handleImageFile(e.dataTransfer.files?.[0]);
-                  }}
-                  className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[#c7ccd6] px-4 py-6 text-center text-xs text-slate-550 hover:bg-surface-muted"
-                >
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif"
-                    className="hidden"
-                    disabled={uploadImage.isPending}
-                    onChange={(e) => {
-                      handleImageFile(e.target.files?.[0]);
-                      e.currentTarget.value = "";
-                    }}
-                  />
-                  {uploadImage.isPending ? (
-                    "Uploading…"
-                  ) : (
-                    <>
-                      <span className="font-medium text-ink">Click to choose</span> or drag an image
-                      here
-                      <span className="mt-1 block text-[11px]">
-                        JPG, PNG, WebP or GIF · max 5 MB
-                      </span>
-                    </>
+          <div className="flex flex-col gap-2">
+            {form.images.map((url, i) => (
+              <div key={i} className="rounded-lg border border-[#e3e6ec] p-2">
+                <div className="flex gap-2">
+                  {url.trim() && (
+                    <img
+                      src={url}
+                      alt=""
+                      className="h-10 w-10 shrink-0 rounded border border-[#e3e6ec] object-cover"
+                      onError={(e) => (e.currentTarget.style.opacity = "0.3")}
+                    />
                   )}
-                </label>
-              )}
-
-              {imageError && <div className="mt-1.5 text-xs text-crit">{imageError}</div>}
-            </>
-          )}
+                  <input
+                    className="input font-mono text-xs"
+                    value={url}
+                    placeholder="https://…/photo.jpg"
+                    onChange={(e) => setImageAt(i, e.target.value)}
+                  />
+                  <label className="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">
+                    {uploadImage.isPending ? "Uploading…" : "Upload"}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      className="hidden"
+                      disabled={uploadImage.isPending}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          clearImageError(i);
+                          uploadImage.mutate({ file, index: i });
+                        }
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    aria-label="Remove image"
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
+                    onClick={() => {
+                      clearImageError(i);
+                      setForm((f) => ({ ...f, images: f.images.filter((_, j) => j !== i) }));
+                    }}
+                  >
+                    <Icon name="close" size={16} />
+                  </button>
+                </div>
+                {imageErrors[i] && (
+                  <div className="mt-1 text-xs text-crit">{imageErrors[i]}</div>
+                )}
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="btn-ghost mt-2 text-xs"
+            onClick={() => setForm((f) => ({ ...f, images: [...f.images, ""] }))}
+          >
+            + Add image
+          </button>
         </div>
 
         <div className="mb-3 border-t border-[#e3e6ec] pt-3">
-          <label className="label">Video URL (optional)</label>
+          <label className="label">Videos (optional)</label>
           <p className="mb-2 text-xs text-slate-550">
-            A YouTube / Vimeo / any video link. Rendered as a{" "}
+            A YouTube / Vimeo / any video link, rendered as a{" "}
             <span className="font-mono">▶ Watch video</span> button (email clients can’t embed a
-            player) — at a <span className="font-mono">{"{{video_link}}"}</span> placeholder if you
-            add one, otherwise after the message body.
+            player). Placed at <span className="font-mono">{"{{video_link}}"}</span>,{" "}
+            <span className="font-mono">{"{{video_link_2}}"}</span> … or after the message body.
           </p>
-          <div className="flex gap-2">
-            <input
-              className="input font-mono text-xs"
-              value={form.videoUrl}
-              placeholder="https://youtu.be/…"
-              onChange={(e) => setForm({ ...form, videoUrl: e.target.value })}
-            />
-            {form.videoUrl.trim() && (
-              <button
-                type="button"
-                aria-label="Remove video"
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
-                onClick={() => setForm((f) => ({ ...f, videoUrl: "" }))}
-              >
-                <Icon name="close" size={16} />
-              </button>
-            )}
+          <div className="flex flex-col gap-2">
+            {form.videos.map((v, i) => (
+              <div key={i} className="flex gap-2">
+                <input
+                  className="input"
+                  value={v.label ?? ""}
+                  placeholder="Button label (optional)"
+                  onChange={(e) => setVideoAt(i, { label: e.target.value })}
+                />
+                <input
+                  className="input font-mono text-xs"
+                  value={v.url}
+                  placeholder="https://youtu.be/…"
+                  onChange={(e) => setVideoAt(i, { url: e.target.value })}
+                />
+                <button
+                  type="button"
+                  aria-label="Remove video"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
+                  onClick={() =>
+                    setForm((f) => ({ ...f, videos: f.videos.filter((_, j) => j !== i) }))
+                  }
+                >
+                  <Icon name="close" size={16} />
+                </button>
+              </div>
+            ))}
           </div>
+          <button
+            type="button"
+            className="btn-ghost mt-2 text-xs"
+            onClick={() => setForm((f) => ({ ...f, videos: [...f.videos, { url: "", label: "" }] }))}
+          >
+            + Add video
+          </button>
         </div>
 
         <label className="label">Plain-text body (optional)</label>

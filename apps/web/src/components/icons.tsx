@@ -24,7 +24,8 @@ export type IconName =
   | "check"
   | "insights"
   | "activity"
-  | "whatsapp";
+  | "whatsapp"
+  | "download";
 
 const PATHS: Record<IconName, JSX.Element> = {
   dashboard: (
@@ -152,6 +153,13 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M20.5 11.5a8.5 8.5 0 0 1-12.7 7.4L3.5 20.5l1.6-4.2A8.5 8.5 0 1 1 20.5 11.5z" />
       <path d="M9 9c0 4 2.5 6.5 6.5 6.5" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M12 3v12" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M5 21h14" />
     </>
   ),
 };
