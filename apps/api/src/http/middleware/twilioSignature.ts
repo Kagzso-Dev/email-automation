@@ -5,8 +5,8 @@
 
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
-import { env } from "../../env.js";
 import { getWhatsAppCredentials } from "../../domain/whatsappCredentials.js";
+import { whatsappStatusCallbackUrl } from "../../config/whatsapp.js";
 import { unauthorized } from "../errors.js";
 
 export async function twilioSignatureRequired(req: Request, _res: Response, next: NextFunction) {
@@ -16,10 +16,11 @@ export async function twilioSignatureRequired(req: Request, _res: Response, next
   const signature = req.headers["x-twilio-signature"];
   if (typeof signature !== "string") return next(unauthorized("Missing Twilio signature"));
 
-  // Twilio signs the exact URL it was told to call (the StatusCallback we set
-  // in services/whatsapp.ts), not whatever a proxy in front of us rewrites
-  // req.protocol/host to — reconstruct from PUBLIC_API_URL to match.
-  const url = `${env.PUBLIC_API_URL}${req.originalUrl}`.replace(/\?.*$/, "");
+  // Twilio signs the exact URL it was told to call — the StatusCallback set in
+  // services/whatsapp.ts via whatsappStatusCallbackUrl() — not whatever a
+  // proxy in front of us rewrites req.protocol/host to. Reuse that same
+  // helper so this always matches, even after WHATSAPP_PUBLIC_BASE_URL changes.
+  const url = (whatsappStatusCallbackUrl() ?? "").replace(/\?.*$/, "");
   const body = (req.body ?? {}) as Record<string, string>;
   const data =
     url +

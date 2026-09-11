@@ -3,9 +3,9 @@
 // Isolated from the email provider stack (provider/*, domain/delivery.ts). Uses
 // the global fetch (Node 20+), so there is no new dependency.
 
-import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { getWhatsAppCredentials } from "../domain/whatsappCredentials.js";
+import { whatsappStatusCallbackUrl } from "../config/whatsapp.js";
 
 export class WhatsAppNotConfiguredError extends Error {
   constructor() {
@@ -53,16 +53,20 @@ export async function sendWhatsAppTemplate(
   if (!(accountSid && authToken && from)) throw new WhatsAppNotConfiguredError();
 
   const url = `${apiUrl.replace(/\/$/, "")}/Accounts/${accountSid}/Messages.json`;
-  const body = new URLSearchParams({
+  const params: Record<string, string> = {
     From: waAddress(from!),
     To: waAddress(input.to),
     ContentSid: input.contentSid,
     ContentVariables: JSON.stringify(input.contentVariables ?? {}),
-    // Twilio POSTs delivered/read/failed status updates here (see
-    // http/routes/webhooks.ts). PUBLIC_API_URL must be internet-reachable for
-    // Twilio to deliver these — a bare localhost dev server never sees them.
-    StatusCallback: `${env.PUBLIC_API_URL}/api/webhooks/whatsapp/status`,
-  });
+  };
+  // Twilio POSTs delivered/read/failed status updates here (see
+  // http/routes/webhooks.ts) and requires this to be a real internet-reachable
+  // URL — a localhost one gets the send itself rejected with error 21609.
+  // whatsappStatusCallbackUrl() returns undefined rather than a localhost URL
+  // when no public base is configured, so we just omit tracking that send.
+  const statusCallbackUrl = whatsappStatusCallbackUrl();
+  if (statusCallbackUrl) params.StatusCallback = statusCallbackUrl;
+  const body = new URLSearchParams(params);
 
   let res: Response;
   try {

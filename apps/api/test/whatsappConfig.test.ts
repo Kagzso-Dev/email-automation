@@ -35,8 +35,70 @@ describe("config/whatsapp", () => {
 
   it("stays unconfigured when only some vars are set", async () => {
     vi.stubEnv("WHATSAPP_ACCOUNT_SID", "AC123");
+    // Clear the other two so a real repo .env can't leak them in and mask
+    // the "partial config" case being tested.
+    vi.stubEnv("WHATSAPP_AUTH_TOKEN", "");
+    vi.stubEnv("WHATSAPP_FROM", "");
     vi.resetModules();
     const mod = await import("../src/config/whatsapp.js");
     expect(mod.isWhatsAppConfigured()).toBe(false);
+  });
+});
+
+describe("whatsappStatusCallbackUrl", () => {
+  it("resolves from WHATSAPP_PUBLIC_BASE_URL, trimming a trailing slash", async () => {
+    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "https://example.ngrok-free.dev/");
+    vi.resetModules();
+    const mod = await import("../src/config/whatsapp.js");
+    expect(mod.whatsappStatusCallbackUrl()).toBe(
+      "https://example.ngrok-free.dev/api/webhooks/whatsapp/status",
+    );
+  });
+
+  it("prefers WHATSAPP_PUBLIC_BASE_URL over PUBLIC_API_URL when both are public", async () => {
+    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "https://whatsapp.example.com");
+    vi.stubEnv("PUBLIC_API_URL", "https://email.example.com");
+    vi.resetModules();
+    const mod = await import("../src/config/whatsapp.js");
+    expect(mod.whatsappStatusCallbackUrl()).toBe(
+      "https://whatsapp.example.com/api/webhooks/whatsapp/status",
+    );
+  });
+
+  it("falls back to PUBLIC_API_URL when WHATSAPP_PUBLIC_BASE_URL is unset", async () => {
+    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "");
+    vi.stubEnv("PUBLIC_API_URL", "https://fallback.example.com");
+    vi.resetModules();
+    const mod = await import("../src/config/whatsapp.js");
+    expect(mod.whatsappStatusCallbackUrl()).toBe(
+      "https://fallback.example.com/api/webhooks/whatsapp/status",
+    );
+  });
+
+  it("returns undefined (never a localhost callback) when only PUBLIC_API_URL is localhost", async () => {
+    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "");
+    vi.stubEnv("PUBLIC_API_URL", "http://localhost:4000");
+    vi.resetModules();
+    const mod = await import("../src/config/whatsapp.js");
+    expect(mod.whatsappStatusCallbackUrl()).toBeUndefined();
+  });
+
+  it("returns undefined when WHATSAPP_PUBLIC_BASE_URL is itself localhost, even if set", async () => {
+    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "http://127.0.0.1:4000");
+    vi.resetModules();
+    const mod = await import("../src/config/whatsapp.js");
+    expect(mod.whatsappStatusCallbackUrl()).toBeUndefined();
+  });
+
+  it("returns undefined when neither var is set", async () => {
+    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "");
+    // env.ts's schema requires PUBLIC_API_URL to be a *valid* URL when present
+    // (its default only applies when the key is absent), so simulate "unset"
+    // by deleting it rather than stubbing "" — dotenv then refills it from the
+    // real .env's own localhost default, which is exactly the case under test.
+    delete process.env.PUBLIC_API_URL;
+    vi.resetModules();
+    const mod = await import("../src/config/whatsapp.js");
+    expect(mod.whatsappStatusCallbackUrl()).toBeUndefined();
   });
 });
