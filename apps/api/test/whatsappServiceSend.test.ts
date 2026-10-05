@@ -228,11 +228,12 @@ describe("sendMediaMessage", () => {
     expect((sentBody().audio as Record<string, unknown>).caption).toBeUndefined();
   });
 
-  it("requires exactly one of mediaId or link", () => {
-    expect(() => sendMediaMessage({ to: "91", mediaType: "image" })).toThrow(WhatsAppSendError);
-    expect(() =>
+  it("requires exactly one of mediaId or link", async () => {
+    await expect(sendMediaMessage({ to: "91", mediaType: "image" })).rejects.toBeInstanceOf(WhatsAppSendError);
+    await expect(
       sendMediaMessage({ to: "91", mediaType: "image", mediaId: "a", link: "https://x" }),
-    ).toThrow(WhatsAppSendError);
+    ).rejects.toBeInstanceOf(WhatsAppSendError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

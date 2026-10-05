@@ -35,7 +35,7 @@ export class WhatsAppSendError extends Error {
 
 // Graph / WhatsApp error codes Meta documents as temporary (rate limits,
 // throttling, service unavailable) — worth retrying later.
-const RETRYABLE_CODES = new Set([1, 2, 4, 17, 341, 80007, 130429, 131000, 131016, 131048, 133004]);
+const RETRYABLE_CODES = new Set([1, 2, 4, 17, 341, 80007, 130429, 131000, 131016, 131048, 131056, 133004]);
 
 /** Meta wants the recipient as digits with country code and no "+". */
 export function toRecipient(value: string): string {
@@ -175,7 +175,7 @@ export type WhatsAppMediaType = "image" | "video" | "audio" | "document" | "stic
  * Media by an uploaded Meta media id, or by a public HTTPS link. Captions are
  * supported for image/video/document only; filename for document only.
  */
-export function sendMediaMessage(input: {
+export async function sendMediaMessage(input: {
   to: string;
   mediaType: WhatsAppMediaType;
   mediaId?: string;

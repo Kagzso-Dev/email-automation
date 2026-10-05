@@ -4,18 +4,45 @@
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { pickDelayMs } from "../domain/whatsappSend.js";
+import { normalizeWhatsAppPhone } from "../domain/whatsappPhone.js";
+import { whatsappConfig } from "../config/whatsapp.js";
 import { bodyComponentsFromVariables, sendTemplateMessage, WhatsAppSendError } from "../services/whatsapp.js";
 import { DeferJobError } from "./engine.js";
 import type { WhatsAppBulkSendJob } from "./queues.js";
 
+const DELIVERED_STATUSES = ["SENT", "DELIVERED", "READ"] as const;
+
 /**
- * Lead-generation flow: delete every recipient this batch targeted. `purge.ids`
- * are whatsapp_contacts ids or email contacts ids depending on the send source
- * (resolved at batch creation). WhatsAppSend.whatsappContactId is onDelete:
- * SetNull, and EmailLog on a contact has no cascade so it's cleared first.
+ * Lead-generation flow: delete the recipients this batch actually reached.
+ * `purge.ids` are whatsapp_contacts ids or email contacts ids depending on the
+ * send source (resolved at batch creation). Recipients whose message failed or
+ * was skipped are kept, so a misconfigured template never costs contacts and
+ * they can be retried. WhatsAppSend.whatsappContactId is onDelete: SetNull, and
+ * EmailLog on a contact has no cascade so it's cleared first.
  */
-async function purgeBatchContacts(purge: { table: "whatsapp" | "contact"; ids: string[] }): Promise<number> {
-  const ids = [...new Set(purge.ids)];
+async function purgeBatchContacts(
+  batchId: string,
+  purge: { table: "whatsapp" | "contact"; ids: string[] },
+): Promise<number> {
+  const sent = await prisma.whatsAppSend.findMany({
+    where: { batchId, status: { in: [...DELIVERED_STATUSES] } },
+    select: { whatsappContactId: true, phone: true },
+  });
+  let ids = [...new Set(purge.ids)];
+  if (purge.table === "whatsapp") {
+    const reached = new Set(sent.map((s) => s.whatsappContactId).filter(Boolean));
+    ids = ids.filter((id) => reached.has(id));
+  } else {
+    // Email-contact sends only snapshot the phone, so match on that.
+    const reachedPhones = new Set(sent.map((s) => s.phone));
+    const rows = await prisma.contact.findMany({ where: { id: { in: ids } }, select: { id: true, phone: true } });
+    ids = rows
+      .filter((r) => {
+        const phone = r.phone ? normalizeWhatsAppPhone(r.phone, whatsappConfig.defaultCountryCode) : null;
+        return phone !== null && reachedPhones.has(phone);
+      })
+      .map((r) => r.id);
+  }
   if (ids.length === 0) return 0;
   if (purge.table === "whatsapp") {
     const { count } = await prisma.whatsAppContact.deleteMany({ where: { id: { in: ids } } });
@@ -45,8 +72,8 @@ async function finish(
   for (const r of rows) counts[r.status] = r._count._all;
   logger.info({ batchId, ...counts }, "whatsapp drip batch complete");
   if (purge) {
-    const removed = await purgeBatchContacts(purge);
-    logger.info({ batchId, removed, table: purge.table }, "whatsapp drip batch purged its contacts");
+    const removed = await purgeBatchContacts(batchId, purge);
+    logger.info({ batchId, removed, table: purge.table }, "whatsapp drip batch purged the contacts it reached");
   }
   return counts;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildContentVariables,
+  missingTemplateVariables,
   buildWhatsAppVars,
   pickDelayMs,
   renderWhatsAppBody,
@@ -62,5 +63,18 @@ describe("pickDelayMs", () => {
       expect(ms).toBeGreaterThanOrEqual(8000);
       expect(ms).toBeLessThanOrEqual(25000);
     }
+  });
+});
+
+describe("missingTemplateVariables", () => {
+  it("lists declared variables that are empty or blank for the recipient", () => {
+    expect(
+      missingTemplateVariables({ variables: ["first_name", "business_name", "city"] }, { first_name: "Ada", business_name: "  " }),
+    ).toEqual(["business_name", "city"]);
+  });
+
+  it("is empty when every declared variable has a value", () => {
+    expect(missingTemplateVariables({ variables: ["first_name"] }, { first_name: "Ada" })).toEqual([]);
+    expect(missingTemplateVariables({ variables: [] }, {})).toEqual([]);
   });
 });

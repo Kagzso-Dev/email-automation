@@ -63,6 +63,19 @@ export function buildContentVariables(
   return out;
 }
 
+/**
+ * Declared template variables that resolve to an empty value for this
+ * recipient. Meta rejects a template send with an empty parameter, so such a
+ * recipient is skipped up front instead of failing at send time.
+ */
+export function missingTemplateVariables(
+  template: Pick<WhatsAppTemplate, "variables">,
+  vars: Record<string, string>,
+): string[] {
+  const declared = Array.isArray(template.variables) ? (template.variables as string[]) : [];
+  return declared.filter((name) => !(vars[name] ?? "").trim());
+}
+
 export interface WhatsAppRecipient {
   whatsappContactId?: string | null;
   /** Raw phone — normalised here. */
@@ -123,6 +136,16 @@ export async function createWhatsAppSendBatch(args: {
     seen.add(phone);
     if (r.status && r.status !== "ACTIVE") {
       items.push({ ...base, phone, status: "SKIPPED", error: `contact is ${r.status.toLowerCase()}` });
+      continue;
+    }
+    const missing = missingTemplateVariables(template, vars);
+    if (missing.length) {
+      items.push({
+        ...base,
+        phone,
+        status: "SKIPPED",
+        error: `no value for ${missing.map((m) => `{{${m}}}`).join(", ")} — WhatsApp templates can't send an empty variable`,
+      });
       continue;
     }
     items.push({ ...base, phone, status: "QUEUED", error: null });

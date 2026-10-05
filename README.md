@@ -102,3 +102,23 @@ assembles the connection string Prisma needs, and the `prisma:*` npm scripts pas
 run those rather than bare `npx prisma`. Setting `DATABASE_URL` directly still works and overrides
 the parts. Other key knobs: `EMAIL_PROVIDER`, `SEND_RATE_PER_SEC`, `SEND_DAILY_CAP`,
 `SEND_MAX_ATTEMPTS`, `SCHEDULER_TIMEZONE`.
+
+## WhatsApp (Meta WhatsApp Cloud API)
+
+WhatsApp is isolated from email — its own tables, config (`apps/api/src/config/whatsapp.ts`) and
+`META_WHATSAPP_*` variables; leaving them blank only disables WhatsApp. To go live:
+
+1. In Meta Business: a WhatsApp Business Account with a phone number registered on the Cloud API,
+   and a system-user **permanent** access token with `whatsapp_business_messaging`.
+2. Set `META_WHATSAPP_ACCESS_TOKEN`, `META_WHATSAPP_PHONE_NUMBER_ID`, `META_WHATSAPP_WABA_ID`,
+   `META_WHATSAPP_APP_SECRET` and a random `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN` (or enter them under
+   Settings → WhatsApp and press **Test connection**).
+3. In the Meta app → WhatsApp → Configuration, set the callback URL to
+   `https://<public API host>/api/webhooks/whatsapp` with the same verify token, and subscribe to
+   the `messages` field. The webhook rejects any request without a valid `X-Hub-Signature-256`.
+4. Register each approved template on the WhatsApp Templates page by its exact Meta name and
+   language. Template variables map to the positional body parameters `{{1}}`, `{{2}}`, ….
+
+Smoke test from the repo root: `npx tsx apps/api/scripts/whatsapp-test-send.ts --check`, then
+`--to 91XXXXXXXXXX --template <name> --lang <code>`. Delivery/read/failed statuses and replies arrive
+on the webhook; replies are listed at `GET /api/whatsapp/inbound`.

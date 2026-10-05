@@ -17,6 +17,8 @@ export interface WhatsAppRecipient {
 interface WhatsAppTemplate {
   id: string;
   name: string;
+  /** Null until the Meta template name is set on the WhatsApp Templates page. */
+  providerTemplateName: string | null;
   variables: string[];
   buttonLabels: string[];
 }
@@ -87,7 +89,7 @@ function SendBody({
     onSuccess: () => {
       toast.success("WhatsApp send started", [
         "Track progress on the Send Queue page (WhatsApp tab).",
-        ...(purgeAfter ? ["These contacts will be deleted once the batch finishes."] : []),
+        ...(purgeAfter ? ["Contacts the message reaches will be deleted once the batch finishes."] : []),
       ]);
       onSelectionConsumed?.();
       onClose();
@@ -118,8 +120,8 @@ function SendBody({
       >
         <option value="">Select…</option>
         {templates.data?.items.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name}
+          <option key={t.id} value={t.id} disabled={!t.providerTemplateName}>
+            {t.providerTemplateName ? t.name : `${t.name} — needs Meta template name`}
           </option>
         ))}
       </select>
@@ -140,8 +142,8 @@ function SendBody({
         <span>
           Remove these contacts after the batch finishes
           <span className="block text-xs text-slate-550">
-            For lead-generation blasts — deletes all {recipients.length} recipient
-            {recipients.length === 1 ? "" : "s"} once every message is done.
+            For lead-generation blasts — once every message is done, deletes the recipients the
+            message was sent to. Failed or skipped recipients are kept so you can retry them.
           </span>
         </span>
       </label>
