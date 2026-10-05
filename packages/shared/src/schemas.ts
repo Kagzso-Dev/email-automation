@@ -389,20 +389,35 @@ export const listWhatsAppContactsQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
 
-/** Twilio Content template. The SID is created in the Twilio console. */
-export const createWhatsAppTemplateInput = z.object({
+const whatsAppLanguageCode = z
+  .string()
+  .trim()
+  .regex(/^[a-z]{2,3}(_[A-Za-z]{2,4})?$/, "Enter a Meta template language code, e.g. en or en_US");
+
+/**
+ * Meta-approved message template. The template itself is created and approved
+ * in WhatsApp Manager; it is registered here by its exact name + language.
+ */
+const whatsAppTemplateFields = z.object({
   name: z.string().min(1).max(160),
-  contentSid: z
+  providerTemplateName: z
     .string()
     .trim()
-    .regex(/^HX[0-9a-fA-F]{32}$/, "Enter a valid Twilio Content SID (HX…)"),
+    .regex(/^[a-z0-9_]{1,512}$/, "Enter the exact Meta template name (lowercase letters, digits, underscores)"),
+  languageCode: whatsAppLanguageCode,
   body: z.string().min(1).max(4000),
   variables: z.array(z.string().min(1).max(60)).max(20).default([]),
   buttonLabels: z.array(z.string().min(1).max(40)).max(3).default([]),
 });
+
+export const createWhatsAppTemplateInput = whatsAppTemplateFields.extend({
+  languageCode: whatsAppLanguageCode.default("en"),
+});
 export type CreateWhatsAppTemplateInput = z.infer<typeof createWhatsAppTemplateInput>;
 
-export const updateWhatsAppTemplateInput = createWhatsAppTemplateInput.partial();
+// Built from the default-free fields so an omitted languageCode on update
+// leaves the stored value alone instead of resetting it to "en".
+export const updateWhatsAppTemplateInput = whatsAppTemplateFields.partial();
 
 /**
  * Bulk WhatsApp send. `source` picks the recipient table: "whatsapp" resolves
@@ -418,17 +433,28 @@ export const sendWhatsAppBulkInput = z.object({
 });
 export type SendWhatsAppBulkInput = z.infer<typeof sendWhatsAppBulkInput>;
 
+const metaNumericId = z.string().trim().regex(/^\d{0,32}$/, "Digits only");
+
 /**
- * Twilio credentials entered from the Settings page, saved as a DB override on
- * top of .env. Every field is optional and independent: omit a field to leave
- * it unchanged, or send "" to clear that override and fall back to .env.
+ * Meta WhatsApp Cloud API credentials entered from the Settings page, saved as
+ * a DB override on top of .env. Every field is optional and independent: omit
+ * a field to leave it unchanged, or send "" to clear that override and fall
+ * back to .env.
  */
 export const whatsAppCredentialsInput = z.object({
-  accountSid: z.string().trim().max(64).optional(),
-  authToken: z.string().trim().max(128).optional(),
-  from: z.string().trim().max(40).optional(),
+  accessToken: z.string().trim().max(1024).optional(),
+  phoneNumberId: metaNumericId.optional(),
+  wabaId: metaNumericId.optional(),
+  appSecret: z.string().trim().max(128).optional(),
+  webhookVerifyToken: z.string().trim().max(256).optional(),
 });
 export type WhatsAppCredentialsInput = z.infer<typeof whatsAppCredentialsInput>;
+
+export const listWhatsAppInboundQuery = z.object({
+  phone: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(50),
+});
 
 /* ------------------------------------------------------------------ helpers */
 

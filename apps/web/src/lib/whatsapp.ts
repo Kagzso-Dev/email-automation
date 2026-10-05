@@ -3,10 +3,11 @@ import { api } from "./api";
 
 export interface WhatsAppConfig {
   configured: boolean;
-  from: string | null;
+  provider: string;
+  phoneNumberId: string | null;
 }
 
-/** Whether the Twilio WhatsApp credentials are set — gates the send buttons. */
+/** Whether the Meta WhatsApp Cloud API credentials are set — gates the send buttons. */
 export function useWhatsAppConfig() {
   return useQuery({
     queryKey: ["whatsapp-config"],

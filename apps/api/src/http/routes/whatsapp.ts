@@ -5,6 +5,7 @@ import {
   createWhatsAppTemplateInput,
   idParam,
   listWhatsAppContactsQuery,
+  listWhatsAppInboundQuery,
   sendBatchHistoryQuery,
   sendWhatsAppBulkInput,
   updateWhatsAppContactInput,
@@ -15,10 +16,10 @@ import { prisma } from "../../prisma.js";
 import { whatsappConfig } from "../../config/whatsapp.js";
 import {
   clearWhatsAppCredentials,
-  getWhatsAppCredentials,
   getWhatsAppCredentialsView,
   setWhatsAppCredentials,
 } from "../../domain/whatsappCredentials.js";
+import { getPhoneNumberInfo } from "../../services/whatsapp.js";
 import { formatFromFilename, parseWhatsAppContactFile } from "../../domain/whatsappImport.js";
 import {
   createWhatsAppSendBatch,
@@ -38,13 +39,14 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 whatsappRouter.get(
   "/config",
   wrap(async (_req, res) => {
-    const { configured, from } = await getWhatsAppCredentialsView();
-    res.json({ configured, from });
+    const { configured, provider, phoneNumberId } = await getWhatsAppCredentialsView();
+    res.json({ configured, provider, phoneNumberId });
   }),
 );
 
-// Admin-only: view/set the Twilio credentials from the Settings page. The
-// auth token is write-only — it's never sent back to the browser once saved.
+// Admin-only: view/set the Meta Cloud API credentials from the Settings page.
+// The access token, app secret and verify token are write-only — they're never
+// sent back to the browser once saved.
 whatsappRouter.get(
   "/credentials",
   requireRole("ADMIN"),
@@ -67,6 +69,20 @@ whatsappRouter.delete(
   requireRole("ADMIN"),
   wrap(async (_req, res) => {
     res.json(await clearWhatsAppCredentials());
+  }),
+);
+
+// Admin-only: call the Graph API with the current credentials and report the
+// sender number they resolve to — a live "are these right?" check.
+whatsappRouter.get(
+  "/credentials/check",
+  requireRole("ADMIN"),
+  wrap(async (_req, res) => {
+    try {
+      res.json({ ok: true, phoneNumber: await getPhoneNumberInfo() });
+    } catch (err) {
+      res.json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
   }),
 );
 
@@ -235,6 +251,11 @@ whatsappRouter.post(
     }
     const template = await prisma.whatsAppTemplate.findUnique({ where: { id: templateId } });
     if (!template) throw badRequest("templateId does not exist");
+    if (!template.providerTemplateName) {
+      throw badRequest(
+        `Template "${template.name}" has no Meta template name — set it on the WhatsApp Templates page first`,
+      );
+    }
 
     let recipients;
     if (source === "whatsapp") {
@@ -295,5 +316,43 @@ whatsappRouter.get(
     const view = await getWhatsAppBatchView(req.params.id);
     if (!view) throw notFound("WhatsApp send batch");
     res.json(view);
+  }),
+);
+
+/* ---------------------------------------------------------------- inbound */
+
+// Messages recipients sent us, as received by the Meta webhook. Newest first.
+whatsappRouter.get(
+  "/inbound",
+  wrap(async (req, res) => {
+    const q = listWhatsAppInboundQuery.parse(req.query);
+    const phone = q.phone?.replace(/[^\d]/g, "");
+    const where = phone ? { phone } : {};
+    const [items, total] = await Promise.all([
+      prisma.whatsAppInboundMessage.findMany({
+        where,
+        orderBy: { sentAt: "desc" },
+        skip: (q.page - 1) * q.pageSize,
+        take: q.pageSize,
+        select: {
+          id: true,
+          provider: true,
+          providerMessageId: true,
+          phone: true,
+          profileName: true,
+          whatsappContactId: true,
+          messageType: true,
+          body: true,
+          mediaId: true,
+          mediaMimeType: true,
+          replyPayload: true,
+          contextMessageId: true,
+          sentAt: true,
+          createdAt: true,
+        },
+      }),
+      prisma.whatsAppInboundMessage.count({ where }),
+    ]);
+    res.json({ items, total, page: q.page, pageSize: q.pageSize });
   }),
 );

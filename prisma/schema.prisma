@@ -326,17 +326,25 @@ model WhatsAppContact {
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
   sends        WhatsAppSend[]
+  inbound      WhatsAppInboundMessage[]
 
   @@map("whatsapp_contacts")
 }
 
 model WhatsAppTemplate {
-  id           String              @id @default(cuid())
-  name         String
-  contentSid   String              // Twilio Content SID (HX…), created in the Twilio console
-  body         String              @db.Text // preview text with {{first_name}} etc.
-  variables    Json                // ordered string[] → Twilio positional {{1}}, {{2}}
-  buttonLabels Json                // string[] e.g. ["Interested", "Not Interested"]
+  id                   String              @id @default(cuid())
+  name                 String // display name in this app
+  // Exact name of the Meta-approved message template (WhatsApp Manager →
+  // Message templates). Null on templates registered before the move to the
+  // Meta Cloud API — they must be given one before they can be sent.
+  providerTemplateName String?             @db.VarChar(512)
+  languageCode         String              @default("en") @db.VarChar(16) // Meta template language, e.g. en, en_US
+  // Pre-Meta provider template id (Twilio Content SID, HX…). Kept read-only so
+  // existing rows aren't lost; nothing sends with it any more.
+  legacyContentSid     String?             @map("contentSid")
+  body                 String              @db.Text // preview text with {{first_name}} etc.
+  variables            Json                // ordered string[] → positional template params {{1}}, {{2}}
+  buttonLabels         Json                // string[] e.g. ["Interested", "Not Interested"]
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   batches      WhatsAppSendBatch[]
@@ -393,9 +401,11 @@ model WhatsAppSend {
   name              String? // snapshot "First Last"
   businessName      String? // snapshot
   body              String             @db.Text // rendered preview snapshot
-  contentVariables  Json? // resolved Twilio positional vars, snapshotted at batch creation
+  contentVariables  Json? // resolved positional template params ({"1": "Ada"}), snapshotted at batch creation
   status            WhatsAppSendStatus @default(QUEUED)
-  providerMessageId String?
+  provider          String             @default("meta") @db.VarChar(16) // who actually sent it
+  providerMessageId String? // Meta message id (wamid.…)
+  errorCode         String?            @db.VarChar(32)
   error             String?            @db.Text
   sentAt            DateTime?
   deliveredAt       DateTime?
@@ -407,7 +417,34 @@ model WhatsAppSend {
   contact           WhatsAppContact?   @relation(fields: [whatsappContactId], references: [id], onDelete: SetNull)
 
   @@index([batchId, status])
+  @@index([providerMessageId])
   @@map("whatsapp_sends")
+}
+
+// A message a recipient sent to our WhatsApp number, received through the Meta
+// webhook (POST /api/webhooks/whatsapp). Unique on providerMessageId so Meta's
+// redelivery of the same event is a no-op.
+model WhatsAppInboundMessage {
+  id                String           @id @default(cuid())
+  provider          String           @default("meta") @db.VarChar(16)
+  providerMessageId String           @unique // Meta message id (wamid.…)
+  phone             String           @db.VarChar(32) // sender, digits with country code
+  profileName       String? // sender's WhatsApp profile name
+  whatsappContactId String?
+  messageType       String           @db.VarChar(32) // text, image, button, interactive, …
+  body              String?          @db.Text // text body, media caption or reply title
+  mediaId           String? // Meta media id — fetch via the Graph API
+  mediaMimeType     String?
+  replyPayload      String?          @db.Text // quick-reply button payload / interactive reply id
+  contextMessageId  String? // id of our outbound message this replies to
+  sentAt            DateTime // Meta's timestamp for the message
+  raw               Json
+  createdAt         DateTime         @default(now())
+  contact           WhatsAppContact? @relation(fields: [whatsappContactId], references: [id], onDelete: SetNull)
+
+  @@index([phone])
+  @@index([contextMessageId])
+  @@map("whatsapp_inbound_messages")
 }
 
 // ---------------------------------------------------------------- job queue (MySQL-backed)

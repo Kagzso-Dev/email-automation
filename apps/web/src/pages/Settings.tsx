@@ -258,7 +258,8 @@ function SenderSection() {
 function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
   const { data, isLoading } = useQuery({
     queryKey: ["whatsapp-config"],
-    queryFn: () => api<{ configured: boolean; from: string | null }>("/api/whatsapp/config"),
+    queryFn: () =>
+      api<{ configured: boolean; provider: string; phoneNumberId: string | null }>("/api/whatsapp/config"),
   });
 
   return (
@@ -269,16 +270,23 @@ function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
           <Spinner />
         ) : data.configured ? (
           <p className="rounded-lg bg-[#e7f1ec] p-3 text-ok">
-            Connected — sending WhatsApp messages from{" "}
-            <code className={code}>{data.from}</code> via Twilio.
+            Connected — sending WhatsApp messages through the Meta WhatsApp Cloud API from phone
+            number ID <code className={code}>{data.phoneNumberId}</code>.
           </p>
         ) : (
           <p className="rounded-lg bg-[#f8f0e1] p-3 text-warn">
-            Not configured — fill in the Twilio Account SID, Auth Token and From number below to
-            enable the “Send message” buttons. This is fully separate from email — leaving it blank
-            has no effect on email sending.
+            Not configured — fill in the Meta access token and phone number ID below to enable the
+            “Send message” buttons. This is fully separate from email — leaving it blank has no
+            effect on email sending.
           </p>
         )}
+        <p className="text-slate-550">
+          Delivery receipts and replies arrive on the webhook{" "}
+          <code className={code}>/api/webhooks/whatsapp</code> — set{" "}
+          <code className={code}>https://&lt;your public API host&gt;/api/webhooks/whatsapp</code> as
+          the callback URL in your Meta app (WhatsApp → Configuration), with the same verify token
+          as below, and subscribe to the <code className={code}>messages</code> field.
+        </p>
         <p className="text-slate-550">
           WhatsApp contacts, templates and sends are stored separately from email and never touch
           Contacts, Templates or Campaigns.
@@ -295,17 +303,39 @@ function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
 }
 
 interface WhatsAppCredentialsView {
-  accountSid: string | null;
-  from: string | null;
-  hasAuthToken: boolean;
+  provider: string;
+  graphApiVersion: string;
+  phoneNumberId: string | null;
+  wabaId: string | null;
+  hasAccessToken: boolean;
+  hasAppSecret: boolean;
+  hasWebhookVerifyToken: boolean;
   configured: boolean;
+  webhookConfigured: boolean;
   source: "database" | "environment";
 }
 
+type ConnectionCheck =
+  | {
+      ok: true;
+      phoneNumber: { id: string; displayPhoneNumber?: string; verifiedName?: string; qualityRating?: string };
+    }
+  | { ok: false; error: string };
+
+type SecretField = "accessToken" | "appSecret" | "webhookVerifyToken";
+
+const SECRET_FIELDS: { key: SecretField; label: string; has: "hasAccessToken" | "hasAppSecret" | "hasWebhookVerifyToken" }[] = [
+  { key: "accessToken", label: "Access token (system user, permanent)", has: "hasAccessToken" },
+  { key: "appSecret", label: "App secret (verifies webhook signatures)", has: "hasAppSecret" },
+  { key: "webhookVerifyToken", label: "Webhook verify token", has: "hasWebhookVerifyToken" },
+];
+
+const BLANK_SECRETS: Record<SecretField, string> = { accessToken: "", appSecret: "", webhookVerifyToken: "" };
+
 /**
- * Twilio credentials, editable here instead of via .env + restart. Saved to
- * the DB (Setting table) as an override on top of .env — the auth token is
- * write-only, it's never sent back to the browser once saved.
+ * Meta WhatsApp Cloud API credentials, editable here instead of via .env +
+ * restart. Saved to the DB (Setting table) as an override on top of .env — the
+ * secrets are write-only, they're never sent back to the browser once saved.
  */
 function WhatsAppCredentialsForm() {
   const qc = useQueryClient();
@@ -314,50 +344,55 @@ function WhatsAppCredentialsForm() {
     queryFn: () => api<WhatsAppCredentialsView>("/api/whatsapp/credentials"),
   });
 
-  const [accountSid, setAccountSid] = useState("");
-  const [authToken, setAuthToken] = useState("");
-  const [from, setFrom] = useState("");
+  const [phoneNumberId, setPhoneNumberId] = useState("");
+  const [wabaId, setWabaId] = useState("");
+  const [secrets, setSecrets] = useState(BLANK_SECRETS);
   const [dirty, setDirty] = useState(false);
 
   // Seed the visible fields from the server once (or when it changes from
-  // elsewhere) — the auth token field always starts blank since it's write-only.
+  // elsewhere) — secret fields always start blank since they're write-only.
   useEffect(() => {
     if (data) {
-      setAccountSid(data.accountSid ?? "");
-      setFrom(data.from ?? "");
-      setAuthToken("");
+      setPhoneNumberId(data.phoneNumberId ?? "");
+      setWabaId(data.wabaId ?? "");
+      setSecrets(BLANK_SECRETS);
       setDirty(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.accountSid, data?.from]);
+  }, [data?.phoneNumberId, data?.wabaId]);
+
+  const check = useMutation({
+    mutationFn: () => api<ConnectionCheck>("/api/whatsapp/credentials/check"),
+  });
+
+  const onSaved = (v: WhatsAppCredentialsView) => {
+    qc.setQueryData(["whatsapp-credentials"], v);
+    qc.invalidateQueries({ queryKey: ["whatsapp-config"] });
+    setSecrets(BLANK_SECRETS);
+    setDirty(false);
+    check.reset();
+  };
 
   const save = useMutation({
-    mutationFn: () =>
-      api<WhatsAppCredentialsView>("/api/whatsapp/credentials", {
+    mutationFn: () => {
+      // Only send a secret if the admin actually typed a new one — an
+      // untouched, still-blank field must not wipe out a saved value.
+      const typed = Object.fromEntries(Object.entries(secrets).filter(([, v]) => v));
+      return api<WhatsAppCredentialsView>("/api/whatsapp/credentials", {
         method: "PUT",
-        // Only send the auth token if the admin actually typed a new one —
-        // an untouched, still-blank field must not wipe out a saved token.
-        json: { accountSid, from, ...(authToken ? { authToken } : {}) },
-      }),
-    onSuccess: (v) => {
-      qc.setQueryData(["whatsapp-credentials"], v);
-      qc.invalidateQueries({ queryKey: ["whatsapp-config"] });
-      setAuthToken("");
-      setDirty(false);
+        json: { phoneNumberId, wabaId, ...typed },
+      });
     },
+    onSuccess: onSaved,
   });
 
   const reset = useMutation({
     mutationFn: () => api<WhatsAppCredentialsView>("/api/whatsapp/credentials", { method: "DELETE" }),
-    onSuccess: (v) => {
-      qc.setQueryData(["whatsapp-credentials"], v);
-      qc.invalidateQueries({ queryKey: ["whatsapp-config"] });
-      setAuthToken("");
-      setDirty(false);
-    },
+    onSuccess: onSaved,
   });
 
   if (isLoading || !data) return <div className="card mt-3"><Spinner /></div>;
+  const busy = save.isPending || reset.isPending;
 
   return (
     <form
@@ -370,66 +405,97 @@ function WhatsAppCredentialsForm() {
       <p className="text-xs text-slate-550">
         {data.source === "database"
           ? "Using credentials saved here — they take priority over .env."
-          : "Using credentials from .env — save below to override them without a restart."}
+          : "Using credentials from .env — save below to override them without a restart."}{" "}
+        Graph API {data.graphApiVersion}.
       </p>
 
-      <div>
-        <label className="label">Account SID</label>
-        <input
-          className="input font-mono text-xs"
-          value={accountSid}
-          placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-          disabled={save.isPending || reset.isPending}
-          onChange={(e) => {
-            setAccountSid(e.target.value);
-            setDirty(true);
-          }}
-        />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">Phone number ID</label>
+          <input
+            className="input font-mono text-xs"
+            value={phoneNumberId}
+            inputMode="numeric"
+            placeholder="e.g. 106540352242922"
+            disabled={busy}
+            onChange={(e) => {
+              setPhoneNumberId(e.target.value);
+              setDirty(true);
+            }}
+          />
+        </div>
+        <div>
+          <label className="label">WhatsApp Business Account ID</label>
+          <input
+            className="input font-mono text-xs"
+            value={wabaId}
+            inputMode="numeric"
+            placeholder="e.g. 102290129340398"
+            disabled={busy}
+            onChange={(e) => {
+              setWabaId(e.target.value);
+              setDirty(true);
+            }}
+          />
+        </div>
       </div>
 
-      <div>
-        <label className="label">Auth Token</label>
-        <input
-          className="input font-mono text-xs"
-          type="password"
-          value={authToken}
-          placeholder={data.hasAuthToken ? "•••••••••••••••• (unchanged — type to replace)" : "Not set"}
-          disabled={save.isPending || reset.isPending}
-          onChange={(e) => {
-            setAuthToken(e.target.value);
-            setDirty(true);
-          }}
-        />
-      </div>
+      {SECRET_FIELDS.map((f) => (
+        <div key={f.key}>
+          <label className="label">{f.label}</label>
+          <input
+            className="input font-mono text-xs"
+            type="password"
+            autoComplete="off"
+            value={secrets[f.key]}
+            placeholder={data[f.has] ? "•••••••••••••••• (unchanged — type to replace)" : "Not set"}
+            disabled={busy}
+            onChange={(e) => {
+              setSecrets({ ...secrets, [f.key]: e.target.value });
+              setDirty(true);
+            }}
+          />
+        </div>
+      ))}
 
-      <div>
-        <label className="label">From (Twilio WhatsApp sender)</label>
-        <input
-          className="input font-mono text-xs"
-          value={from}
-          placeholder="whatsapp:+14155238886"
-          disabled={save.isPending || reset.isPending}
-          onChange={(e) => {
-            setFrom(e.target.value);
-            setDirty(true);
-          }}
-        />
-      </div>
+      {!data.webhookConfigured && (
+        <p className="text-xs text-warn">
+          Set the app secret and webhook verify token to receive delivery receipts and replies —
+          the webhook rejects every request until both are set.
+        </p>
+      )}
 
       {save.error && <ErrorNote error={save.error} />}
       {reset.error && <ErrorNote error={reset.error} />}
+      {check.error && <ErrorNote error={check.error} />}
+      {check.data &&
+        (check.data.ok ? (
+          <p className="rounded-lg bg-[#e7f1ec] p-3 text-xs text-ok">
+            Connection OK — {check.data.phoneNumber.displayPhoneNumber ?? check.data.phoneNumber.id}
+            {check.data.phoneNumber.verifiedName ? ` (${check.data.phoneNumber.verifiedName})` : ""}
+            {check.data.phoneNumber.qualityRating ? `, quality ${check.data.phoneNumber.qualityRating}` : ""}.
+          </p>
+        ) : (
+          <p className="rounded-lg bg-[#f8f0e1] p-3 text-xs text-warn">
+            Connection failed — {check.data.error}
+          </p>
+        ))}
 
-      <div className="flex items-center gap-3">
-        <button className="btn-primary" disabled={!dirty || save.isPending || reset.isPending}>
+      <div className="flex flex-wrap items-center gap-3">
+        <button className="btn-primary" disabled={!dirty || busy}>
           {save.isPending ? "Saving…" : "Save"}
         </button>
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={dirty || busy || check.isPending || !data.configured}
+          title={dirty ? "Save first" : undefined}
+          onClick={() => check.mutate()}
+        >
+          {check.isPending ? "Checking…" : "Test connection"}
+        </button>
         {data.source === "database" && (
-          <button
-            type="button"
-            className="btn-ghost"
-            disabled={save.isPending || reset.isPending}
-            onClick={() => reset.mutate()}
-          >
+          <button type="button" className="btn-ghost" disabled={busy} onClick={() => reset.mutate()}>
             {reset.isPending ? "Resetting…" : "Reset to .env values"}
           </button>
         )}

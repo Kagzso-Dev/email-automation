@@ -3,6 +3,7 @@ import {
   createWhatsAppContactInput,
   createWhatsAppTemplateInput,
   sendWhatsAppBulkInput,
+  updateWhatsAppTemplateInput,
 } from "@dispatch/shared";
 
 describe("createWhatsAppContactInput", () => {
@@ -25,21 +26,42 @@ describe("createWhatsAppContactInput", () => {
 });
 
 describe("createWhatsAppTemplateInput", () => {
-  it("accepts a valid Twilio Content SID", () => {
+  it("accepts a Meta template name and defaults the language to en", () => {
     const res = createWhatsAppTemplateInput.safeParse({
       name: "Lead qualify",
-      contentSid: "HX" + "a".repeat(32),
+      providerTemplateName: "kagzso_greeting_new_contact",
       body: "Hi {{first_name}}",
       variables: ["first_name"],
       buttonLabels: ["Interested", "Not Interested"],
     });
     expect(res.success).toBe(true);
+    expect(res.success && res.data.languageCode).toBe("en");
   });
 
-  it("rejects a malformed Content SID", () => {
+  it("accepts a region-qualified language code", () => {
     const res = createWhatsAppTemplateInput.safeParse({
       name: "x",
-      contentSid: "not-a-sid",
+      providerTemplateName: "hello_world",
+      languageCode: "en_US",
+      body: "hi",
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects a template name Meta wouldn't allow (uppercase, spaces)", () => {
+    const res = createWhatsAppTemplateInput.safeParse({
+      name: "x",
+      providerTemplateName: "Hello World",
+      body: "hi",
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects a malformed language code", () => {
+    const res = createWhatsAppTemplateInput.safeParse({
+      name: "x",
+      providerTemplateName: "hello_world",
+      languageCode: "English",
       body: "hi",
     });
     expect(res.success).toBe(false);
@@ -48,11 +70,18 @@ describe("createWhatsAppTemplateInput", () => {
   it("rejects more than 3 button labels", () => {
     const res = createWhatsAppTemplateInput.safeParse({
       name: "x",
-      contentSid: "HX" + "0".repeat(32),
+      providerTemplateName: "hello_world",
       body: "hi",
       buttonLabels: ["a", "b", "c", "d"],
     });
     expect(res.success).toBe(false);
+  });
+});
+
+describe("updateWhatsAppTemplateInput", () => {
+  it("does not inject a default language on a partial update", () => {
+    const res = updateWhatsAppTemplateInput.parse({ name: "renamed" });
+    expect(res.languageCode).toBeUndefined();
   });
 });
 

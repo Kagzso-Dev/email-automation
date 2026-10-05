@@ -50,7 +50,7 @@ export function renderWhatsAppBody(body: string, vars: Record<string, string>): 
   );
 }
 
-/** Map a template's declared variable names to Twilio positional content vars. */
+/** Map a template's declared variable names to positional template params ({{1}}, {{2}}, …). */
 export function buildContentVariables(
   template: Pick<WhatsAppTemplate, "variables">,
   vars: Record<string, string>,

@@ -8,7 +8,9 @@ import { useConfirm } from "../components/confirm";
 interface WTemplate {
   id: string;
   name: string;
-  contentSid: string;
+  /** Exact Meta template name; null on templates registered before the Meta migration. */
+  providerTemplateName: string | null;
+  languageCode: string;
   body: string;
   variables: string[];
   buttonLabels: string[];
@@ -38,7 +40,7 @@ export function WhatsAppTemplatesPage() {
     <div>
       <PageHeader
         title="WhatsApp Templates"
-        subtitle="Twilio Content templates with quick-reply buttons. Create the template in the Twilio console, then register its Content SID here."
+        subtitle="Meta-approved message templates with quick-reply buttons. Create and get the template approved in WhatsApp Manager, then register its exact name and language here."
         action={
           <button className="btn-primary" onClick={() => setShowNew(true)}>
             New template
@@ -58,14 +60,21 @@ export function WhatsAppTemplatesPage() {
         <ErrorNote error={query.error} />
       ) : items.length === 0 ? (
         <EmptyState icon="templates" title="No WhatsApp templates yet">
-          Register your first approved Twilio Content template to start sending.
+          Register your first approved Meta message template to start sending.
         </EmptyState>
       ) : (
-        <Table head={["Name", "Content SID", "Variables", "Buttons", "Updated", ""]}>
+        <Table head={["Name", "Meta template", "Language", "Variables", "Buttons", "Updated", ""]}>
           {items.map((t) => (
             <tr key={t.id} className="border-b border-[#f0f2f6] last:border-0">
               <td className="px-4 py-2.5 font-medium">{t.name}</td>
-              <td className="px-4 py-2.5 font-mono text-xs text-slate-550">{t.contentSid}</td>
+              <td className="px-4 py-2.5 font-mono text-xs text-slate-550">
+                {t.providerTemplateName ?? (
+                  <span title="Registered before the move to Meta — edit it and add the Meta template name to send it.">
+                    <Badge tone="warn">Needs Meta name</Badge>
+                  </span>
+                )}
+              </td>
+              <td className="px-4 py-2.5 font-mono text-xs">{t.languageCode}</td>
               <td className="px-4 py-2.5 text-xs">
                 {t.variables.length ? t.variables.join(", ") : "—"}
               </td>
@@ -147,7 +156,8 @@ function TemplateForm({ template, onClose }: { template?: WTemplate; onClose: ()
   const qc = useQueryClient();
   const [form, setForm] = useState({
     name: template?.name ?? "",
-    contentSid: template?.contentSid ?? "",
+    providerTemplateName: template?.providerTemplateName ?? "",
+    languageCode: template?.languageCode ?? "en",
     body: template?.body ?? "",
     variables: (template?.variables ?? []).join(", "),
     buttonLabels: (template?.buttonLabels ?? ["Interested", "Not Interested"]).join(", "),
@@ -163,7 +173,8 @@ function TemplateForm({ template, onClose }: { template?: WTemplate; onClose: ()
     mutationFn: () => {
       const payload = {
         name: form.name,
-        contentSid: form.contentSid.trim(),
+        providerTemplateName: form.providerTemplateName.trim(),
+        languageCode: form.languageCode.trim(),
         body: form.body,
         variables: toList(form.variables),
         buttonLabels: toList(form.buttonLabels),
@@ -193,14 +204,31 @@ function TemplateForm({ template, onClose }: { template?: WTemplate; onClose: ()
         required
       />
 
-      <label className="label">Twilio Content SID</label>
-      <input
-        className="input mb-3 font-mono text-xs"
-        value={form.contentSid}
-        onChange={(e) => setForm({ ...form, contentSid: e.target.value })}
-        placeholder="HXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        required
-      />
+      <div className="mb-1 grid grid-cols-[1fr_8rem] gap-3">
+        <div>
+          <label className="label">Meta template name</label>
+          <input
+            className="input font-mono text-xs"
+            value={form.providerTemplateName}
+            onChange={(e) => setForm({ ...form, providerTemplateName: e.target.value })}
+            placeholder="kagzso_greeting_new_contact"
+            required
+          />
+        </div>
+        <div>
+          <label className="label">Language</label>
+          <input
+            className="input font-mono text-xs"
+            value={form.languageCode}
+            onChange={(e) => setForm({ ...form, languageCode: e.target.value })}
+            placeholder="en"
+            required
+          />
+        </div>
+      </div>
+      <p className="mb-3 text-xs text-slate-550">
+        Exactly as shown in WhatsApp Manager → Message templates, and only once Meta has approved it.
+      </p>
 
       <label className="label">Body preview</label>
       <textarea
@@ -211,7 +239,7 @@ function TemplateForm({ template, onClose }: { template?: WTemplate; onClose: ()
         required
       />
       <p className="mb-3 text-xs text-slate-550">
-        Must match the approved Twilio template text. Use <code>{"{{first_name}}"}</code>,{" "}
+        Must match the approved template text. Use <code>{"{{first_name}}"}</code>,{" "}
         <code>{"{{last_name}}"}</code>, <code>{"{{business_name}}"}</code>, <code>{"{{phone}}"}</code>.
       </p>
 
@@ -223,7 +251,7 @@ function TemplateForm({ template, onClose }: { template?: WTemplate; onClose: ()
         placeholder="first_name, business_name"
       />
       <p className="mb-3 text-xs text-slate-550">
-        Maps to Twilio's positional content variables ({"{{1}}"}, {"{{2}}"}, …) in this order.
+        Maps to the template's positional body parameters ({"{{1}}"}, {"{{2}}"}, …) in this order.
       </p>
 
       <label className="label">Quick-reply button labels (comma-separated, max 3)</label>

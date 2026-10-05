@@ -1,26 +1,36 @@
-// One-off manual smoke test for the WhatsApp (Twilio) pipeline.
+// One-off manual smoke test for the WhatsApp (Meta Cloud API) pipeline.
 //
-// Exercises the real path: config/whatsapp.ts -> services/whatsapp.ts ->
-// Twilio's Messages API. Nothing here touches email code or the DB — it does
-// not go through the drip-batch queue (queue/whatsappBulkSend.ts), it just
-// calls sendWhatsAppTemplate() directly so you can watch one message succeed
-// or fail in isolation.
+// Exercises the real path: config/whatsapp.ts -> services/whatsapp.ts -> the
+// Graph API. Nothing here touches email code or writes to the DB (credentials
+// saved from the Settings page are read, though) — it does not go through the
+// drip-batch queue (queue/whatsappBulkSend.ts), it just calls the send service
+// directly so you can watch one message succeed or fail in isolation.
 //
 // Usage (from the repo root):
-//   npx tsx apps/api/scripts/whatsapp-test-send.ts --to +19995551234 --contentSid HXxxxxxxxx
-//   npx tsx apps/api/scripts/whatsapp-test-send.ts --to +19995551234 --contentSid HXxxxxxxxx --vars '{"1":"Ada"}'
+//   npx tsx apps/api/scripts/whatsapp-test-send.ts --check
+//   npx tsx apps/api/scripts/whatsapp-test-send.ts --to 919876543210 --template hello_world --lang en_US
+//   npx tsx apps/api/scripts/whatsapp-test-send.ts --to 919876543210 --template kagzso_greeting --vars '{"1":"Ada"}'
+//   npx tsx apps/api/scripts/whatsapp-test-send.ts --to 919876543210 --text "hi"
 //
-// --to         required. Your own phone, E.164 (with country code). The
-//              "whatsapp:" prefix is added for you if you omit it.
-// --contentSid required. A Twilio Content Template SID (starts with "HX"),
-//              created in Twilio Console > Messaging > Content Template
-//              Builder. In the sandbox this can be a plain "Twilio Text"
-//              template — no Meta approval needed for sandbox testing.
-// --vars       optional. JSON object mapping the template's positional slots
-//              ("1", "2", ...) to values. Defaults to {} (no placeholders).
+// --check     only call the Graph API to read the configured sender number.
+// --to        recipient, digits with country code ("+" and spaces are stripped).
+// --template  name of a Meta-approved template (WhatsApp Manager → Message
+//             templates). "hello_world" (en_US) exists on every new WABA.
+// --lang      template language code. Default: en.
+// --vars      JSON of positional body params, e.g. '{"1":"Ada","2":"Acme"}'.
+// --text      send free-form text instead — only delivered inside the 24h
+//             window after the recipient last messaged your number.
 
-import { isWhatsAppConfigured, whatsappConfig } from "../src/config/whatsapp.js";
-import { sendWhatsAppTemplate, WhatsAppSendError } from "../src/services/whatsapp.js";
+import { whatsappConfig } from "../src/config/whatsapp.js";
+import { getWhatsAppCredentials, isSendConfigured } from "../src/domain/whatsappCredentials.js";
+import {
+  bodyComponentsFromVariables,
+  getPhoneNumberInfo,
+  sendTemplateMessage,
+  sendTextMessage,
+  WhatsAppSendError,
+} from "../src/services/whatsapp.js";
+import { prisma } from "../src/prisma.js";
 
 function arg(name: string): string | undefined {
   const flag = `--${name}`;
@@ -31,46 +41,53 @@ function arg(name: string): string | undefined {
 
 function mask(v: string | undefined): string {
   if (!v) return "(empty)";
-  if (v.length <= 4) return "*".repeat(v.length);
-  return `${v.slice(0, 2)}${"*".repeat(v.length - 4)}${v.slice(-2)}`;
+  if (v.length <= 8) return "*".repeat(v.length);
+  return `${v.slice(0, 4)}…${v.slice(-4)} (${v.length} chars)`;
 }
 
 async function main() {
-  const to = arg("to");
-  const contentSid = arg("contentSid");
-  const varsRaw = arg("vars");
-
+  const creds = await getWhatsAppCredentials();
   console.log("--- WhatsApp config check ---");
   console.log({
-    apiUrl: whatsappConfig.apiUrl,
-    accountSid: mask(whatsappConfig.accountSid),
-    authToken: mask(whatsappConfig.authToken),
-    from: whatsappConfig.from ?? "(empty)",
+    provider: creds.provider,
+    graphApiVersion: creds.graphApiVersion,
+    phoneNumberId: creds.phoneNumberId ?? "(empty)",
+    wabaId: creds.wabaId ?? "(empty)",
+    accessToken: mask(creds.accessToken),
+    appSecret: creds.appSecret ? "(set)" : "(empty)",
+    webhookVerifyToken: creds.webhookVerifyToken ? "(set)" : "(empty)",
+    credentialSource: creds.source,
     defaultCountryCode: whatsappConfig.defaultCountryCode ?? "(none)",
-    minDelaySec: whatsappConfig.minDelaySec,
-    maxDelaySec: whatsappConfig.maxDelaySec,
-    configured: isWhatsAppConfigured(),
+    configured: isSendConfigured(creds),
   });
 
-  if (!isWhatsAppConfigured()) {
+  if (!isSendConfigured(creds)) {
     console.error(
-      "\nNOT CONFIGURED: WHATSAPP_ACCOUNT_SID / WHATSAPP_AUTH_TOKEN / WHATSAPP_FROM " +
-        "are missing from .env. Fill those in first — see .env.example.",
+      "\nNOT CONFIGURED: META_WHATSAPP_ACCESS_TOKEN / META_WHATSAPP_PHONE_NUMBER_ID are missing. " +
+        "Fill them in .env (see .env.example) or under Settings → WhatsApp.",
     );
     process.exit(1);
   }
 
-  if (!to || !contentSid) {
+  console.log("\n--- sender number (Graph API) ---");
+  console.log(await getPhoneNumberInfo());
+  if (process.argv.includes("--check")) return;
+
+  const to = arg("to");
+  const template = arg("template");
+  const text = arg("text");
+  if (!to || (!template && !text)) {
     console.error(
-      "\nUsage: npx tsx apps/api/scripts/whatsapp-test-send.ts --to +1XXXXXXXXXX --contentSid HXxxxx [--vars '{\"1\":\"Ada\"}']",
+      "\nUsage: npx tsx apps/api/scripts/whatsapp-test-send.ts --to 91XXXXXXXXXX (--template NAME [--lang en] [--vars '{\"1\":\"Ada\"}'] | --text \"hi\")",
     );
     process.exit(1);
   }
 
-  let contentVariables: Record<string, string> = {};
+  let vars: Record<string, string> = {};
+  const varsRaw = arg("vars");
   if (varsRaw) {
     try {
-      contentVariables = JSON.parse(varsRaw);
+      vars = JSON.parse(varsRaw);
     } catch {
       console.error("--vars must be valid JSON, e.g. '{\"1\":\"Ada\"}'");
       process.exit(1);
@@ -78,23 +95,23 @@ async function main() {
   }
 
   console.log("\n--- sending ---");
-  console.log({ to, contentSid, contentVariables });
-
-  try {
-    const result = await sendWhatsAppTemplate({ to, contentSid, contentVariables });
-    console.log("\nSUCCESS — Twilio accepted the message.");
-    console.log({ providerMessageId: result.providerMessageId });
-    console.log(
-      "\nCheck your phone. If using the sandbox, delivery only works if this " +
-        "number already joined it (see the join instructions).",
-    );
-  } catch (err) {
-    console.error("\nFAILED —", err instanceof Error ? err.message : err);
-    if (err instanceof WhatsAppSendError) {
-      console.error("retryable:", err.retryable);
-    }
-    process.exit(1);
-  }
+  const result = template
+    ? await sendTemplateMessage({
+        to,
+        templateName: template,
+        languageCode: arg("lang") ?? "en",
+        components: bodyComponentsFromVariables(vars),
+      })
+    : await sendTextMessage({ to, body: text! });
+  console.log("\nSUCCESS — Meta accepted the message.");
+  console.log({ providerMessageId: result.providerMessageId });
+  console.log("\nCheck the phone. Delivery/read receipts arrive on the webhook, not here.");
 }
 
-main();
+main()
+  .catch((err) => {
+    console.error("\nFAILED —", err instanceof Error ? err.message : err);
+    if (err instanceof WhatsAppSendError) console.error("retryable:", err.retryable, "code:", err.code);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

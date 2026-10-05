@@ -1,14 +1,15 @@
-// Applies Twilio status-callback events to the whatsapp_sends ledger. Mirrors
-// domain/tracking.ts (email) in shape, but kept separate on purpose: WhatsApp
-// send/tracking code never imports from the email tree.
+// Applies WhatsApp delivery-status events (from the Meta webhook) to the
+// whatsapp_sends ledger. Mirrors domain/tracking.ts (email) in shape, but kept
+// separate on purpose: WhatsApp send/tracking code never imports from the
+// email tree.
 
 import type { WhatsAppSendStatus } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 
-// Rank so status only ever advances. FAILED is highest — once Twilio reports a
-// message failed/undelivered, a stray out-of-order "sent"/"delivered" retry of
-// the same webhook can't downgrade it.
+// Rank so status only ever advances. FAILED is highest — once Meta reports a
+// message failed, a stray out-of-order "sent"/"delivered" redelivery of the
+// same webhook can't downgrade it.
 const RANK: Record<WhatsAppSendStatus, number> = {
   QUEUED: 0,
   SENDING: 1,
@@ -19,28 +20,27 @@ const RANK: Record<WhatsAppSendStatus, number> = {
   SKIPPED: 0,
 };
 
+export type WhatsAppStatusValue = "sent" | "delivered" | "read" | "failed";
+
 export interface WhatsAppStatusEvent {
   providerMessageId: string;
-  /** Twilio's MessageStatus value, lowercased. */
-  status: "queued" | "sending" | "sent" | "delivered" | "read" | "failed" | "undelivered";
+  /** Meta's status value. Anything else (e.g. "deleted") is ignored. */
+  status: WhatsAppStatusValue | (string & {});
+  /** When Meta says the transition happened; defaults to now. */
+  timestamp?: Date;
   errorCode?: string;
   errorMessage?: string;
 }
 
-const STATUS_MAP: Record<WhatsAppStatusEvent["status"], WhatsAppSendStatus | null> = {
-  // Twilio also reports these two, but we already set them locally the moment
-  // the send call returns / is attempted — nothing new to record.
-  queued: null,
-  sending: null,
+const STATUS_MAP: Record<WhatsAppStatusValue, WhatsAppSendStatus> = {
   sent: "SENT",
   delivered: "DELIVERED",
   read: "READ",
   failed: "FAILED",
-  undelivered: "FAILED",
 };
 
 export async function applyWhatsAppStatusEvent(ev: WhatsAppStatusEvent): Promise<void> {
-  const mapped = STATUS_MAP[ev.status];
+  const mapped = STATUS_MAP[ev.status as WhatsAppStatusValue];
   if (!mapped) return;
 
   const send = await prisma.whatsAppSend.findFirst({
@@ -56,15 +56,17 @@ export async function applyWhatsAppStatusEvent(ev: WhatsAppStatusEvent): Promise
   }
   if (RANK[mapped] <= RANK[send.status]) return; // idempotent / out-of-order no-op
 
+  const at = ev.timestamp ?? new Date();
   const data: Record<string, unknown> = { status: mapped };
   if (mapped === "DELIVERED" || mapped === "READ") {
-    if (!send.deliveredAt) data.deliveredAt = new Date();
+    if (!send.deliveredAt) data.deliveredAt = at;
   }
-  if (mapped === "READ") data.readAt = new Date();
+  if (mapped === "READ") data.readAt = at;
   if (mapped === "FAILED") {
-    data.failedAt = new Date();
+    data.failedAt = at;
+    if (ev.errorCode) data.errorCode = ev.errorCode.slice(0, 32);
     data.error = ev.errorMessage
-      ? `Twilio ${ev.errorCode ?? ""}: ${ev.errorMessage}`.trim()
+      ? `${ev.errorCode ? `Meta ${ev.errorCode}` : "Meta"}: ${ev.errorMessage}`.slice(0, 2000)
       : send.error;
   }
 

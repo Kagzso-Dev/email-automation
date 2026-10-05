@@ -40,7 +40,7 @@ describe("renderWhatsAppBody", () => {
 });
 
 describe("buildContentVariables", () => {
-  it("maps declared names to Twilio positional keys, in order", () => {
+  it("maps declared names to positional template params, in order", () => {
     const vars = buildWhatsAppVars({ firstName: "Ada", businessName: "Acme" });
     expect(buildContentVariables({ variables: ["first_name", "business_name"] }, vars)).toEqual({
       "1": "Ada",

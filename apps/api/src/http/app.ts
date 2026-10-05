@@ -15,6 +15,7 @@ import { templatesRouter } from "./routes/templates.js";
 import { campaignsRouter } from "./routes/campaigns.js";
 import { triggersRouter } from "./routes/triggers.js";
 import { webhooksRouter } from "./routes/webhooks.js";
+import { whatsappWebhookRouter } from "./routes/whatsappWebhook.js";
 import { trackRouter } from "./routes/track.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.js";
 import { apiKeysRouter } from "./routes/apiKeys.js";
@@ -40,6 +41,9 @@ export function createApp() {
   );
   app.use(cors({ origin: env.WEB_ORIGIN.split(","), credentials: true }));
   app.use(cookieParser());
+  // Meta WhatsApp webhook needs the raw body for its HMAC signature, so it is
+  // mounted before the JSON parser (it parses the body itself once verified).
+  app.use("/api/webhooks/whatsapp", whatsappWebhookRouter);
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false }));
 

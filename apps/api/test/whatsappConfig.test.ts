@@ -7,98 +7,64 @@ afterEach(() => {
   vi.resetModules();
 });
 
+// Stub every credential empty so a real repo .env can't leak values into a
+// case (dotenv never overrides an already-set var).
+function clearMetaEnv() {
+  for (const k of [
+    "WHATSAPP_PROVIDER",
+    "META_WHATSAPP_ACCESS_TOKEN",
+    "META_WHATSAPP_PHONE_NUMBER_ID",
+    "META_WHATSAPP_WABA_ID",
+    "META_WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+    "META_WHATSAPP_APP_SECRET",
+    "META_GRAPH_API_VERSION",
+  ]) {
+    vi.stubEnv(k, "");
+  }
+}
+
 describe("config/whatsapp", () => {
-  it("loads with no WHATSAPP_* vars set — configured:false, never throws", async () => {
-    // Stub empty so a real repo .env can't leak credentials into this case
-    // (dotenv never overrides an already-set var).
-    vi.stubEnv("WHATSAPP_ACCOUNT_SID", "");
-    vi.stubEnv("WHATSAPP_AUTH_TOKEN", "");
-    vi.stubEnv("WHATSAPP_FROM", "");
-    vi.resetModules();
+  it("loads with no Meta vars set — configured:false, never throws", async () => {
+    clearMetaEnv();
     const mod = await import("../src/config/whatsapp.js");
     expect(mod.isWhatsAppConfigured()).toBe(false);
-    expect(mod.whatsappConfig.apiUrl).toContain("twilio.com");
+    expect(mod.whatsappConfig.provider).toBe("meta");
+    expect(mod.whatsappConfig.graphApiBaseUrl).toBe("https://graph.facebook.com");
+    expect(mod.whatsappConfig.graphApiVersion).toMatch(/^v\d+\.\d+$/);
     // Defaults for pacing.
     expect(mod.whatsappConfig.minDelaySec).toBeGreaterThan(0);
     expect(mod.whatsappConfig.maxDelaySec).toBeGreaterThanOrEqual(mod.whatsappConfig.minDelaySec);
   });
 
-  it("is configured once SID, token and from are all present", async () => {
-    vi.stubEnv("WHATSAPP_ACCOUNT_SID", "AC123");
-    vi.stubEnv("WHATSAPP_AUTH_TOKEN", "tok");
-    vi.stubEnv("WHATSAPP_FROM", "whatsapp:+14155238886");
-    vi.resetModules();
+  it("is configured once the access token and phone number id are present", async () => {
+    clearMetaEnv();
+    vi.stubEnv("META_WHATSAPP_ACCESS_TOKEN", "EAAtoken");
+    vi.stubEnv("META_WHATSAPP_PHONE_NUMBER_ID", "1234567890");
     const mod = await import("../src/config/whatsapp.js");
     expect(mod.isWhatsAppConfigured()).toBe(true);
-    expect(mod.whatsappConfig.from).toBe("whatsapp:+14155238886");
+    expect(mod.whatsappConfig.phoneNumberId).toBe("1234567890");
   });
 
-  it("stays unconfigured when only some vars are set", async () => {
-    vi.stubEnv("WHATSAPP_ACCOUNT_SID", "AC123");
-    // Clear the other two so a real repo .env can't leak them in and mask
-    // the "partial config" case being tested.
-    vi.stubEnv("WHATSAPP_AUTH_TOKEN", "");
-    vi.stubEnv("WHATSAPP_FROM", "");
-    vi.resetModules();
+  it("stays unconfigured when only the access token is set", async () => {
+    clearMetaEnv();
+    vi.stubEnv("META_WHATSAPP_ACCESS_TOKEN", "EAAtoken");
     const mod = await import("../src/config/whatsapp.js");
     expect(mod.isWhatsAppConfigured()).toBe(false);
   });
-});
 
-describe("whatsappStatusCallbackUrl", () => {
-  it("resolves from WHATSAPP_PUBLIC_BASE_URL, trimming a trailing slash", async () => {
-    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "https://example.ngrok-free.dev/");
-    vi.resetModules();
+  it("stays unconfigured for an unsupported WHATSAPP_PROVIDER", async () => {
+    clearMetaEnv();
+    vi.stubEnv("WHATSAPP_PROVIDER", "something-else");
+    vi.stubEnv("META_WHATSAPP_ACCESS_TOKEN", "EAAtoken");
+    vi.stubEnv("META_WHATSAPP_PHONE_NUMBER_ID", "1234567890");
     const mod = await import("../src/config/whatsapp.js");
-    expect(mod.whatsappStatusCallbackUrl()).toBe(
-      "https://example.ngrok-free.dev/api/webhooks/whatsapp/status",
-    );
+    expect(mod.isWhatsAppConfigured()).toBe(false);
   });
 
-  it("prefers WHATSAPP_PUBLIC_BASE_URL over PUBLIC_API_URL when both are public", async () => {
-    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "https://whatsapp.example.com");
-    vi.stubEnv("PUBLIC_API_URL", "https://email.example.com");
-    vi.resetModules();
+  it("normalises META_GRAPH_API_VERSION to a v-prefixed value", async () => {
+    clearMetaEnv();
+    vi.stubEnv("META_GRAPH_API_VERSION", "23.0");
     const mod = await import("../src/config/whatsapp.js");
-    expect(mod.whatsappStatusCallbackUrl()).toBe(
-      "https://whatsapp.example.com/api/webhooks/whatsapp/status",
-    );
-  });
-
-  it("falls back to PUBLIC_API_URL when WHATSAPP_PUBLIC_BASE_URL is unset", async () => {
-    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "");
-    vi.stubEnv("PUBLIC_API_URL", "https://fallback.example.com");
-    vi.resetModules();
-    const mod = await import("../src/config/whatsapp.js");
-    expect(mod.whatsappStatusCallbackUrl()).toBe(
-      "https://fallback.example.com/api/webhooks/whatsapp/status",
-    );
-  });
-
-  it("returns undefined (never a localhost callback) when only PUBLIC_API_URL is localhost", async () => {
-    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "");
-    vi.stubEnv("PUBLIC_API_URL", "http://localhost:4000");
-    vi.resetModules();
-    const mod = await import("../src/config/whatsapp.js");
-    expect(mod.whatsappStatusCallbackUrl()).toBeUndefined();
-  });
-
-  it("returns undefined when WHATSAPP_PUBLIC_BASE_URL is itself localhost, even if set", async () => {
-    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "http://127.0.0.1:4000");
-    vi.resetModules();
-    const mod = await import("../src/config/whatsapp.js");
-    expect(mod.whatsappStatusCallbackUrl()).toBeUndefined();
-  });
-
-  it("returns undefined when neither var is set", async () => {
-    vi.stubEnv("WHATSAPP_PUBLIC_BASE_URL", "");
-    // env.ts's schema requires PUBLIC_API_URL to be a *valid* URL when present
-    // (its default only applies when the key is absent), so simulate "unset"
-    // by deleting it rather than stubbing "" — dotenv then refills it from the
-    // real .env's own localhost default, which is exactly the case under test.
-    delete process.env.PUBLIC_API_URL;
-    vi.resetModules();
-    const mod = await import("../src/config/whatsapp.js");
-    expect(mod.whatsappStatusCallbackUrl()).toBeUndefined();
+    expect(mod.whatsappConfig.graphApiVersion).toBe("v23.0");
   });
 });

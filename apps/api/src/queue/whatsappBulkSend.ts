@@ -4,7 +4,7 @@
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { pickDelayMs } from "../domain/whatsappSend.js";
-import { sendWhatsAppTemplate, WhatsAppSendError } from "../services/whatsapp.js";
+import { bodyComponentsFromVariables, sendTemplateMessage, WhatsAppSendError } from "../services/whatsapp.js";
 import { DeferJobError } from "./engine.js";
 import type { WhatsAppBulkSendJob } from "./queues.js";
 
@@ -77,21 +77,31 @@ export async function processWhatsAppBulkSend(payload: Record<string, unknown>):
   await prisma.whatsAppSend.update({ where: { id: item.id }, data: { status: "SENDING" } });
 
   try {
+    if (!batch.template.providerTemplateName) {
+      throw new WhatsAppSendError(`template "${batch.template.name}" has no Meta template name`, false);
+    }
     const contentVariables = (item.contentVariables ?? {}) as Record<string, string>;
-    const { providerMessageId } = await sendWhatsAppTemplate({
+    const { providerMessageId } = await sendTemplateMessage({
       to: item.phone,
-      contentSid: batch.template.contentSid,
-      contentVariables,
+      templateName: batch.template.providerTemplateName,
+      languageCode: batch.template.languageCode,
+      components: bodyComponentsFromVariables(contentVariables),
     });
     await prisma.whatsAppSend.update({
       where: { id: item.id },
-      data: { status: "SENT", providerMessageId, sentAt: new Date(), error: null },
+      data: { status: "SENT", provider: "meta", providerMessageId, sentAt: new Date(), error: null },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.whatsAppSend.update({
       where: { id: item.id },
-      data: { status: "FAILED", error: message.slice(0, 2000) },
+      data: {
+        status: "FAILED",
+        provider: "meta",
+        failedAt: new Date(),
+        errorCode: err instanceof WhatsAppSendError ? (err.code ?? null) : null,
+        error: message.slice(0, 2000),
+      },
     });
     const retryable = err instanceof WhatsAppSendError && err.retryable;
     logger.warn(
