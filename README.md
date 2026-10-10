@@ -122,3 +122,85 @@ WhatsApp is isolated from email — its own tables, config (`apps/api/src/config
 Smoke test from the repo root: `npx tsx apps/api/scripts/whatsapp-test-send.ts --check`, then
 `--to 91XXXXXXXXXX --template <name> --lang <code>`. Delivery/read/failed statuses and replies arrive
 on the webhook; replies are listed at `GET /api/whatsapp/inbound`.
+
+## AI voice calls (kagzso-voice-backend)
+
+The **AI Call** button on the Contacts page (next to *Send WhatsApp*) places outbound AI voice
+calls through [`kagzso-voice-backend-english`](kagzso-voice-backend-english/README.md), with the
+customers read from an Excel / CSV file. It is isolated like WhatsApp: its own tables
+(`ai_call_runs`, `ai_call_logs`), config (`apps/api/src/config/aiCalls.ts`), routes
+(`/api/ai-calls`), queue (`ai-call-run`) and env vars. With `ENABLE_AI_CALLS=false` (the default)
+the button is hidden and the routes return 404.
+
+**How it works.** Upload a sheet with `customer_name`, `gender`, `follow_up_detail`, `phone`
+(variants such as *name / full name*, *sex*, *follow up / notes*, *mobile / phone number* are
+auto-detected and can be remapped). The preview flags missing/invalid phones (red, not called),
+unknown genders and duplicate numbers (amber). Pick **Random N**, **Selected rows** or **All rows**,
+set the gap and max calls, confirm, and watch each call's status (queued → dialing → ringing → in
+progress → completed / no answer / busy / failed), refreshed every 3 seconds.
+
+Server side, `POST /api/ai-calls/start` normalizes phones to E.164 (default +91), drops duplicates
+and do-not-call numbers (unsubscribed / bounced / complained email contacts, unsubscribed / blocked
+WhatsApp contacts, and anyone who said "don't call me" on an earlier AI call), picks random rows
+with a crypto Fisher–Yates shuffle (never the same number twice), and enforces the per-run and
+daily caps. The `ai-call-run` worker then calls **one customer at a time**: it dials, waits for that
+call to end, waits the gap, and dials the next. Status arrives two ways: signed callbacks from
+the voice backend (`POST /api/webhooks/ai-calls`) and a poll of the voice backend every 5 s while a
+call is in flight, so a lost callback never stalls a run. Only `ADMIN` users can start calls; only
+one run can be active at a time; phone numbers are masked in logs.
+
+Calls run the voice backend's standard **Nila** flow (`VOICE_AGENT_NAME=Nila`, the default): *"Hi, is
+this Raagul?"* → identity → *"Thank you sir. This is Nila from Kagzso AI and Automation… one minute?"* →
+short intro → the repetitive-work question → *"useful for your business?"* → close (sir / madam
+only from the given gender; do-not-call always wins). Nila needs a `customer_name` — rows without
+one fail with a clear error. Set `VOICE_AGENT_NAME=Follow-up` instead to use the follow-up agent,
+which greets *"Hello Mr. Ragul, this is Nila from Kagzso AI and Automation…"* and opens with
+*"I'm calling regarding: <follow_up_detail>"*.
+
+### Setup
+
+1. Run the voice backend (see its README): fill in its `.env`, run `alembic upgrade head`, and start
+   it on port 8002 with a public `PUBLIC_BASE_URL` (ngrok) so Plivo/Twilio can reach it. In its
+   `.env` also set the callback target:
+
+   ```env
+   STATUS_CALLBACK_URL=http://localhost:4000/api/webhooks/ai-calls
+   STATUS_CALLBACK_SECRET=<random string, 16+ chars>
+   ```
+
+2. In this repo's `.env`:
+
+   ```env
+   ENABLE_AI_CALLS=true
+   VOICE_BACKEND_URL=http://localhost:8002
+   VOICE_BACKEND_API_KEY=<the voice backend's ADMIN_API_KEY>
+   AI_CALL_WEBHOOK_SECRET=<same value as STATUS_CALLBACK_SECRET>
+   ```
+
+   Optional: `VOICE_AGENT_ID` / `VOICE_AGENT_NAME` (default `Nila`),
+   `AI_CALLS_DEFAULT_COUNTRY_CODE` (91), `AI_CALLS_MAX_PER_RUN` (10, max 100),
+   `AI_CALLS_DAILY_CAP` (100 per 24 h), `AI_CALLS_MIN_GAP_SEC` (10), `AI_CALLS_CALL_TIMEOUT_SEC` (900).
+
+3. Apply the migration (adds two new tables, changes no existing ones) and restart:
+
+   ```bash
+   npm run prisma:deploy     # applies prisma/migrations/0017_ai_calls
+   npm run prisma:generate
+   npm run dev
+   ```
+
+### Test with one random call
+
+> The sample file's numbers (`+91 90000 0000x`) are placeholders and may belong to real people.
+> Before testing, **replace every phone in the file with your own number** (on a trial
+> Plivo/Twilio account it must be a verified number). Duplicates of your number are dialled once.
+
+1. Open [`scripts/sample-ai-calls.xlsx`](scripts/sample-ai-calls.xlsx), put your own mobile number
+   in the `phone` column, save.
+2. Sign in as an admin → **Contacts** → **AI Call** → *Choose file*.
+3. Leave **Random = 1**, gap 30 s, max 10 → **Review & start** → **Start 1 call**.
+4. Answer your phone. The status table moves through dialing → ringing → in progress → completed,
+   then shows the outcome, summary and transcript.
+
+Unit tests: `npm test` (parsing, E.164, random selection, planning, signatures, route gates) and,
+in the voice backend, `pytest` (Follow-up agent, prompt variables, endpoint, callbacks).

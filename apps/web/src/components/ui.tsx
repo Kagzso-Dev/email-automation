@@ -118,11 +118,14 @@ export function Modal({
   onClose,
   title,
   children,
+  wide = false,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  /** Wider dialog for tables (default keeps the standard width). */
+  wide?: boolean;
 }) {
   if (!open) return null;
   return (
@@ -131,7 +134,7 @@ export function Modal({
       onClick={onClose}
     >
       <div
-        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-6 shadow-xl animate-dialog-in"
+        className={`max-h-[85vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-xl bg-white p-6 shadow-xl animate-dialog-in`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">

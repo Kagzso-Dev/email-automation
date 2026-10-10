@@ -8,6 +8,7 @@ import { QUEUE, type CampaignDispatchJob, type ContactImportJob, type SendEmailJ
 import { dailyCapReached, msUntilNextWindow } from "./dailyCap.js";
 import { processManualBulkSend } from "./manualBulkSend.js";
 import { processWhatsAppBulkSend } from "./whatsappBulkSend.js";
+import { processAiCallRun } from "./aiCallRun.js";
 import { fanOutCampaign } from "./dispatch.js";
 import { parseContactFile } from "../domain/contactImport.js";
 import { domainAllowed, loadAllowedDomains } from "../domain/allowedDomains.js";
@@ -69,6 +70,16 @@ const whatsappBulkSendWorker = new QueueWorker({
   pollMs: 1000,
   backoffMs: 5000,
   processor: (payload) => processWhatsAppBulkSend(payload),
+});
+
+/* ----------------------------------------------------- ai-call-run (sequential AI voice calls) */
+
+const aiCallRunWorker = new QueueWorker({
+  queue: QUEUE.aiCallRun,
+  batch: 1,
+  pollMs: 1000,
+  backoffMs: 5000,
+  processor: (payload) => processAiCallRun(payload),
 });
 
 /* ----------------------------------------------------- contact-import (csv / xlsx / pdf) */
@@ -134,5 +145,6 @@ export function startAllWorkers(): QueueWorker[] {
     contactImportWorker.start(),
     manualBulkSendWorker.start(),
     whatsappBulkSendWorker.start(),
+    aiCallRunWorker.start(),
   ];
 }

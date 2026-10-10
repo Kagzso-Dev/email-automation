@@ -475,3 +475,82 @@ model Job {
 
   @@index([queue, status, runAt])
 }
+
+// ---------------------------------------------------------------- AI voice calls (isolated)
+// Outbound AI calls started from the Contacts page ("AI Call"). Customers come
+// from an uploaded file, not from the Contact table, and each call is placed
+// by the kagzso-voice-backend service. Shares nothing with the email or
+// WhatsApp models. Walked one call at a time by the `ai-call-run` queue
+// worker (see queue/aiCallRun.ts).
+
+enum AiCallRunStatus {
+  RUNNING
+  DONE
+  CANCELLED
+}
+
+enum AiCallMode {
+  RANDOM
+  SELECTED
+  ALL
+}
+
+enum AiCallStatus {
+  QUEUED // not dialled yet
+  DIALING // handed to the voice backend
+  RINGING
+  IN_PROGRESS
+  COMPLETED
+  NO_ANSWER
+  BUSY
+  FAILED
+  CANCELLED // run cancelled before this call was placed
+}
+
+model AiCallRun {
+  id             String          @id @default(cuid())
+  mode           AiCallMode
+  status         AiCallRunStatus @default(RUNNING)
+  gapSeconds     Int
+  maxCalls       Int
+  total          Int
+  createdById    String?
+  createdByEmail String?
+  // What was dropped at start: { invalid, duplicates, doNotCall, capped }.
+  skipped        Json?
+  nextCallAt     DateTime? // when the next call is due — drives the countdown
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  logs           AiCallLog[]
+
+  @@index([status])
+  @@map("ai_call_runs")
+}
+
+model AiCallLog {
+  id             String       @id @default(cuid())
+  runId          String
+  position       Int // call order within the run
+  customerName   String?
+  gender         String?      @db.VarChar(16) // male | female | unknown
+  followUpDetail String?      @db.Text
+  phone          String       @db.VarChar(20) // E.164
+  status         AiCallStatus @default(QUEUED)
+  voiceCallId    String?      @db.VarChar(64) // call id in kagzso-voice-backend
+  providerCallId String?      @db.VarChar(64) // Plivo / Twilio call id
+  outcome        String?      @db.VarChar(32) // interested, not_interested, callback_requested, …
+  error          String?      @db.Text
+  durationSec    Int?
+  transcript     String?      @db.LongText
+  summary        String?      @db.Text
+  startedAt      DateTime?
+  endedAt        DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  run            AiCallRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, position])
+  @@index([voiceCallId])
+  @@index([phone])
+  @@map("ai_call_logs")
+}

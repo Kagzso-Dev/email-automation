@@ -23,6 +23,8 @@ import { healthRouter } from "./routes/health.js";
 import { statsRouter } from "./routes/stats.js";
 import { jobsRouter } from "./routes/jobs.js";
 import { settingsRouter } from "./routes/settings.js";
+import { aiCallsRouter } from "./routes/aiCalls.js";
+import { aiCallWebhookRouter } from "./routes/aiCallWebhook.js";
 
 export function createApp() {
   const app = express();
@@ -44,6 +46,8 @@ export function createApp() {
   // Meta WhatsApp webhook needs the raw body for its HMAC signature, so it is
   // mounted before the JSON parser (it parses the body itself once verified).
   app.use("/api/webhooks/whatsapp", whatsappWebhookRouter);
+  // AI-call status callbacks are HMAC-signed over the raw body too.
+  app.use("/api/webhooks/ai-calls", aiCallWebhookRouter);
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -67,6 +71,7 @@ export function createApp() {
   app.use("/api/api-keys", apiKeysRouter);
   app.use("/api/jobs", jobsRouter);
   app.use("/api/settings", settingsRouter);
+  app.use("/api/ai-calls", aiCallsRouter);
   app.use("/api", statsRouter);
 
   app.use(errorHandler);

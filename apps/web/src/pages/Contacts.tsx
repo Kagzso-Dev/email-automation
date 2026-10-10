@@ -7,6 +7,9 @@ import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { SendWhatsApp } from "../components/SendWhatsApp";
 import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp";
+import { AiCallModal } from "../components/AiCallModal";
+import { Icon } from "../components/icons";
+import { useAiCallsConfig } from "../lib/aiCalls";
 
 interface Contact {
   id: string;
@@ -45,6 +48,8 @@ export function ContactsPage() {
   const confirm = useConfirm();
   const whatsAppConfig = useWhatsAppConfig();
   const [waSendOpen, setWaSendOpen] = useState(false);
+  const aiCallsConfig = useAiCallsConfig();
+  const [aiCallOpen, setAiCallOpen] = useState(false);
   // Shown when a send button is clicked with nothing usable selected — the
   // buttons themselves stay enabled (a click always does something).
   const [sendHint, setSendHint] = useState<string | null>(null);
@@ -183,6 +188,23 @@ export function ContactsPage() {
             >
               Send WhatsApp{waEligible.length > 0 ? ` (${waEligible.length})` : ""}
             </button>
+            {aiCallsConfig.data?.enabled && (
+              <button
+                className="btn-ghost"
+                disabled={!aiCallsConfig.data.configured || !aiCallsConfig.data.canStart}
+                title={
+                  !aiCallsConfig.data.canStart
+                    ? "Only admins can start AI calls"
+                    : !aiCallsConfig.data.configured
+                      ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
+                      : "Call customers from an Excel / CSV file with the AI voice agent"
+                }
+                onClick={() => setAiCallOpen(true)}
+              >
+                <Icon name="phone" size={16} />
+                AI Call
+              </button>
+            )}
             <button className="btn-ghost" onClick={() => fileRef.current?.click()}>
               Import file
             </button>
@@ -379,6 +401,10 @@ export function ContactsPage() {
         onClose={() => setWaSendOpen(false)}
         onSelectionConsumed={() => setSelectedIds(new Set())}
       />
+
+      {aiCallsConfig.data?.enabled && (
+        <AiCallModal open={aiCallOpen} onClose={() => setAiCallOpen(false)} config={aiCallsConfig.data} />
+      )}
 
       <AddContactModal open={showAdd} onClose={() => setShowAdd(false)} />
       <EditContactModal contact={editContact} onClose={() => setEditContact(null)} />

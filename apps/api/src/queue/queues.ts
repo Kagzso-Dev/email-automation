@@ -7,6 +7,7 @@ export const QUEUE = {
   csvImport: "csv-import",
   manualBulkSend: "manual-bulk-send",
   whatsappBulkSend: "whatsapp-bulk-send",
+  aiCallRun: "ai-call-run",
 } as const;
 
 export interface CampaignDispatchJob {
@@ -45,6 +46,15 @@ export interface WhatsAppBulkSendJob {
    * resolved at batch creation and carried here (survives DeferJobError).
    */
   purge?: { table: "whatsapp" | "contact"; ids: string[] };
+}
+
+/** Orchestrates one AI-call run — one call at a time, then re-schedules itself. */
+export interface AiCallRunJob {
+  runId: string;
+}
+
+export function enqueueAiCallRun(job: AiCallRunJob) {
+  return enqueue(QUEUE.aiCallRun, job, { maxAttempts: 5, dedupeKey: `ai-call-run:${job.runId}` });
 }
 
 export function enqueueSend(job: SendEmailJob, opts: { dedupeKey: string }) {
