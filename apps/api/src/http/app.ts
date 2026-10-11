@@ -10,6 +10,8 @@ import { errorHandler } from "./errors.js";
 import { authRouter } from "./routes/auth.js";
 import { contactsRouter } from "./routes/contacts.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
+import { whatsappMediaRouter } from "./routes/whatsappMedia.js";
+import { whatsappTemplateSyncRouter } from "./routes/whatsappTemplateSync.js";
 import { listsRouter } from "./routes/lists.js";
 import { templatesRouter } from "./routes/templates.js";
 import { campaignsRouter } from "./routes/campaigns.js";
@@ -25,6 +27,11 @@ import { jobsRouter } from "./routes/jobs.js";
 import { settingsRouter } from "./routes/settings.js";
 import { aiCallsRouter } from "./routes/aiCalls.js";
 import { aiCallWebhookRouter } from "./routes/aiCallWebhook.js";
+import { callFlowsRouter } from "./routes/callFlows.js";
+import { aiCallCustomersRouter } from "./routes/aiCallCustomers.js";
+import { aiCallFollowupsRouter } from "./routes/aiCallFollowups.js";
+import { historyFilterRouter } from "./routes/historyFilter.js";
+import { sendQueueHistoryRouter } from "./routes/sendQueueHistory.js";
 
 export function createApp() {
   const app = express();
@@ -60,7 +67,9 @@ export function createApp() {
   app.use("/health", healthRouter);
   app.use("/api/auth", authRouter);
   app.use("/api/contacts", contactsRouter);
+  app.use("/api/whatsapp", whatsappTemplateSyncRouter);
   app.use("/api/whatsapp", whatsappRouter);
+  app.use("/api/whatsapp", whatsappMediaRouter);
   app.use("/api/lists", listsRouter);
   app.use("/api/templates", templatesRouter);
   app.use("/api/campaigns", campaignsRouter);
@@ -72,6 +81,11 @@ export function createApp() {
   app.use("/api/jobs", jobsRouter);
   app.use("/api/settings", settingsRouter);
   app.use("/api/ai-calls", aiCallsRouter);
+  app.use("/api/call-flows", callFlowsRouter);
+  app.use("/api/ai-call-customers", aiCallCustomersRouter);
+  app.use("/api/ai-call-followups", aiCallFollowupsRouter);
+  app.use("/api/send-queue/filter", historyFilterRouter); // read-only "filter new data"
+  app.use("/api/send-queue/history", sendQueueHistoryRouter); // read-only "download all history"
   app.use("/api", statsRouter);
 
   app.use(errorHandler);

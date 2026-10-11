@@ -9,6 +9,8 @@ import { dailyCapReached, msUntilNextWindow } from "./dailyCap.js";
 import { processManualBulkSend } from "./manualBulkSend.js";
 import { processWhatsAppBulkSend } from "./whatsappBulkSend.js";
 import { processAiCallRun } from "./aiCallRun.js";
+import { processAiCallFollowup } from "./aiCallFollowup.js";
+import { processWhatsAppMediaDownload } from "./whatsappMediaDownload.js";
 import { fanOutCampaign } from "./dispatch.js";
 import { parseContactFile } from "../domain/contactImport.js";
 import { domainAllowed, loadAllowedDomains } from "../domain/allowedDomains.js";
@@ -82,6 +84,26 @@ const aiCallRunWorker = new QueueWorker({
   processor: (payload) => processAiCallRun(payload),
 });
 
+/* ----------------------------------------------------- ai-call-followup (approved "call again") */
+
+const aiCallFollowupWorker = new QueueWorker({
+  queue: QUEUE.aiCallFollowup,
+  batch: 1,
+  pollMs: 5000,
+  backoffMs: 30_000,
+  processor: (payload) => processAiCallFollowup(payload),
+});
+
+/* ----------------------------------------------------- whatsapp-media-download (inbound media) */
+
+const whatsappMediaDownloadWorker = new QueueWorker({
+  queue: QUEUE.whatsappMediaDownload,
+  batch: 2,
+  pollMs: 2000,
+  backoffMs: 15_000,
+  processor: (payload) => processWhatsAppMediaDownload(payload),
+});
+
 /* ----------------------------------------------------- contact-import (csv / xlsx / pdf) */
 
 const contactImportWorker = new QueueWorker({
@@ -146,5 +168,7 @@ export function startAllWorkers(): QueueWorker[] {
     manualBulkSendWorker.start(),
     whatsappBulkSendWorker.start(),
     aiCallRunWorker.start(),
+    aiCallFollowupWorker.start(),
+    whatsappMediaDownloadWorker.start(),
   ];
 }

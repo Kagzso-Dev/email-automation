@@ -9,11 +9,12 @@
   ],
   "scripts": {
     "predev": "node scripts/predev.mjs",
-    "dev": "npm-run-all --parallel dev:api dev:worker dev:web",
+    "dev": "npm-run-all --parallel dev:api dev:worker dev:web dev:voice",
     "dev:kill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/free-ports.ps1",
     "dev:api": "npm run dev --workspace @dispatch/api",
     "dev:worker": "npm run dev:worker --workspace @dispatch/api",
     "dev:web": "npm run dev --workspace @dispatch/web",
+    "dev:voice": "node scripts/dev-voice.mjs",
     "build": "npm run build --workspace @dispatch/web",
     "prisma:generate": "node scripts/prisma.mjs generate",
     "prisma:migrate": "node scripts/prisma.mjs migrate dev",

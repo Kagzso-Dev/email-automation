@@ -28,12 +28,19 @@ export interface WhatsAppVarsInput {
   phone?: string | null;
 }
 
-/** Flatten a recipient into the `{{variables}}` a WhatsApp template can use. */
+/** Greeting used for {{first_name}} when the recipient has no first name ("Hi there"). */
+export const FIRST_NAME_FALLBACK = "there";
+
+/**
+ * Flatten a recipient into the `{{variables}}` a WhatsApp template can use. An
+ * empty / whitespace-only first name becomes "there"; business_name is left
+ * empty, so a template that uses it still skips that recipient.
+ */
 export function buildWhatsAppVars(input: WhatsAppVarsInput): Record<string, string> {
   const first = input.firstName ?? "";
   const last = input.lastName ?? "";
   return {
-    first_name: first,
+    first_name: first.trim() ? first : FIRST_NAME_FALLBACK,
     last_name: last,
     full_name: [first, last].filter(Boolean).join(" "),
     business_name: input.businessName ?? "",

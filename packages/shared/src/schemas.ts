@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { toContactPhone, toWhatsAppDigits } from "./phone.js";
 
 /* ------------------------------------------------------------------ shared enums */
 
@@ -40,11 +41,22 @@ export const refreshInput = z.object({
 
 export const customFields = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]));
 
-/** Phone number: any formatting accepted on input, stored as exactly 10 digits. */
-export const phoneNumber = z
-  .string()
-  .transform((s) => s.replace(/\D/g, ""))
-  .refine((s) => s.length === 10, "Phone number must contain exactly 10 digits");
+/**
+ * Email-contact phone: any formatting accepted on input. Indian numbers are
+ * stored as the 10-digit national number (as always); other countries as E.164
+ * ("+971501234567"). Numbers without a country code are taken as Indian.
+ */
+export const phoneNumber = z.string().transform((s, ctx) => {
+  const r = toContactPhone(s);
+  if (!r.ok) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Phone number must contain exactly 10 digits (India), or start with + and a country code",
+    });
+    return z.NEVER;
+  }
+  return r.phone;
+});
 
 export const createContactInput = z.object({
   email: z.string().email(),
@@ -358,13 +370,21 @@ export const whatsAppContactStatus = z.enum(["ACTIVE", "UNSUBSCRIBED", "BLOCKED"
 
 /**
  * WhatsApp "to" (recipient) phone: any formatting accepted on input, stored as
- * digits only (no leading '+'). India-only: +91 followed by a 10-digit mobile
- * number starting with 6, 7, 8, or 9 — /^\+91[6-9]\d{9}$/.
+ * digits with country code and no '+' (919876543210). No country code = +91.
+ * Indian numbers must be mobiles (10 digits starting 6-9); other countries need
+ * a valid international length.
  */
-export const whatsAppPhone = z
-  .string()
-  .transform((s) => s.replace(/[^\d]/g, ""))
-  .refine((s) => /^91[6-9]\d{9}$/.test(s), "Enter a valid Indian WhatsApp number: +91 followed by 10 digits starting with 6-9");
+export const whatsAppPhone = z.string().transform((s, ctx) => {
+  const digits = toWhatsAppDigits(s, "91");
+  if (!digits) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Enter a valid WhatsApp number: +91 and 10 digits starting with 6-9, or another country code and number",
+    });
+    return z.NEVER;
+  }
+  return digits;
+});
 
 export const createWhatsAppContactInput = z.object({
   phone: whatsAppPhone,
@@ -407,7 +427,8 @@ const whatsAppTemplateFields = z.object({
   languageCode: whatsAppLanguageCode,
   body: z.string().min(1).max(4000),
   variables: z.array(z.string().min(1).max(60)).max(20).default([]),
-  buttonLabels: z.array(z.string().min(1).max(40)).max(3).default([]),
+  // Meta allows up to 10 quick-reply buttons on a template.
+  buttonLabels: z.array(z.string().min(1).max(40)).max(10).default([]),
 });
 
 export const createWhatsAppTemplateInput = whatsAppTemplateFields.extend({

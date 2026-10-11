@@ -1,9 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
+import { Icon, type IconName } from "../components/icons";
 import { ErrorNote, SkeletonCards } from "../components/ui";
+import { useAuth } from "../lib/auth";
+import { useAiCallsConfig } from "../lib/aiCalls";
+import { useSidebarHiddenItems } from "../lib/sidebar";
+import { useCallsDashboard, useEmailDashboard, useWhatsAppDashboard } from "../lib/dashboard";
+import { SectionHeading, StatTile } from "../components/dashboard/parts";
+import { ChannelSummary, type ChannelSummaryItem } from "../components/dashboard/ChannelSummary";
+import { WhatsAppSection } from "../components/dashboard/WhatsAppSection";
+import { CallsSection } from "../components/dashboard/CallsSection";
 import {
   AreaChart,
   CapMeter,
@@ -36,8 +45,53 @@ type TsPoint = Timeseries["points"][number];
 const sum = (arr: TsPoint[], k: "sent" | "opened" | "clicked") =>
   arr.reduce((s, x) => s + x[k], 0);
 
+type Channel = "all" | "email" | "whatsapp" | "calls";
+const CHANNEL_KEY = "dispatch:dashboard-channel";
+const CHANNELS: { value: Channel; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "email", label: "Email" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "calls", label: "Calls" },
+];
+
+/** Last channel picked in this browser session (falls back to "All"). */
+function readChannel(): Channel {
+  try {
+    const v = sessionStorage.getItem(CHANNEL_KEY);
+    return CHANNELS.some((c) => c.value === v) ? (v as Channel) : "all";
+  } catch {
+    return "all";
+  }
+}
+
 export function DashboardPage() {
   const [range, setRange] = useState(14);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  // Same rules as the sidebar: calls are admin-only behind ENABLE_AI_CALLS, Call Flows also
+  // needs the flow editor; a page hidden in Settings → Sidebar menu loses its links here (numbers stay).
+  const aiCalls = useAiCallsConfig();
+  const callsAllowed = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
+  const hidden = new Set<string>(useSidebarHiddenItems());
+  const showInboxLink = isAdmin && !hidden.has("whatsapp-inbox");
+  const showFlowsLink = !!aiCalls.data?.flowEditor && !!aiCalls.data.canStart;
+
+  const [picked, setPicked] = useState<Channel>(readChannel);
+  const channel: Channel = picked === "calls" && !callsAllowed ? "all" : picked;
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(CHANNEL_KEY, picked);
+    } catch {
+      /* storage unavailable — non-fatal */
+    }
+  }, [picked]);
+  const showEmail = channel === "all" || channel === "email";
+  const showWhatsApp = channel === "all" || channel === "whatsapp";
+  const showCalls = callsAllowed && (channel === "all" || channel === "calls");
+
+  const emailDash = useEmailDashboard(range, showEmail);
+  const waDash = useWhatsAppDashboard(range, showWhatsApp);
+  const callsDash = useCallsDashboard(range, showCalls);
   const [active, setActive] = useState<Record<string, boolean>>({
     sent: true,
     opened: true,
@@ -71,9 +125,38 @@ export function DashboardPage() {
     { key: "clicked", label: "Clicked", color: SERIES.clicked },
   ];
 
-  if (overview.error) return <ErrorNote error={overview.error} />;
-
   const d = overview.data;
+
+  const summary: ChannelSummaryItem[] = [
+    {
+      key: "email",
+      label: "Emails sent",
+      icon: "mail",
+      value: emailDash.data?.totals.sent,
+      delta: emailDash.data?.trend.delta,
+      failed: !!emailDash.error && !emailDash.data,
+    },
+    {
+      key: "whatsapp",
+      label: "WhatsApp sent",
+      icon: "whatsapp",
+      value: waDash.data?.totals.sent,
+      delta: waDash.data?.trend.delta,
+      failed: !!waDash.error && !waDash.data,
+    },
+    ...(callsAllowed
+      ? [
+          {
+            key: "calls" as const,
+            label: "Calls made",
+            icon: "phone" as const,
+            value: callsDash.data?.totals.total,
+            delta: callsDash.data?.trend.delta,
+            failed: !!callsDash.error && !callsDash.data,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div>
@@ -87,78 +170,132 @@ export function DashboardPage() {
         }
       />
 
-      {!d ? (
-        <SkeletonCards count={4} />
-      ) : (
-        <>
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div className="card fade-rise lg:col-span-1">
-              <div className="label">Daily send cap</div>
-              <div className="mt-3">
-                <CapMeter used={d.dailyCap.used} limit={d.dailyCap.limit} />
-              </div>
-              <p className="mt-3 text-xs text-slate-550">
-                {Math.max(0, d.dailyCap.limit - d.dailyCap.used)} sends left in the rolling 24h window.
-              </p>
-            </div>
-            <MiniStat label="Active contacts" value={d.activeContacts} to="/contacts" />
-            <MiniStat label="Active campaigns" value={d.activeCampaigns} to="/campaigns" />
-          </div>
+      {/* Channel switch + the shared range toggle (also kept on the engagement chart). */}
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div role="group" aria-label="Channel">
+          <RangeTabs
+            options={CHANNELS.filter((c) => c.value !== "calls" || callsAllowed)}
+            value={channel}
+            onChange={setPicked}
+          />
+        </div>
+        <div role="group" aria-label="Date range">
+          <RangeTabs options={RANGES} value={range} onChange={setRange} />
+        </div>
+      </div>
 
-          <div className="mt-4">
-            <ChartCard
-              title="Engagement over time"
-              subtitle={`Daily send, open and click events · last ${range} days`}
-              right={
-                <div className="flex flex-col items-end gap-2">
-                  <RangeTabs options={RANGES} value={range} onChange={setRange} />
-                  <Legend
-                    items={legendItems}
-                    active={active}
-                    onToggle={(k) => setActive((a) => ({ ...a, [k]: !a[k] }))}
-                  />
+      <div className="space-y-8">
+        {channel === "all" && (
+          <ChannelSummary items={summary} span={range} onPick={(k) => setPicked(k)} />
+        )}
+
+        {showEmail && (
+          <section aria-label="Email">
+            <SectionHeading icon="mail" title="Email" />
+            {overview.error ? (
+              <ErrorNote error={overview.error} />
+            ) : !d ? (
+              <SkeletonCards count={4} />
+            ) : (
+              <>
+                <div className="grid gap-4 lg:grid-cols-3">
+                  <div className="card fade-rise lg:col-span-1">
+                    <div className="label">Daily send cap</div>
+                    <div className="mt-3">
+                      <CapMeter used={d.dailyCap.used} limit={d.dailyCap.limit} />
+                    </div>
+                    <p className="mt-3 text-xs text-slate-550">
+                      {Math.max(0, d.dailyCap.limit - d.dailyCap.used)} sends left in the rolling 24h window.
+                    </p>
+                  </div>
+                  <MiniStat label="Active contacts" value={d.activeContacts} to="/contacts" icon="contacts" />
+                  <MiniStat label="Active campaigns" value={d.activeCampaigns} to="/campaigns" icon="campaigns" />
                 </div>
-              }
-            >
-              {ts.isLoading ? (
-                <div className="h-[240px] animate-pulse rounded-lg bg-surface-muted" />
-              ) : points.length === 0 ? (
-                <div className="grid h-[240px] place-items-center text-sm text-slate-550">
-                  No activity in this window yet.
+
+                <div className="mt-4">
+                  <ChartCard
+                    title="Engagement over time"
+                    subtitle={`Daily send, open and click events · last ${range} days`}
+                    right={
+                      <div className="flex flex-col items-end gap-2">
+                        <RangeTabs options={RANGES} value={range} onChange={setRange} />
+                        <Legend
+                          items={legendItems}
+                          active={active}
+                          onToggle={(k) => setActive((a) => ({ ...a, [k]: !a[k] }))}
+                        />
+                      </div>
+                    }
+                  >
+                    {ts.isLoading ? (
+                      <div className="skeleton h-[240px] rounded-lg" />
+                    ) : points.length === 0 ? (
+                      <div className="grid h-[240px] place-items-center text-sm text-slate-550">
+                        No activity in this window yet.
+                      </div>
+                    ) : series.length === 0 ? (
+                      <div className="grid h-[240px] place-items-center text-sm text-slate-550">
+                        Select a series from the legend.
+                      </div>
+                    ) : (
+                      <AreaChart data={points} series={series} />
+                    )}
+                    {points.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-line-subtle pt-3 text-xs text-slate-550">
+                        <span>
+                          Sent <b className="text-ink">{sum(points, "sent").toLocaleString()}</b>
+                        </span>
+                        <span>
+                          Opened <b className="text-ink">{sum(points, "opened").toLocaleString()}</b>
+                        </span>
+                        <span>
+                          Clicked <b className="text-ink">{sum(points, "clicked").toLocaleString()}</b>
+                        </span>
+                      </div>
+                    )}
+                  </ChartCard>
                 </div>
-              ) : series.length === 0 ? (
-                <div className="grid h-[240px] place-items-center text-sm text-slate-550">
-                  Select a series from the legend.
-                </div>
-              ) : (
-                <AreaChart data={points} series={series} />
-              )}
-              {points.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 border-t border-line-subtle pt-3 text-xs text-slate-550">
-                  <span>
-                    Sent <b className="text-ink">{sum(points, "sent").toLocaleString()}</b>
-                  </span>
-                  <span>
-                    Opened <b className="text-ink">{sum(points, "opened").toLocaleString()}</b>
-                  </span>
-                  <span>
-                    Clicked <b className="text-ink">{sum(points, "clicked").toLocaleString()}</b>
-                  </span>
-                </div>
-              )}
-            </ChartCard>
-          </div>
-        </>
-      )}
+              </>
+            )}
+            {emailDash.data && (
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <StatTile label="Open rate" value={emailDash.data.totals.openRate} format="pct" sub={`of ${emailDash.data.totals.sent.toLocaleString()} sent · last ${range} days`} />
+                <StatTile label="Click rate" value={emailDash.data.totals.clickRate} format="pct" sub={`${emailDash.data.totals.clicked.toLocaleString()} clicked`} />
+                <StatTile label="Bounced" value={emailDash.data.totals.bounced} />
+                <StatTile label="Failed" value={emailDash.data.totals.failed} />
+              </div>
+            )}
+          </section>
+        )}
+
+        {showWhatsApp && (
+          <WhatsAppSection data={waDash.data} isLoading={waDash.isLoading} error={waDash.error} showInboxLink={showInboxLink} />
+        )}
+
+        {showCalls && (
+          <CallsSection
+            data={callsDash.data}
+            isLoading={callsDash.isLoading}
+            error={callsDash.error}
+            showCustomersLink={!hidden.has("ai-call-customers")}
+            showFlowsLink={showFlowsLink}
+          />
+        )}
+      </div>
     </div>
   );
 }
 
-function MiniStat({ label, value, to }: { label: string; value: number; to: string }) {
+function MiniStat({ label, value, to, icon }: { label: string; value: number; to: string; icon: IconName }) {
   const n = useCountUp(value);
   return (
     <Link to={to} className="card card-hover fade-rise flex flex-col justify-between">
-      <div className="label">{label}</div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="label">{label}</div>
+        <span className="icon-chip h-9 w-9 shrink-0" aria-hidden="true">
+          <Icon name={icon} size={18} />
+        </span>
+      </div>
       <div className="metric-value mt-2">{Math.round(n).toLocaleString()}</div>
       <div className="mt-1 text-xs text-accent-ink">View →</div>
     </Link>

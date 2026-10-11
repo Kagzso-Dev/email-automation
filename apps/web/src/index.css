@@ -3,16 +3,112 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ---------------------------------------------------------------------------
+   Design tokens — the single source of truth for every color in the app.
+   Colors used through Tailwind are stored as "R G B" channels so opacity
+   modifiers (bg-ink/40) work; tailwind.config.js maps class names onto these.
+   --------------------------------------------------------------------------- */
+:root {
+  /* Text */
+  --c-ink: 17 24 39; /* #111827 headings / primary text */
+  --c-text-strong: 55 65 81; /* #374151 */
+  --c-text-body: 75 85 99; /* #4B5563 body / subtext */
+  --c-text-muted: 107 114 128; /* #6B7280 muted */
+  --c-text-faint: 138 148 166; /* #8A94A6 icons, placeholders */
+
+  /* Accent (cyan → green) */
+  --c-accent: 0 184 240; /* #00B8F0 solid cyan — rings, bars, borders */
+  --c-accent-teal: 0 217 181; /* #00D9B5 teal-green */
+  --c-accent-ink: 0 119 168; /* #0077A8 cyan text on light surfaces (AA) */
+  --c-accent-soft: 230 248 255; /* #E6F8FF active / selected tint */
+  --c-tint: 235 249 255; /* #EBF9FF solid hover tint (≈ 8% cyan on white) */
+  --gradient-accent: linear-gradient(90deg, #00c2ff 0%, #00e0b8 100%);
+  /* Deeper stops for gradient *text* so headline words keep ≥3:1 contrast on the app background. */
+  --gradient-accent-text: linear-gradient(90deg, #0089c2 0%, #008f78 100%);
+  --hover-tint: rgba(0, 194, 255, 0.08);
+  --focus-ring: 0 0 0 4px rgba(0, 194, 255, 0.15);
+
+  /* Status — bright hue for dots/bars, darker same-hue text on a soft tint for badges */
+  --c-ok: 3 120 100; /* #037864 */
+  --c-ok-soft: 224 248 242; /* #E0F8F2 */
+  --c-ok-bright: 0 201 167; /* #00C9A7 */
+  --c-warn: 150 88 0; /* #965800 */
+  --c-warn-soft: 254 243 222; /* #FEF3DE */
+  --c-warn-bright: 245 165 36; /* #F5A524 */
+  --c-crit: 185 28 28; /* #B91C1C */
+  --c-crit-soft: 254 236 236; /* #FEECEC */
+  --c-crit-line: 249 202 202; /* #F9CACA */
+  --c-crit-bright: 239 68 68; /* #EF4444 */
+  --c-wa: 37 211 102; /* #25D366 WhatsApp green */
+  --c-wa-ink: 29 168 81; /* #1DA851 */
+
+  /* Surfaces & lines */
+  --c-surface: 255 255 255;
+  --c-surface-sunken: 244 247 252; /* #F4F7FC inset areas inside cards */
+  --c-surface-muted: 235 240 248; /* #EBF0F8 */
+  --c-line: 215 223 239; /* #D7DFEF */
+  --c-line-strong: 199 210 230; /* #C7D2E6 control borders */
+  --c-line-subtle: 233 238 247; /* #E9EEF7 row dividers */
+
+  /* App background */
+  --bg-app: #e1e7f4;
+  --bg-app-gradient: linear-gradient(180deg, #e8edf8 0%, #dce4f3 100%);
+
+  /* Elevation & motion */
+  --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.04), 0 10px 30px rgba(17, 24, 39, 0.06);
+  --shadow-pop: 0 4px 12px rgba(17, 24, 39, 0.06), 0 20px 48px rgba(17, 24, 39, 0.14);
+  --shadow-glow: 0 8px 24px rgba(0, 194, 255, 0.25);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 @layer base {
   html {
     /* Never let a stray wide child force the whole page to scroll sideways on
        small screens. Vertical sticky positioning is unaffected. */
     @apply overflow-x-hidden;
     -webkit-text-size-adjust: 100%;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-line-strong)) transparent;
   }
 
   body {
-    @apply bg-surface-sunken text-ink font-sans antialiased;
+    @apply text-ink font-sans antialiased;
+    background-color: var(--bg-app);
+    background-image: var(--bg-app-gradient);
+    background-attachment: fixed;
+  }
+  /* Faint cyan glow at the top and mint glow at the bottom corner (fixed; never scrolls or reflows). */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(60rem 28rem at 50% -8rem, rgba(0, 194, 255, 0.08), transparent 70%),
+      radial-gradient(40rem 26rem at 100% 100%, rgba(0, 224, 184, 0.08), transparent 70%);
+  }
+
+  ::selection {
+    background: rgba(0, 194, 255, 0.2);
+  }
+
+  /* Thin, tinted scrollbars everywhere (WebKit fallback; others use scrollbar-color). */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-line-strong));
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--c-text-faint));
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   /* Media and embeds shrink to their container instead of overflowing it. */
@@ -22,6 +118,11 @@
   canvas,
   iframe {
     max-width: 100%;
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: rgb(var(--c-accent-ink));
   }
 
   /* Consistent, visible keyboard focus for every interactive element. Mouse
@@ -37,38 +138,105 @@
   a:focus-visible,
   button:focus-visible,
   [tabindex]:focus-visible {
-    @apply rounded-[6px] ring-2 ring-accent ring-offset-2 ring-offset-surface-sunken;
+    @apply rounded-[8px] ring-2 ring-accent-ink ring-offset-2 ring-offset-surface;
+  }
+  input[type="checkbox"]:focus-visible,
+  input[type="radio"]:focus-visible {
+    @apply ring-2 ring-accent-ink ring-offset-1;
   }
 }
 
 @layer components {
+  /* --- Buttons --- */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-3.5 py-2 text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-transparent px-3.5 py-2 text-sm font-medium disabled:opacity-50 disabled:pointer-events-none;
+    transition:
+      color 200ms var(--ease),
+      background-color 200ms var(--ease),
+      border-color 200ms var(--ease),
+      box-shadow 200ms var(--ease),
+      transform 200ms var(--ease),
+      filter 200ms var(--ease);
   }
+  .btn:active {
+    transform: translateY(0) scale(0.98);
+  }
+  /* Navy text on the gradient: white on cyan/green fails WCAG AA, navy passes (~9:1). */
   .btn-primary {
-    @apply btn bg-accent text-white hover:bg-accent-ink;
+    @apply btn bg-gradient-accent font-semibold text-ink;
+    box-shadow: 0 2px 8px rgba(0, 194, 255, 0.18);
+  }
+  .btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-glow);
+  }
+  .btn-primary:active {
+    transform: translateY(0) scale(0.98);
+    filter: brightness(0.96);
+    box-shadow: 0 2px 6px rgba(0, 194, 255, 0.2);
   }
   .btn-ghost {
-    @apply btn border-line-strong bg-surface text-ink hover:bg-surface-muted;
+    @apply btn border-line-strong bg-surface text-ink shadow-sm hover:border-accent/50 hover:bg-tint;
   }
   .btn-danger {
-    @apply btn border-[#e6c3bf] bg-surface text-crit hover:bg-[#faece9];
+    @apply btn border-crit-line bg-crit-soft text-crit hover:border-crit/40 hover:bg-crit-line/50;
   }
-  /* WhatsApp bulk-send action — brand green, distinct from the email buttons. */
+  /* WhatsApp send action — keeps the brand green; navy text for AA contrast. */
   .btn-whatsapp {
-    @apply btn bg-[#25d366] text-white hover:bg-[#1da851];
+    @apply btn bg-wa font-semibold text-ink hover:bg-wa-ink;
+    box-shadow: 0 2px 8px rgba(37, 211, 102, 0.2);
   }
+  .btn-whatsapp:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(37, 211, 102, 0.28);
+  }
+  .btn-whatsapp:active {
+    transform: translateY(0) scale(0.98);
+  }
+
+  /* Thin, quiet scrollbar for boxes that scroll on their own (Send Queue tables, chat). */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-line-strong)) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    border-width: 2px;
+  }
+
+  /* --- Form controls --- */
   .input {
-    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-accent-soft;
+    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink outline-none placeholder:text-slate-400 hover:border-accent/50;
+    transition:
+      border-color 200ms var(--ease),
+      box-shadow 200ms var(--ease),
+      background-color 200ms var(--ease);
+  }
+  .input:focus,
+  .input:focus-visible {
+    @apply border-accent;
+    box-shadow: var(--focus-ring);
+  }
+  .input:disabled {
+    @apply bg-surface-sunken hover:border-line-strong;
   }
   .label {
-    @apply mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-550;
+    @apply mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-slate-500;
   }
   .card {
-    @apply rounded-xl border border-line bg-surface p-5 shadow-card;
+    @apply rounded-xl border border-line/70 bg-surface p-5 shadow-card;
   }
   .card-hover {
-    @apply transition-shadow duration-200 hover:shadow-pop;
+    transition:
+      box-shadow 250ms var(--ease),
+      transform 250ms var(--ease);
+  }
+  .card-hover:hover {
+    @apply shadow-pop;
+    transform: translateY(-2px);
   }
   .field-error {
     @apply mt-1 text-xs text-crit;
@@ -76,24 +244,73 @@
 
   /* Typography scale — use these for a consistent hierarchy across pages. */
   .page-title {
-    @apply text-xl font-semibold tracking-tight text-ink sm:text-[1.35rem];
+    @apply text-[1.5rem] font-bold leading-tight tracking-[-0.02em] text-ink sm:text-[1.75rem];
   }
   .page-subtitle {
-    @apply mt-1 text-sm text-slate-550;
+    @apply mt-1.5 text-sm leading-[1.6] text-slate-550;
+  }
+  /* Cyan→green gradient text for one key word in a headline. */
+  .text-gradient {
+    background-image: var(--gradient-accent-text);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
   .metric-value {
-    @apply font-mono text-2xl font-semibold tabular-nums text-ink;
+    @apply font-mono text-2xl font-semibold tabular-nums tracking-tight text-ink;
   }
   .metric-value-empty {
     @apply font-mono text-2xl font-semibold tabular-nums text-slate-400;
   }
 
+  /* Gradient chip behind an icon (stat cards, empty states). */
+  .icon-chip {
+    @apply grid place-items-center rounded-xl text-accent-ink;
+    background:
+      linear-gradient(135deg, rgba(0, 194, 255, 0.16), rgba(0, 224, 184, 0.16)),
+      rgb(var(--c-surface));
+    box-shadow: inset 0 0 0 1px rgba(0, 194, 255, 0.14);
+  }
+
+  /* Small gradient count pill (unread badges). */
+  .pill-gradient {
+    @apply min-w-[1.25rem] rounded-full bg-gradient-accent px-1.5 text-center text-[11px] font-semibold leading-5 text-ink;
+    box-shadow: 0 2px 6px rgba(0, 194, 255, 0.25);
+  }
+
   /* Sidebar nav item — shared by expanded + collapsed rail states. */
   .nav-link {
-    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-550 transition-colors duration-150 hover:bg-surface-muted hover:text-ink;
+    @apply relative flex items-center gap-3 rounded-[12px] px-3 py-2 text-sm font-medium text-slate-550 hover:bg-tint hover:text-ink;
+    transition:
+      color 180ms var(--ease),
+      background-color 180ms var(--ease);
   }
   .nav-link-active {
-    @apply bg-accent-soft text-accent-ink hover:bg-accent-soft hover:text-accent-ink;
+    @apply bg-accent-soft font-semibold text-ink hover:bg-accent-soft hover:text-ink;
+  }
+  .nav-link-active svg {
+    @apply text-accent-ink;
+  }
+  /* Gradient indicator bar on the left of the active item. */
+  .nav-link-active::before {
+    content: "";
+    @apply absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-gradient-accent;
+  }
+
+  /* Soft tables: tinted header, row hover tint (rows with their own background keep it). */
+  .table-soft thead th {
+    @apply bg-surface-sunken text-[11px] tracking-[0.06em] text-slate-500;
+  }
+  :where(.table-soft tbody > tr) {
+    transition: background-color 150ms var(--ease);
+  }
+  :where(.table-soft tbody > tr:hover) {
+    background-color: rgb(var(--c-tint));
+  }
+
+  /* Gentle page entrance — opacity/transform only, no transform left behind afterwards. */
+  .page-enter {
+    @apply animate-page-in;
   }
 
   /* --- chart entrance animations (see components/charts.tsx) --- */
@@ -116,7 +333,7 @@
     animation: fade-in 0.5s ease-out forwards;
   }
   .fade-rise {
-    animation: fade-rise 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+    animation: fade-rise 0.5s cubic-bezier(0.4, 0, 0.2, 1) backwards;
   }
 
   /* Loading skeleton block. */

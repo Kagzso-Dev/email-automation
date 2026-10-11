@@ -7,6 +7,7 @@ import { pickDelayMs } from "../domain/whatsappSend.js";
 import { normalizeWhatsAppPhone } from "../domain/whatsappPhone.js";
 import { whatsappConfig } from "../config/whatsapp.js";
 import { bodyComponentsFromVariables, sendTemplateMessage, WhatsAppSendError } from "../services/whatsapp.js";
+import { headerComponentForTemplate } from "../domain/whatsappTemplateHeader.js";
 import { DeferJobError } from "./engine.js";
 import type { WhatsAppBulkSendJob } from "./queues.js";
 
@@ -108,11 +109,24 @@ export async function processWhatsAppBulkSend(payload: Record<string, unknown>):
       throw new WhatsAppSendError(`template "${batch.template.name}" has no Meta template name`, false);
     }
     const contentVariables = (item.contentVariables ?? {}) as Record<string, string>;
+    // Header media (image / video / document) when the template has one; otherwise body only, as before.
+    const header = await headerComponentForTemplate(batch.template.id).catch((err) => {
+      throw new WhatsAppSendError(`header media: ${err instanceof Error ? err.message : String(err)}`, false);
+    });
+    if (header) {
+      await prisma.whatsAppSendMedia.upsert({
+        where: { sendId: item.id },
+        create: { sendId: item.id, mediaId: header.mediaId, role: "header" },
+        update: { mediaId: header.mediaId },
+      });
+    }
+    const body = bodyComponentsFromVariables(contentVariables) ?? [];
+    const components = header ? [header.component, ...body] : body;
     const { providerMessageId } = await sendTemplateMessage({
       to: item.phone,
       templateName: batch.template.providerTemplateName,
       languageCode: batch.template.languageCode,
-      components: bodyComponentsFromVariables(contentVariables),
+      components: components.length ? components : undefined,
     });
     await prisma.whatsAppSend.update({
       where: { id: item.id },

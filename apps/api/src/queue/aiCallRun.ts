@@ -16,6 +16,8 @@ import {
   loadDoNotCallPhones,
   parseUtc,
 } from "../domain/aiCalls.js";
+import { pinnedFlowForRun } from "../domain/callFlows.js";
+import { markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
 import { DeferJobError } from "./engine.js";
 import type { AiCallRunJob } from "./queues.js";
@@ -75,6 +77,7 @@ async function pollInFlight(runId: string): Promise<boolean> {
       },
     });
     logger.warn({ runId, logId: fresh.id, phone: maskPhone(fresh.phone) }, "ai call timed out — moving on");
+    await syncCustomerFromLog(fresh.id);
     return false;
   }
   return true;
@@ -118,12 +121,15 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
       data: { status: "FAILED", error: "Skipped — number is on the do-not-call list" },
     });
     logger.info({ runId, logId: next.id, phone: maskPhone(next.phone) }, "ai call skipped (do-not-call)");
+    await syncCustomerFromLog(next.id);
     throw deferFor(1000);
   }
 
   await prisma.aiCallLog.update({ where: { id: next.id }, data: { status: "DIALING", startedAt: new Date() } });
   await prisma.aiCallRun.update({ where: { id: runId }, data: { nextCallAt: null } });
+  await markCustomerCalling(next.id);
   try {
+    const flow = await pinnedFlowForRun(runId);
     const { callId, providerCallId } = await placeVoiceCall({
       customerName: next.customerName,
       gender: next.gender,
@@ -131,12 +137,16 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
       phone: next.phone,
       runId,
       logId: next.id,
+      flow,
     });
     await prisma.aiCallLog.update({
       where: { id: next.id },
       data: { voiceCallId: callId, ...(providerCallId ? { providerCallId } : {}) },
     });
-    logger.info({ runId, logId: next.id, phone: maskPhone(next.phone), voiceCallId: callId }, "ai call placed");
+    logger.info(
+      { runId, logId: next.id, phone: maskPhone(next.phone), voiceCallId: callId, flowId: flow?.flowId, flowVersion: flow?.version },
+      "ai call placed",
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await prisma.aiCallLog.update({
@@ -153,6 +163,7 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
       },
       "ai call failed to start — continuing run",
     );
+    await syncCustomerFromLog(next.id);
   }
   throw deferFor(POLL_MS);
 }

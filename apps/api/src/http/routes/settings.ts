@@ -1,8 +1,13 @@
 import { Router } from "express";
-import { allowedDomainInput, bulkSendSettingsInput, idParam } from "@dispatch/shared";
+import { allowedDomainInput, bulkSendSettingsInput, idParam, sidebarSettingsInput } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { env } from "../../env.js";
-import { getBulkSendDelays, setBulkSendDelays } from "../../domain/settings.js";
+import {
+  getBulkSendDelays,
+  getSidebarHiddenItems,
+  setBulkSendDelays,
+  setSidebarHiddenItems,
+} from "../../domain/settings.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { conflict, notFound, wrap } from "../errors.js";
 
@@ -38,6 +43,26 @@ settingsRouter.put(
   wrap(async (req, res) => {
     const range = bulkSendSettingsInput.parse(req.body);
     res.json(await setBulkSendDelays(range));
+  }),
+);
+
+/* ---------------------------------------------- sidebar menu */
+
+// Which optional menu items are hidden, for the whole workspace. Every signed-in
+// user reads it (the sidebar needs it); only admins can change it.
+settingsRouter.get(
+  "/sidebar",
+  wrap(async (_req, res) => {
+    res.json({ hiddenItems: await getSidebarHiddenItems() });
+  }),
+);
+
+settingsRouter.put(
+  "/sidebar",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    const { hiddenItems } = sidebarSettingsInput.parse(req.body);
+    res.json({ hiddenItems: await setSidebarHiddenItems(hiddenItems) });
   }),
 );
 

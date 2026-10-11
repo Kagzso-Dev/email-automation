@@ -1,16 +1,16 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: BadgeTone }) {
   const tones: Record<BadgeTone, string> = {
-    neutral: "bg-[#eef0f4] text-slate-550",
+    neutral: "bg-surface-muted text-slate-550",
     accent: "bg-accent-soft text-accent-ink",
-    ok: "bg-[#e7f1ec] text-ok",
-    warn: "bg-[#f8f0e1] text-warn",
-    crit: "bg-[#f9ebe9] text-crit",
+    ok: "bg-ok-soft text-ok",
+    warn: "bg-warn-soft text-warn",
+    crit: "bg-crit-soft text-crit",
   };
   return (
-    <span className={`inline-flex rounded-full px-2 py-0.5 font-mono text-xs ${tones[tone]}`}>
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 font-mono text-xs font-medium ${tones[tone]}`}>
       {children}
     </span>
   );
@@ -47,9 +47,9 @@ export function EmptyState({
   title?: string;
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-line-strong bg-surface p-10 text-center text-sm text-slate-550">
+    <div className="rounded-xl border border-dashed border-line-strong bg-surface/80 p-10 text-center text-sm leading-[1.6] text-slate-550">
       {icon ? (
-        <span className="mx-auto mb-3 grid h-10 w-10 place-items-center rounded-full bg-surface-muted text-slate-400">
+        <span className="icon-chip mx-auto mb-3 h-11 w-11">
           <Icon name={icon} size={20} />
         </span>
       ) : null}
@@ -110,7 +110,7 @@ export function SkeletonTable({ rows = 6 }: { rows?: number }) {
 
 export function ErrorNote({ error }: { error: unknown }) {
   const msg = error instanceof Error ? error.message : "Something went wrong";
-  return <div className="rounded-lg bg-[#f9ebe9] px-3 py-2 text-sm text-crit">{msg}</div>;
+  return <div className="rounded-lg border border-crit-line bg-crit-soft px-3 py-2 text-sm text-crit">{msg}</div>;
 }
 
 export function Modal({
@@ -130,20 +130,20 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4 animate-overlay-in"
+      className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4 backdrop-blur-[6px] animate-overlay-in"
       onClick={onClose}
     >
       <div
-        className={`max-h-[85vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-xl bg-white p-6 shadow-xl animate-dialog-in`}
+        className={`scroll-thin max-h-[85vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-2xl border border-line/70 bg-surface p-6 shadow-pop animate-dialog-in`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 className="text-lg font-bold tracking-[-0.01em] text-ink">{title}</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-ink"
+            className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition-colors hover:bg-tint hover:text-ink"
           >
             <Icon name="close" size={18} />
           </button>
@@ -164,8 +164,20 @@ export function Tabs<T extends string>({
   value: T;
   onChange: (v: T) => void;
 }) {
+  // Gradient indicator that slides under the active tab (measured, transform-only animation).
+  const bar = useRef<HTMLDivElement>(null);
+  const [indicator, setIndicator] = useState<{ x: number; w: number } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = bar.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+      setIndicator(el ? { x: el.offsetLeft, w: el.offsetWidth } : null);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [value, tabs.length]);
   return (
-    <div className="mb-5 flex gap-1 border-b border-[#e3e6ec]" role="tablist">
+    <div ref={bar} className="relative mb-5 flex gap-1 border-b border-line" role="tablist">
       {tabs.map((t) => {
         const active = t.value === value;
         return (
@@ -175,28 +187,33 @@ export function Tabs<T extends string>({
             role="tab"
             aria-selected={active}
             onClick={() => onChange(t.value)}
-            className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-              active
-                ? "border-accent-ink text-accent-ink"
-                : "border-transparent text-slate-550 hover:text-ink"
+            className={`rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors duration-200 ${
+              active ? "font-semibold text-ink" : "text-slate-550 hover:bg-tint hover:text-ink"
             }`}
           >
             {t.label}
           </button>
         );
       })}
+      {indicator && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-px left-0 h-[3px] w-px origin-left rounded-full bg-gradient-accent transition-transform duration-300 ease-in-out-soft motion-reduce:transition-none"
+          style={{ transform: `translateX(${indicator.x}px) scaleX(${indicator.w})` }}
+        />
+      )}
     </div>
   );
 }
 
 export function Table({ head, children }: { head: ReactNode[]; children: ReactNode }) {
   return (
-    <div className="-mx-4 overflow-x-auto rounded-xl border-y border-[#e3e6ec] bg-white sm:mx-0 sm:rounded-xl sm:border-x">
-      <table className="w-full min-w-[44rem] text-sm">
+    <div className="-mx-4 overflow-x-auto rounded-xl border-y border-line/70 bg-surface shadow-card sm:mx-0 sm:rounded-xl sm:border-x">
+      <table className="table-soft w-full min-w-[44rem] text-sm">
         <thead>
-          <tr className="border-b border-[#e3e6ec] text-left">
+          <tr className="border-b border-line text-left">
             {head.map((h, i) => (
-              <th key={i} className="px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-550">
+              <th key={i} className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-550">
                 {h}
               </th>
             ))}

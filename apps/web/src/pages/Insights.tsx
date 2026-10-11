@@ -36,9 +36,9 @@ function InsightCard({
 }) {
   const tones = {
     accent: "bg-accent-soft text-accent-ink",
-    ok: "bg-[#e7f1ec] text-ok",
-    warn: "bg-[#f8f0e1] text-warn",
-    crit: "bg-[#f9ebe9] text-crit",
+    ok: "bg-ok-soft text-ok",
+    warn: "bg-warn-soft text-warn",
+    crit: "bg-crit-soft text-crit",
   };
   return (
     <div className="card card-hover fade-rise">

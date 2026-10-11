@@ -2,8 +2,8 @@
   Safely stop ONLY this project's local dev processes.
 
   Targets:
-    * whatever is LISTENING on TCP 4000 / 5173 / 5174
-      (API, Vite dev server, and Vite's stray fallback port)
+    * whatever is LISTENING on TCP 4000 / 5173 / 5174 / 8002
+      (API, Vite dev server, Vite's stray fallback port, voice backend)
     * node.exe processes whose command line clearly belongs to this repo's
       dev stack: npm-run-all, `tsx watch src/index.ts|src/worker.ts`, vite
 
@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$ports = 4000, 5173, 5174
+$ports = 4000, 5173, 5174, 8002
 
 $pids = [System.Collections.Generic.HashSet[int]]::new()
 
@@ -38,6 +38,15 @@ Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyC
      $_.CommandLine -match 'tsx.+watch' -or
      $_.CommandLine -match 'vite[\\/]bin[\\/]vite' -or
      $_.CommandLine -match 'src[\\/](index|worker)\.ts')
+  } |
+  ForEach-Object { [void]$pids.Add([int]$_.ProcessId) }
+
+# 3. The voice backend started by `npm run dev:voice` (uvicorn from its .venv).
+Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.CommandLine -and
+    $_.CommandLine -match 'kagzso-voice-backend-english' -and
+    $_.CommandLine -match 'uvicorn'
   } |
   ForEach-Object { [void]$pids.Add([int]$_.ProcessId) }
 

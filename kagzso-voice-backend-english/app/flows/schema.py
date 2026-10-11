@@ -1,0 +1,147 @@
+"""Call flow definition (schema_version 1).
+
+A flow is the editable form of an agent's prompt: an ordered list of blocks that
+are joined end to end into the system prompt, plus the fixed greeting line, the
+silence lines and a duration limit. Dispatch stores and versions flows; this
+module is the authoritative validator.
+
+Locked blocks carry only a key. Their text comes from builtin/locked_blocks.json
+(do-not-call, wrong person, data safety, outcome rules ...), so an editor can
+reorder the rest of the script but can never change or drop the safety parts.
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+BUILTIN_DIR = Path(__file__).resolve().parent / "builtin"
+LOCKED_BLOCKS: Dict[str, str] = json.loads((BUILTIN_DIR / "locked_blocks.json").read_text(encoding="utf-8"))
+
+FLOW_BASES = ("nila", "followup")
+# Variables a flow may use. phone_number is deliberately absent: it is never spoken.
+FLOW_VARIABLES = ("customer_name", "name", "honorific", "title", "gender", "addressed_name",
+                  "follow_up_detail", "company_name", "business_type")
+BLOCK_GROUPS = ("greeting", "main_script", "questions", "objections", "closing", "tone", "rules")
+MAX_BLOCK_CHARS = 8000
+MAX_PROMPT_CHARS = 50000  # same ceiling as AgentCreate.system_prompt
+
+_VAR_RE = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_FORBIDDEN = ("[[END_CALL]]",)  # the hang-up marker belongs to the fixed rules, never to a script
+
+
+def required_locked_keys(base: str) -> List[str]:
+    return sorted(k for k in LOCKED_BLOCKS if k.startswith(f"{base}_"))
+
+
+def check_text(value: str, *, multiline: bool) -> str:
+    if _CONTROL_RE.search(value):
+        raise ValueError("contains control characters")
+    if not multiline and ("\n" in value or "\r" in value):
+        raise ValueError("must be a single line")
+    for token in _FORBIDDEN:
+        if token in value:
+            raise ValueError(f"must not contain {token}")
+    unknown = sorted({m.group(1) for m in _VAR_RE.finditer(value) if m.group(1) not in FLOW_VARIABLES})
+    if unknown:
+        raise ValueError(f"unknown variable(s): {', '.join('{{' + u + '}}' for u in unknown)}; "
+                         f"allowed: {', '.join(FLOW_VARIABLES)}")
+    return value
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FlowGreeting(_Strict):
+    text: str = Field(..., min_length=1, max_length=300)
+
+    @field_validator("text")
+    @classmethod
+    def _text(cls, v: str) -> str:
+        return check_text(v, multiline=False)
+
+
+class TextBlock(_Strict):
+    id: str = Field(..., pattern=r"^[a-z0-9_]{1,40}$")
+    group: Literal[BLOCK_GROUPS]  # type: ignore[valid-type]
+    text: str = Field(..., min_length=1, max_length=MAX_BLOCK_CHARS)
+
+    @field_validator("text")
+    @classmethod
+    def _text(cls, v: str) -> str:
+        return check_text(v, multiline=True)
+
+
+class LockedBlock(_Strict):
+    id: str = Field(..., pattern=r"^[a-z0-9_]{1,40}$")
+    locked: str = Field(..., max_length=60)
+
+    @field_validator("locked")
+    @classmethod
+    def _known(cls, v: str) -> str:
+        if v not in LOCKED_BLOCKS:
+            raise ValueError(f"unknown locked block '{v}'")
+        return v
+
+
+class FlowSilence(_Strict):
+    reprompt: str = Field(..., min_length=1, max_length=200)
+    closing: str = Field(..., min_length=1, max_length=200)
+
+    @field_validator("reprompt", "closing")
+    @classmethod
+    def _text(cls, v: str) -> str:
+        return check_text(v, multiline=False)
+
+
+class FlowLimits(_Strict):
+    # Clamped to the server's MAX_CALL_DURATION_SECONDS when the call is placed.
+    max_duration_sec: int = Field(..., ge=30, le=600)
+
+
+class FlowTransfer(_Strict):
+    # Stored only: live transfer is not implemented, so it cannot be switched on yet.
+    enabled: Literal[False] = False
+    number: Optional[str] = Field(None, pattern=r"^\+[1-9]\d{7,14}$")
+
+
+class CallFlow(_Strict):
+    schema_version: Literal[1]
+    base: Literal[FLOW_BASES]  # type: ignore[valid-type]
+    name: str = Field(..., min_length=1, max_length=100)
+    language: Literal["en"]
+    voice_id: Optional[str] = Field(None, pattern=r"^[A-Za-z0-9_-]{1,100}$")
+    greeting: FlowGreeting
+    blocks: List[Union[LockedBlock, TextBlock]] = Field(..., min_length=1, max_length=80)
+    silence: FlowSilence
+    limits: FlowLimits
+    transfer: FlowTransfer = Field(default_factory=FlowTransfer)
+
+    @model_validator(mode="after")
+    def _blocks(self) -> "CallFlow":
+        ids = [b.id for b in self.blocks]
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"duplicate block id(s): {', '.join(dupes)}")
+        locked = [b.locked for b in self.blocks if isinstance(b, LockedBlock)]
+        required = required_locked_keys(self.base)
+        if sorted(locked) != required:
+            missing = sorted(set(required) - set(locked))
+            extra = sorted(set(locked) - set(required))
+            parts = ([f"missing {', '.join(missing)}"] if missing else []) + \
+                    ([f"not allowed for base '{self.base}': {', '.join(extra)}"] if extra else []) + \
+                    ([] if missing or extra else ["each locked block must appear exactly once"])
+            raise ValueError("locked blocks: " + "; ".join(parts))
+        if len(render_blocks(self)) > MAX_PROMPT_CHARS:
+            raise ValueError(f"the script is longer than {MAX_PROMPT_CHARS} characters")
+        return self
+
+
+def render_blocks(flow: CallFlow) -> str:
+    """The agent system prompt: blocks joined end to end (locked text from code)."""
+    return "".join(LOCKED_BLOCKS[b.locked] if isinstance(b, LockedBlock) else b.text for b in flow.blocks)

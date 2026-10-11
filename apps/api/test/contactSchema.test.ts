@@ -18,6 +18,16 @@ describe("contact phone validation", () => {
     }
   });
 
+  it("Indian numbers are stored as 10 digits in any input form; other countries keep +code", () => {
+    const p = (phone: string) => createContactInput.parse({ email: "ada@example.com", phone }).phone;
+    expect(p("+91 98765 43210")).toBe("9876543210");
+    expect(p("919876543210")).toBe("9876543210");
+    expect(p("09876543210")).toBe("9876543210");
+    expect(p("+1 (415) 555-2671")).toBe("+14155552671");
+    expect(p("+971 50 123 4567")).toBe("+971501234567");
+    expect(createContactInput.safeParse({ email: "ada@example.com", phone: "+12" }).success).toBe(false);
+  });
+
   it("still allows omitting the phone entirely", () => {
     const parsed = createContactInput.parse({ email: "ada@example.com" });
     expect(parsed.phone).toBeUndefined();

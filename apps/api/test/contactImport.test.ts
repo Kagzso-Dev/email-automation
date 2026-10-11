@@ -69,6 +69,9 @@ describe("rowsToContacts", () => {
     expect(ok.phone).toBe("5551234567");
     const [short] = rowsToContacts([{ Email: "b@x.com", Phone: "555-1" }]);
     expect(short.phone).toBeUndefined();
+    // Previously dropped: numbers with a country code.
+    expect(rowsToContacts([{ Email: "c@x.com", Phone: "+91 98765 43210" }])[0]!.phone).toBe("9876543210");
+    expect(rowsToContacts([{ Email: "d@x.com", Phone: "+971 50 123 4567" }])[0]!.phone).toBe("+971501234567");
   });
 });
 

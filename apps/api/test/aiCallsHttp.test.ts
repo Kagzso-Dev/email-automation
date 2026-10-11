@@ -13,6 +13,7 @@ const token = (role: "ADMIN" | "EDITOR") =>
 
 beforeAll(async () => {
   process.env.ENABLE_AI_CALLS = "true";
+  process.env.ENABLE_CALL_FLOW_EDITOR = "false";
   process.env.AI_CALL_WEBHOOK_SECRET = "webhook-secret-for-tests";
   process.env.VOICE_BACKEND_URL = "";
   process.env.VOICE_BACKEND_API_KEY = "";
@@ -41,6 +42,12 @@ describe("/api/ai-calls", () => {
     expect(editor).toMatchObject({ enabled: true, configured: false, canStart: false, maxPerRun: 10 });
     const admin = (await (await call("/api/ai-calls/config", { role: "ADMIN" })).json()) as { canStart: boolean };
     expect(admin.canStart).toBe(true);
+  });
+
+  it("hides call flows while ENABLE_CALL_FLOW_EDITOR is off", async () => {
+    const admin = (await (await call("/api/ai-calls/config", { role: "ADMIN" })).json()) as { flowEditor: boolean };
+    expect(admin.flowEditor).toBe(false);
+    expect((await call("/api/call-flows", { role: "ADMIN" })).status).toBe(404);
   });
 
   it("only admins can start calls", async () => {

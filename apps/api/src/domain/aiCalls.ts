@@ -6,6 +6,7 @@ import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import type { AiCallStatus } from "@prisma/client";
 import { checkAiCallRow, normalizePhoneE164, type StartAiCallsInput } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
+import { syncCustomerFromLog } from "./aiCallCustomerSync.js";
 
 /* ------------------------------------------------------------------ random selection */
 
@@ -202,6 +203,10 @@ export async function applyVoiceUpdate(logId: string, u: VoiceCallUpdate): Promi
       ...(becameFinal && status === "FAILED" && u.error ? { error: u.error.slice(0, 2000) } : {}),
     },
   });
+  // Saved AI Call Customers: update the stage once the call is final, and again
+  // when the classified outcome arrives later. No-op for calls from a file.
+  const outcomeChanged = !!u.outcome && u.outcome.slice(0, 32) !== log.outcome;
+  if (isFinalAiCallStatus(status) && (becameFinal || outcomeChanged)) await syncCustomerFromLog(logId);
   return status;
 }
 
@@ -210,10 +215,11 @@ export async function applyVoiceUpdate(logId: string, u: VoiceCallUpdate): Promi
 /**
  * Every phone (E.164) that must not be called: email contacts that are not
  * ACTIVE or have unsubscribed, WhatsApp contacts that unsubscribed / blocked,
- * and anyone who asked not to be called on an earlier AI call.
+ * anyone who asked not to be called on an earlier AI call, and saved AI Call
+ * Customers marked Do not call.
  */
 export async function loadDoNotCallPhones(defaultCountryCode: string): Promise<Set<string>> {
-  const [contacts, waContacts, optedOut] = await Promise.all([
+  const [contacts, waContacts, optedOut, savedDnc] = await Promise.all([
     prisma.contact.findMany({
       where: { phone: { not: null }, OR: [{ status: { not: "ACTIVE" } }, { unsubscribe: { isNot: null } }] },
       select: { phone: true },
@@ -223,9 +229,11 @@ export async function loadDoNotCallPhones(defaultCountryCode: string): Promise<S
       select: { phone: true },
     }),
     prisma.aiCallLog.findMany({ where: { outcome: "do_not_call" }, select: { phone: true }, distinct: ["phone"] }),
+    // Saved AI Call Customers marked Do not call — including soft-deleted ones (permanent).
+    prisma.aiCallCustomer.findMany({ where: { doNotCall: true }, select: { phone: true } }),
   ]);
   const out = new Set<string>();
-  for (const { phone } of [...contacts, ...waContacts, ...optedOut]) {
+  for (const { phone } of [...contacts, ...waContacts, ...optedOut, ...savedDnc]) {
     const e164 = phone ? normalizePhoneE164(phone, defaultCountryCode) : null;
     if (e164) out.add(e164);
   }

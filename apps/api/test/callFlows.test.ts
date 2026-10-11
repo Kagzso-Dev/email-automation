@@ -1,0 +1,98 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import {
+  CALL_FLOW_LOCKED_KEYS,
+  callFlowDefinition,
+  isLockedBlock,
+  saveCallFlowDraftInput,
+  startAiCallsInput,
+  unknownCallFlowVariables,
+  type CallFlowDefinition,
+} from "@dispatch/shared";
+
+// The shared zod mirror must accept exactly what the voice backend ships, so the
+// built-in flows are read straight from kagzso-voice-backend-english.
+const BUILTIN = new URL("../../../kagzso-voice-backend-english/app/flows/builtin/", import.meta.url);
+const readJson = (name: string) => JSON.parse(readFileSync(fileURLToPath(new URL(name, BUILTIN)), "utf8"));
+const nila = (): CallFlowDefinition => readJson("nila.json");
+
+const issues = (v: unknown) => {
+  const r = callFlowDefinition.safeParse(v);
+  return r.success ? [] : r.error.issues.map((i) => i.message);
+};
+
+describe("callFlowDefinition mirrors the voice backend", () => {
+  it("accepts both built-in flows unchanged", () => {
+    for (const name of ["nila.json", "followup.json"]) expect(issues(readJson(name))).toEqual([]);
+  });
+
+  it("knows exactly the voice backend's locked safety blocks", () => {
+    const locked = Object.keys(readJson("locked_blocks.json")).sort();
+    expect([...CALL_FLOW_LOCKED_KEYS.nila, ...CALL_FLOW_LOCKED_KEYS.followup].sort()).toEqual(locked);
+    expect(nila().blocks.filter(isLockedBlock).map((b) => b.locked).sort()).toEqual([...CALL_FLOW_LOCKED_KEYS.nila].sort());
+  });
+});
+
+describe("callFlowDefinition validation", () => {
+  it("rejects unknown fields at every level", () => {
+    expect(issues({ ...nila(), script: "x" })).not.toEqual([]);
+    const f = nila();
+    (f.blocks[0] as Record<string, unknown>).note = "x";
+    expect(issues(f)).not.toEqual([]);
+    expect(issues({ ...nila(), silence: { reprompt: "Hello?", closing: "Bye.", retries: 2 } })).not.toEqual([]);
+  });
+
+  it("allows only the documented variables (never the phone number)", () => {
+    expect(unknownCallFlowVariables("Hi {{name}}, {{ honorific }} {{follow_up_detail}}")).toEqual([]);
+    expect(unknownCallFlowVariables("Call {{phone_number}} {{x}} {{x}}")).toEqual(["phone_number", "x"]);
+    expect(issues({ ...nila(), greeting: { text: "Hi {{phone_number}}" } }).join()).toMatch(/Unknown variable/);
+  });
+
+  it("enforces lengths, single-line fields and the hang-up marker", () => {
+    const long = nila();
+    (long.blocks[0] as { text: string }).text = "x".repeat(8001);
+    expect(issues(long)).not.toEqual([]);
+    expect(issues({ ...nila(), greeting: { text: "x".repeat(301) } })).not.toEqual([]);
+    expect(issues({ ...nila(), greeting: { text: "Hi,\nthere" } }).join()).toMatch(/single line/);
+    const marker = nila();
+    (marker.blocks[0] as { text: string }).text += " [[END_CALL]]";
+    expect(issues(marker).join()).toMatch(/END_CALL/);
+    expect(issues({ ...nila(), limits: { max_duration_sec: 5 } })).not.toEqual([]);
+  });
+
+  it("keeps the locked safety blocks", () => {
+    const removed = nila();
+    removed.blocks = removed.blocks.filter((b) => !(isLockedBlock(b) && b.locked === "nila_do_not_call"));
+    expect(issues(removed).join()).toMatch(/Locked safety blocks/);
+    const foreign = nila();
+    foreign.blocks.push({ id: "x", locked: "followup_situations" });
+    expect(issues(foreign).join()).toMatch(/Locked safety blocks/);
+    const dupId = nila();
+    dupId.blocks[1] = { ...dupId.blocks[1], id: dupId.blocks[0].id };
+    expect(issues(dupId).join()).toMatch(/Duplicate block id/);
+  });
+
+  it("stores a transfer number but never enables transfer", () => {
+    expect(issues({ ...nila(), transfer: { enabled: false, number: "+919876543210" } })).toEqual([]);
+    expect(issues({ ...nila(), transfer: { enabled: true, number: "+919876543210" } })).not.toEqual([]);
+    expect(issues({ ...nila(), transfer: { enabled: false, number: "98765" } })).not.toEqual([]);
+  });
+
+  it("supports English only for now", () => {
+    expect(issues({ ...nila(), language: "ta" })).not.toEqual([]);
+  });
+});
+
+describe("inputs", () => {
+  it("draft input is strict", () => {
+    expect(saveCallFlowDraftInput.safeParse({ definition: nila() }).success).toBe(true);
+    expect(saveCallFlowDraftInput.safeParse({ definition: nila(), status: "PUBLISHED" }).success).toBe(false);
+  });
+
+  it("startAiCallsInput takes an optional flowId and defaults to none", () => {
+    const base = { rows: [{ phone: "9876543210" }], mode: "all" };
+    expect(startAiCallsInput.parse(base).flowId).toBeUndefined();
+    expect(startAiCallsInput.parse({ ...base, flowId: "cf_1" }).flowId).toBe("cf_1");
+  });
+});

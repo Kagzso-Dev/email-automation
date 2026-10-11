@@ -16,8 +16,10 @@ describe("createWhatsAppContactInput", () => {
     expect(createWhatsAppContactInput.safeParse({ phone: "12345" }).success).toBe(false);
   });
 
-  it("rejects a non-Indian phone", () => {
-    expect(createWhatsAppContactInput.safeParse({ phone: "+1 (415) 555-2671" }).success).toBe(false);
+  it("accepts other countries with their code, and a bare 10-digit number as +91", () => {
+    expect(createWhatsAppContactInput.parse({ phone: "+1 (415) 555-2671" }).phone).toBe("14155552671");
+    expect(createWhatsAppContactInput.parse({ phone: "+971501234567" }).phone).toBe("971501234567");
+    expect(createWhatsAppContactInput.parse({ phone: "98765 43210" }).phone).toBe("919876543210");
   });
 
   it("rejects an Indian number not starting with 6-9", () => {
@@ -67,12 +69,15 @@ describe("createWhatsAppTemplateInput", () => {
     expect(res.success).toBe(false);
   });
 
-  it("rejects more than 3 button labels", () => {
+  it("rejects more than 10 button labels (Meta's quick-reply limit)", () => {
+    expect(
+      createWhatsAppTemplateInput.safeParse({ name: "x", providerTemplateName: "hello_world", body: "hi", buttonLabels: ["a", "b", "c", "d"] }).success,
+    ).toBe(true);
     const res = createWhatsAppTemplateInput.safeParse({
       name: "x",
       providerTemplateName: "hello_world",
       body: "hi",
-      buttonLabels: ["a", "b", "c", "d"],
+      buttonLabels: Array.from({ length: 11 }, (_, i) => `b${i}`),
     });
     expect(res.success).toBe(false);
   });

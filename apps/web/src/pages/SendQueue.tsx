@@ -1,11 +1,16 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
-import { Badge, EmptyState, ErrorNote, SkeletonTable, Table, Tabs, type BadgeTone } from "../components/ui";
+import { Badge, EmptyState, ErrorNote, Tabs, type BadgeTone } from "../components/ui";
+import { pageOf, QueuePagination, ScrollTable, SkeletonRows } from "../components/QueueTable";
 import { Icon } from "../components/icons";
 import { useToast } from "../components/toast";
 import { formatDateTime } from "../lib/schedule";
+import { useAiCallsConfig } from "../lib/aiCalls";
+import { AiCallFollowupsQueue } from "../components/AiCallFollowupsQueue";
+import { FilterNewDataButton } from "../components/FilterNewData";
+import { DownloadAllHistoryButton } from "../components/DownloadAllHistory";
 
 /**
  * Send Queue — batch history for the two send channels, each on its own tab.
@@ -32,16 +37,47 @@ const batchTone: Record<BatchStatus, BadgeTone> = {
 
 const TAB_KEY = "dispatch:send-queue-tab";
 
+type QueueTab = "email" | "whatsapp" | "ai-followups";
+
+/** Page, page size and status filter — kept per tab while you switch between them. */
+export interface QueueView {
+  page: number;
+  pageSize: number;
+  status: string;
+}
+export interface QueueViewProps {
+  view: QueueView;
+  setView: (patch: Partial<QueueView>) => void;
+}
+
+const DEFAULT_VIEWS: Record<QueueTab, QueueView> = {
+  email: { page: 1, pageSize: 10, status: "" },
+  whatsapp: { page: 1, pageSize: 10, status: "" },
+  "ai-followups": { page: 1, pageSize: 10, status: "PENDING_APPROVAL" },
+};
+
 export function SendQueuePage() {
-  const [tab, setTab] = useState<"email" | "whatsapp">(() => {
+  // "AI Call follow-ups" (approval queue) — admins only, while ENABLE_AI_CALLS is on.
+  const aiCalls = useAiCallsConfig();
+  const showAi = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
+  const [tab, setTab] = useState<QueueTab>(() => {
     try {
-      return localStorage.getItem(TAB_KEY) === "whatsapp" ? "whatsapp" : "email";
+      const saved = localStorage.getItem(TAB_KEY);
+      return saved === "whatsapp" || saved === "ai-followups" ? saved : "email";
     } catch {
       return "email";
     }
   });
 
-  function pick(next: "email" | "whatsapp") {
+  const [views, setViews] = useState(DEFAULT_VIEWS);
+  const viewProps = (t: QueueTab): QueueViewProps => ({
+    view: views[t],
+    setView: (patch) => setViews((v) => ({ ...v, [t]: { ...v[t], ...patch } })),
+  });
+
+  const activeTab: QueueTab = tab === "ai-followups" && !showAi ? "email" : tab;
+
+  function pick(next: QueueTab) {
     setTab(next);
     try {
       localStorage.setItem(TAB_KEY, next);
@@ -55,16 +91,30 @@ export function SendQueuePage() {
       <PageHeader
         title="Send Queue"
         subtitle="Track sent batches — which recipients are still sending, done, or failed. Email and WhatsApp are kept separate."
+        action={
+          // Compares an uploaded file with the active tab's channel only (keyed so switching tabs starts fresh).
+          <FilterNewDataButton
+            key={activeTab}
+            channel={activeTab === "ai-followups" ? "ai-call" : activeTab}
+          />
+        }
       />
       <Tabs
         tabs={[
           { value: "email", label: "Email" },
           { value: "whatsapp", label: "WhatsApp" },
+          ...(showAi ? [{ value: "ai-followups" as const, label: "AI Call follow-ups" }] : []),
         ]}
-        value={tab}
+        value={tab === "ai-followups" && !showAi ? "email" : tab}
         onChange={pick}
       />
-      {tab === "email" ? <EmailQueue /> : <WhatsAppQueue />}
+      {tab === "ai-followups" && showAi ? (
+        <AiCallFollowupsQueue {...viewProps("ai-followups")} />
+      ) : tab === "whatsapp" ? (
+        <WhatsAppQueue {...viewProps("whatsapp")} />
+      ) : (
+        <EmailQueue {...viewProps("email")} />
+      )}
     </div>
   );
 }
@@ -74,13 +124,16 @@ export function SendQueuePage() {
 function StatusFilter({
   value,
   onChange,
+  action,
 }: {
   value: "" | BatchStatus;
   onChange: (v: "" | BatchStatus) => void;
+  /** Shown at the right end of the row ("Download all history"). */
+  action?: ReactNode;
 }) {
   return (
     <div className="mb-4 flex items-center gap-2">
-      <label className="text-xs font-medium uppercase tracking-wide text-slate-550">Status</label>
+      <label className="text-xs font-medium uppercase tracking-[0.06em] text-slate-550">Status</label>
       <select
         className="input sm:max-w-[14rem]"
         value={value}
@@ -92,13 +145,14 @@ function StatusFilter({
           </option>
         ))}
       </select>
+      {action ? <div className="ml-auto shrink-0">{action}</div> : null}
     </div>
   );
 }
 
 function ProgressBar({ pct, barClass }: { pct: number; barClass: string }) {
   return (
-    <div className="h-2 w-full overflow-hidden rounded-full bg-[#eef0f4]">
+    <div className="h-2 w-full overflow-hidden rounded-full bg-surface-muted">
       <div
         className={`h-full rounded-full transition-[width] duration-500 ${barClass}`}
         style={{ width: `${pct}%` }}
@@ -233,8 +287,8 @@ const emailItemTone: Record<EmailItemStatus, BadgeTone> = {
   SKIPPED: "warn",
 };
 
-function EmailQueue() {
-  const [status, setStatus] = useState<"" | BatchStatus>("");
+function EmailQueue({ view, setView }: QueueViewProps) {
+  const status = view.status as "" | BatchStatus;
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const q = useQuery({
@@ -243,29 +297,39 @@ function EmailQueue() {
       api<{ items: EmailBatchRow[] }>(
         `/api/contacts/send/batches${status ? `?status=${status}` : ""}`,
       ),
+    // Live status: re-poll only while a batch on the page being viewed is still sending.
     refetchInterval: (query) =>
-      (query.state.data?.items ?? []).some((b) => b.status === "RUNNING") ? 4000 : false,
+      pageOf(query.state.data?.items ?? [], view.page, view.pageSize).rows.some((b) => b.status === "RUNNING") ? 4000 : false,
   });
+  // Newest first (the API orders by start time, newest first).
+  const current = pageOf(q.data?.items ?? [], view.page, view.pageSize);
 
   return (
     <div>
-      <StatusFilter value={status} onChange={setStatus} />
+      <StatusFilter
+        value={status}
+        onChange={(v) => setView({ status: v, page: 1 })}
+        action={<DownloadAllHistoryButton channel="email" />}
+      />
       {q.isLoading ? (
-        <SkeletonTable rows={5} />
+        <ScrollTable head={HEAD}>
+          <SkeletonRows cols={HEAD.length} />
+        </ScrollTable>
       ) : q.error ? (
         <ErrorNote error={q.error} />
       ) : q.data!.items.length === 0 ? (
-        <EmptyState icon="mail" title="No email batches yet">
+        <EmptyState icon="mail" title="No batches yet">
           Bulk sends started from the Contacts page show up here.
         </EmptyState>
       ) : (
-        <Table head={HEAD}>
-          {q.data!.items.map((b) => {
+        <>
+        <ScrollTable head={HEAD} scrollKey={`${status}:${current.page}:${view.pageSize}`}>
+          {current.rows.map((b) => {
             const open = expanded === b.id;
             return (
               <Fragment key={b.id}>
                 <tr
-                  className="cursor-pointer border-b border-[#f0f2f6] last:border-0 hover:bg-surface-muted"
+                  className="cursor-pointer border-b border-line-subtle last:border-0 hover:bg-tint"
                   onClick={() => setExpanded(open ? null : b.id)}
                 >
                   <td className="px-4 py-2.5">
@@ -315,8 +379,8 @@ function EmailQueue() {
                   </td>
                 </tr>
                 {open && (
-                  <tr className="border-b border-[#f0f2f6]">
-                    <td colSpan={HEAD.length} className="bg-[#fafbfc] px-4 py-4">
+                  <tr className="border-b border-line-subtle">
+                    <td colSpan={HEAD.length} className="bg-surface-sunken px-4 py-4">
                       <EmailBatchDetail id={b.id} />
                     </td>
                   </tr>
@@ -324,7 +388,15 @@ function EmailQueue() {
               </Fragment>
             );
           })}
-        </Table>
+        </ScrollTable>
+        <QueuePagination
+          page={current.page}
+          pageSize={view.pageSize}
+          total={q.data!.items.length}
+          onPage={(page) => setView({ page })}
+          onPageSize={(pageSize) => setView({ pageSize, page: 1 })}
+        />
+        </>
       )}
     </div>
   );
@@ -346,7 +418,7 @@ function EmailBatchDetail({ id }: { id: string }) {
 
   return (
     <div>
-      <ProgressBar pct={pct} barClass="bg-accent-ink" />
+      <ProgressBar pct={pct} barClass="bg-gradient-accent" />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-slate-550">
         <span>
           <b className="text-ok">{v.counts.SENT}</b> sent
@@ -364,10 +436,10 @@ function EmailBatchDetail({ id }: { id: string }) {
         )}
       </div>
 
-      <div className="mt-3 overflow-x-auto rounded-lg border border-[#e3e6ec] bg-white">
-        <table className="w-full min-w-[36rem] text-sm">
-          <thead>
-            <tr className="border-b border-[#e3e6ec] text-left text-xs uppercase tracking-wide text-slate-550">
+      <div className="scroll-thin mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-white">
+        <table className="table-soft w-full min-w-[36rem] text-sm">
+          <thead className="sticky top-0 z-10 bg-surface-sunken">
+            <tr className="border-b border-line text-left text-xs uppercase tracking-[0.06em] text-slate-550">
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Email</th>
               <th className="px-3 py-2">Status</th>
@@ -379,7 +451,7 @@ function EmailBatchDetail({ id }: { id: string }) {
           </thead>
           <tbody>
             {v.items.map((it) => (
-              <tr key={it.id} className="border-b border-[#f0f2f6] last:border-0">
+              <tr key={it.id} className="border-b border-line-subtle last:border-0">
                 <td className="px-3 py-1.5">{it.name || "—"}</td>
                 <td className="px-3 py-1.5 font-mono text-xs">{it.email}</td>
                 <td className="px-3 py-1.5">
@@ -453,8 +525,8 @@ const waItemTone: Record<WaItemStatus, BadgeTone> = {
   SKIPPED: "warn",
 };
 
-function WhatsAppQueue() {
-  const [status, setStatus] = useState<"" | BatchStatus>("");
+function WhatsAppQueue({ view, setView }: QueueViewProps) {
+  const status = view.status as "" | BatchStatus;
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const q = useQuery({
@@ -463,29 +535,39 @@ function WhatsAppQueue() {
       api<{ items: WaBatchRow[] }>(
         `/api/whatsapp/send/batches${status ? `?status=${status}` : ""}`,
       ),
+    // Live status: re-poll only while a batch on the page being viewed is still sending.
     refetchInterval: (query) =>
-      (query.state.data?.items ?? []).some((b) => b.status === "RUNNING") ? 4000 : false,
+      pageOf(query.state.data?.items ?? [], view.page, view.pageSize).rows.some((b) => b.status === "RUNNING") ? 4000 : false,
   });
+  // Newest first (the API orders by start time, newest first).
+  const current = pageOf(q.data?.items ?? [], view.page, view.pageSize);
 
   return (
     <div>
-      <StatusFilter value={status} onChange={setStatus} />
+      <StatusFilter
+        value={status}
+        onChange={(v) => setView({ status: v, page: 1 })}
+        action={<DownloadAllHistoryButton channel="whatsapp" />}
+      />
       {q.isLoading ? (
-        <SkeletonTable rows={5} />
+        <ScrollTable head={HEAD}>
+          <SkeletonRows cols={HEAD.length} />
+        </ScrollTable>
       ) : q.error ? (
         <ErrorNote error={q.error} />
       ) : q.data!.items.length === 0 ? (
-        <EmptyState icon="whatsapp" title="No WhatsApp batches yet">
+        <EmptyState icon="whatsapp" title="No batches yet">
           WhatsApp sends started from the Contacts or WhatsApp Contacts page show up here.
         </EmptyState>
       ) : (
-        <Table head={HEAD}>
-          {q.data!.items.map((b) => {
+        <>
+        <ScrollTable head={HEAD} scrollKey={`${status}:${current.page}:${view.pageSize}`}>
+          {current.rows.map((b) => {
             const open = expanded === b.id;
             return (
               <Fragment key={b.id}>
                 <tr
-                  className="cursor-pointer border-b border-[#f0f2f6] last:border-0 hover:bg-surface-muted"
+                  className="cursor-pointer border-b border-line-subtle last:border-0 hover:bg-tint"
                   onClick={() => setExpanded(open ? null : b.id)}
                 >
                   <td className="px-4 py-2.5">
@@ -535,8 +617,8 @@ function WhatsAppQueue() {
                   </td>
                 </tr>
                 {open && (
-                  <tr className="border-b border-[#f0f2f6]">
-                    <td colSpan={HEAD.length} className="bg-[#fafbfc] px-4 py-4">
+                  <tr className="border-b border-line-subtle">
+                    <td colSpan={HEAD.length} className="bg-surface-sunken px-4 py-4">
                       <WhatsAppBatchDetail id={b.id} />
                     </td>
                   </tr>
@@ -544,7 +626,15 @@ function WhatsAppQueue() {
               </Fragment>
             );
           })}
-        </Table>
+        </ScrollTable>
+        <QueuePagination
+          page={current.page}
+          pageSize={view.pageSize}
+          total={q.data!.items.length}
+          onPage={(page) => setView({ page })}
+          onPageSize={(pageSize) => setView({ pageSize, page: 1 })}
+        />
+        </>
       )}
     </div>
   );
@@ -566,7 +656,7 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
 
   return (
     <div>
-      <ProgressBar pct={pct} barClass="bg-[#25d366]" />
+      <ProgressBar pct={pct} barClass="bg-wa" />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-slate-550">
         <span>
           <b className="text-ok">{v.counts.SENT + v.counts.DELIVERED + v.counts.READ}</b> sent
@@ -584,10 +674,10 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
         )}
       </div>
 
-      <div className="mt-3 overflow-x-auto rounded-lg border border-[#e3e6ec] bg-white">
-        <table className="w-full min-w-[36rem] text-sm">
-          <thead>
-            <tr className="border-b border-[#e3e6ec] text-left text-xs uppercase tracking-wide text-slate-550">
+      <div className="scroll-thin mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-white">
+        <table className="table-soft w-full min-w-[36rem] text-sm">
+          <thead className="sticky top-0 z-10 bg-surface-sunken">
+            <tr className="border-b border-line text-left text-xs uppercase tracking-[0.06em] text-slate-550">
               <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Phone</th>
               <th className="px-3 py-2">Status</th>
@@ -599,7 +689,7 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
           </thead>
           <tbody>
             {v.items.map((it) => (
-              <tr key={it.id} className="border-b border-[#f0f2f6] last:border-0">
+              <tr key={it.id} className="border-b border-line-subtle last:border-0">
                 <td className="px-3 py-1.5">{it.name || "—"}</td>
                 <td className="px-3 py-1.5 font-mono text-xs">{it.phone || "—"}</td>
                 <td className="px-3 py-1.5">

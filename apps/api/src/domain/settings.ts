@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { env } from "../env.js";
+import { normalizeHiddenNavItems, SIDEBAR_HIDDEN_ITEMS_KEY, type HideableNavItem } from "@dispatch/shared";
 
 /**
  * Tiny key-value store for operator-tunable settings that would otherwise be
@@ -50,5 +51,22 @@ export async function getBulkSendDelays(): Promise<BulkSendDelays> {
 export async function setBulkSendDelays(range: BulkSendDelays): Promise<BulkSendDelays> {
   const clean = clampDelayRange(range.minDelaySec, range.maxDelaySec);
   await setSetting(BULK_SEND_KEY, clean);
+  return clean;
+}
+
+/* ------------------------------------------------------------- sidebar menu */
+
+/** Hidden sidebar items for the whole workspace. Missing or unreadable → show everything. */
+export async function getSidebarHiddenItems(): Promise<HideableNavItem[]> {
+  try {
+    return normalizeHiddenNavItems(await getSetting<unknown>(SIDEBAR_HIDDEN_ITEMS_KEY, []));
+  } catch {
+    return [];
+  }
+}
+
+export async function setSidebarHiddenItems(items: HideableNavItem[]): Promise<HideableNavItem[]> {
+  const clean = normalizeHiddenNavItems(items);
+  await setSetting(SIDEBAR_HIDDEN_ITEMS_KEY, clean);
   return clean;
 }

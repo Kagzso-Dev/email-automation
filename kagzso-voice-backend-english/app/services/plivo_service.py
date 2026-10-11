@@ -93,7 +93,8 @@ class PlivoService:
         return f"{self.cfg.public_ws_base_url}/ws/plivo/media?{q}"
 
     # ---------------------- API calls ----------------------
-    async def make_outbound_call(self, call_id: str, to_number: str) -> OutboundCallResult:
+    async def make_outbound_call(self, call_id: str, to_number: str, time_limit: Optional[int] = None) -> OutboundCallResult:
+        """time_limit: per-call cap in seconds (a call flow's max duration); None = MAX_CALL_DURATION_SECONDS."""
         client = self.client
         kwargs = dict(
             from_=self.cfg.PLIVO_FROM_NUMBER,
@@ -104,7 +105,7 @@ class PlivoService:
             ring_method="POST",
             hangup_url=self.status_url(call_id),
             hangup_method="POST",
-            time_limit=self.cfg.MAX_CALL_DURATION_SECONDS,
+            time_limit=time_limit or self.cfg.MAX_CALL_DURATION_SECONDS,
             ring_timeout=45,
         )
         if self.cfg.PLIVO_MACHINE_DETECTION:

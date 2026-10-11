@@ -11,6 +11,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { applyWhatsAppStatusEvent } from "./whatsappTracking.js";
+import { queueInboundMedia } from "./whatsappMedia.js";
 
 /* ---------------------------------------------------------------- verification */
 
@@ -59,6 +60,7 @@ interface MetaMedia {
   mime_type?: string;
   caption?: string;
   filename?: string;
+  sha256?: string;
 }
 
 interface MetaInboundMessage {
@@ -170,7 +172,7 @@ async function recordInboundMessage(parsed: ParsedInboundMessage, raw: MetaInbou
     select: { id: true },
   });
   // Upsert on the message id: Meta redelivers events it didn't get a 200 for.
-  await prisma.whatsAppInboundMessage.upsert({
+  const row = await prisma.whatsAppInboundMessage.upsert({
     where: { providerMessageId: parsed.providerMessageId },
     create: {
       ...parsed,
@@ -183,6 +185,28 @@ async function recordInboundMessage(parsed: ParsedInboundMessage, raw: MetaInbou
     { wamid: parsed.providerMessageId, from: parsed.phone, type: parsed.messageType },
     "whatsapp inbound message received",
   );
+
+  // Media: record it and download in the background (the webhook still returns at
+  // once). Idempotent on the message, so redeliveries don't download twice. A
+  // failure here never fails the webhook — the message itself is already saved.
+  if (parsed.mediaId && row?.id) {
+    const media = (MEDIA_TYPES as readonly string[]).includes(raw.type) ? raw[raw.type as (typeof MEDIA_TYPES)[number]] : undefined;
+    try {
+      await queueInboundMedia({
+        inboundMessageId: row.id,
+        kind: parsed.messageType,
+        providerMediaId: parsed.mediaId,
+        mimeType: parsed.mediaMimeType,
+        filename: media?.filename ?? null,
+        sha256: media?.sha256 ?? null,
+      });
+    } catch (err) {
+      logger.warn(
+        { wamid: parsed.providerMessageId, err: err instanceof Error ? err.message : String(err) },
+        "whatsapp inbound media could not be queued",
+      );
+    }
+  }
 }
 
 export interface WebhookResult {

@@ -17,6 +17,7 @@ Latency markers (per turn):
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -29,6 +30,7 @@ from app.core.logging import call_context, get_logger
 from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import FINAL_CALL_STATUSES, LOCKED_OUTCOMES, Call, CallOutcome, CallStatus, utcnow
+from app.flows.loader import FlowError, resolve_flow_agent
 from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
 from app.services import status_callback
@@ -110,6 +112,14 @@ def silence_reprompt(language: Optional[str] = None) -> str:
 
 def silence_closing(language: Optional[str] = None) -> str:
     return SILENCE_CLOSINGS.get(_lang(language), SILENCE_CLOSINGS["en"])
+
+
+_NAME_ALIAS_RE = re.compile(r"\{\{\s*name\s*\}\}")
+
+
+def greeting_needs_name(first_message: str) -> bool:
+    """The opening line speaks the customer's name, so a call without one is refused."""
+    return "customer_name" in first_message or bool(_NAME_ALIAS_RE.search(first_message))
 
 
 def _ms(a: Optional[float], b: Optional[float]) -> Optional[int]:
@@ -256,10 +266,30 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     if not agent.active:
         raise CallError(400, "Agent is not active")
 
+    # A call flow from Dispatch replaces the agent; a missing / invalid flow falls back
+    # to the agent requested above, so the call still goes out exactly as before.
+    flow_vars: Dict[str, Optional[str]] = {}
+    flow_event: Optional[Tuple[str, dict]] = None
+    time_limit: Optional[int] = None
+    if req.flow_id is not None:
+        try:
+            resolved = await resolve_flow_agent(db, req.flow_id, req.flow_version or 0, req.flow_draft, req.flow)
+        except FlowError as exc:
+            log.warning("Call flow %s v%s not used (%s) - falling back to agent '%s'",
+                        req.flow_id, req.flow_version, exc.reason, agent.name)
+            flow_vars = {"flow_id": req.flow_id, "flow_version": str(req.flow_version), "flow_fallback": exc.reason}
+            flow_event = ("flow:fallback", {**flow_vars, "agent_id": agent.id, "errors": exc.errors[:5]})
+        else:
+            agent = resolved.agent
+            flow_vars = {**resolved.info, "flow_silence_reprompt": resolved.flow.silence.reprompt,
+                         "flow_silence_closing": resolved.flow.silence.closing}
+            time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
+            flow_event = ("flow:selected", {**resolved.info, "agent_id": agent.id, "time_limit": time_limit})
+
     existing = await repo.get_contact_by_phone(db, req.phone_number)
     if existing is not None and existing.dnd:
         raise CallError(409, "Contact is marked Do-Not-Disturb; call not placed")
-    if agent.first_message and "customer_name" in agent.first_message and not (req.name or (existing and existing.name)):
+    if agent.first_message and greeting_needs_name(agent.first_message) and not (req.name or (existing and existing.name)):
         # e.g. "Hi, is this {{customer_name}}?" cannot be spoken without a name, and we never invent one.
         raise CallError(422, f"customer_name is required for agent '{agent.name}' (its first sentence uses the name)")
     contact = await repo.upsert_contact(
@@ -279,6 +309,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         run_id=req.run_id,
         log_id=req.log_id,
     )
+    variables.update(flow_vars)
     rotation = cfg.voice_rotation
     async with _VOICE_ROTATION_LOCK:  # pick + insert together so concurrent calls get different voices
         voice_id = await repo.next_rotation_voice(db, rotation) if rotation else None
@@ -296,12 +327,15 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         )
     with call_context(call.id):
         await repo.add_event(db, call.id, "status:created", {"agent_id": agent.id, "voice_id": voice_id})
+        if flow_event:
+            await repo.add_event(db, call.id, *flow_event)
         if voice_id:
             log.info("Voice rotation: using voice %s", voice_id)
         await get_session_store().set_fields(call.id, status="created", agent_id=agent.id, processing_state="idle")
         await transition(db, call, CallStatus.initiating, started_at=utcnow())
         try:
-            result = await providers.telephony(call.telephony_provider).make_outbound_call(call.id, req.phone_number)
+            result = await providers.telephony(call.telephony_provider).make_outbound_call(
+                call.id, req.phone_number, time_limit=time_limit)
         except PlivoError as exc:
             await transition(db, call, CallStatus.failed, {"error": exc.kind}, outcome=CallOutcome.call_failed.value, ended_at=utcnow())
             raise CallError(502 if exc.kind != "not_configured" else 503,
@@ -466,6 +500,9 @@ class CallContextData:
     provider_call_id: Optional[str] = None
     contact_id: Optional[int] = None
     telephony_provider: str = "plivo"
+    # Call-flow silence lines (already rendered); None = the built-in lines.
+    silence_reprompt: Optional[str] = None
+    silence_closing: Optional[str] = None
 
 
 @dataclass
@@ -763,12 +800,12 @@ class CallSession:
                     self._silence_prompts = 1
                     log.info("Customer silent for %.0fs - re-prompting", idle)
                     self._event("silence_reprompt")
-                    self._start_turn(scripted=silence_reprompt(self.cfg.CALL_LANGUAGE))
+                    self._start_turn(scripted=self.ctx.silence_reprompt or silence_reprompt(self.cfg.CALL_LANGUAGE))
                 else:
                     log.info("Still no response - closing the call politely")
                     self._event("silence_close")
                     self.end_call_requested = True
-                    self._start_turn(scripted=silence_closing(self.cfg.CALL_LANGUAGE))
+                    self._start_turn(scripted=self.ctx.silence_closing or silence_closing(self.cfg.CALL_LANGUAGE))
                 self._last_activity = time.monotonic()
 
     def _start_turn(self, audio_pcm: Optional[bytes] = None, injected: Optional[str] = None,
@@ -1085,13 +1122,18 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
         call = await repo.get_call(db, call_id)
         if call is None:
             return None
+        variables = dict(call.variables or {})
+        flow_lines = {key: render_first_message(variables[f"flow_silence_{key}"], variables) or None
+                      for key in ("reprompt", "closing") if variables.get(f"flow_silence_{key}")}
         return CallContextData(
             call_id=call.id,
             agent_prompt=call.agent.system_prompt,
             first_message=call.agent.first_message,
-            variables=dict(call.variables or {}),
+            variables=variables,
             voice_id=call.voice_id or call.agent.voice_id,
             provider_call_id=call.provider_call_id,
             contact_id=call.contact_id,
             telephony_provider=call.telephony_provider or "plivo",
+            silence_reprompt=flow_lines.get("reprompt"),
+            silence_closing=flow_lines.get("closing"),
         )

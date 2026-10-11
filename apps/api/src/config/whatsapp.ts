@@ -62,6 +62,12 @@ export const whatsappConfig = {
   defaultCountryCode: defaultCountryCode || undefined,
   minDelaySec,
   maxDelaySec,
+  /**
+   * Private folder for WhatsApp media (template headers, customer files, reply
+   * attachments). Never served statically — only through authenticated routes.
+   * Relative paths resolve from the process working directory, like UPLOADS_DIR.
+   */
+  mediaDir: str(process.env.WHATSAPP_MEDIA_DIR) ?? ".whatsapp-media",
 } as const;
 
 /** True only when the Meta Cloud API can actually be called from .env alone. */

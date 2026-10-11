@@ -113,7 +113,7 @@ export function TemplatesPage() {
                 <li key={t.id}>
                   <button
                     className={`w-full rounded-lg px-3 py-2 text-left text-sm ${
-                      selectedId === t.id ? "bg-accent-soft text-accent-ink" : "hover:bg-[#f0f2f6]"
+                      selectedId === t.id ? "bg-accent-soft text-accent-ink" : "hover:bg-tint"
                     }`}
                     onClick={() => setSelectedId(t.id)}
                   >
@@ -301,7 +301,7 @@ function TemplateEditor({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-ink"
+            className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-ink"
           >
             <Icon name="close" size={18} />
           </button>
@@ -356,7 +356,7 @@ function TemplateEditor({
               <button
                 type="button"
                 aria-label="Remove variable"
-                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"
                 onClick={() =>
                   setForm((f) => ({ ...f, variables: f.variables.filter((_, j) => j !== i) }))
                 }
@@ -420,7 +420,7 @@ function TemplateEditor({
           placeholder={"Best regards,\nThe Team"}
         />
 
-        <div className="mb-3 border-t border-[#e3e6ec] pt-3">
+        <div className="mb-3 border-t border-line pt-3">
           <label className="label">Images (optional)</label>
           <p className="mb-2 text-xs text-slate-550">
             Embedded in the email. Each image is placed at its own placeholder —{" "}
@@ -431,13 +431,13 @@ function TemplateEditor({
           </p>
           <div className="flex flex-col gap-2">
             {form.images.map((url, i) => (
-              <div key={i} className="rounded-lg border border-[#e3e6ec] p-2">
+              <div key={i} className="rounded-lg border border-line p-2">
                 <div className="flex gap-2">
                   {url.trim() && (
                     <img
                       src={url}
                       alt=""
-                      className="h-10 w-10 shrink-0 rounded border border-[#e3e6ec] object-cover"
+                      className="h-10 w-10 shrink-0 rounded border border-line object-cover"
                       onError={(e) => (e.currentTarget.style.opacity = "0.3")}
                     />
                   )}
@@ -467,7 +467,7 @@ function TemplateEditor({
                   <button
                     type="button"
                     aria-label="Remove image"
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"
                     onClick={() => {
                       clearImageError(i);
                       setForm((f) => ({ ...f, images: f.images.filter((_, j) => j !== i) }));
@@ -491,7 +491,7 @@ function TemplateEditor({
           </button>
         </div>
 
-        <div className="mb-3 border-t border-[#e3e6ec] pt-3">
+        <div className="mb-3 border-t border-line pt-3">
           <label className="label">Videos (optional)</label>
           <p className="mb-2 text-xs text-slate-550">
             A YouTube / Vimeo / any video link, rendered as a{" "}
@@ -517,7 +517,7 @@ function TemplateEditor({
                 <button
                   type="button"
                   aria-label="Remove video"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"
                   onClick={() =>
                     setForm((f) => ({ ...f, videos: f.videos.filter((_, j) => j !== i) }))
                   }
@@ -547,7 +547,7 @@ function TemplateEditor({
           onChange={(e) => setForm({ ...form, textBody: e.target.value })}
         />
 
-        <div className="mb-3 border-t border-[#e3e6ec] pt-3">
+        <div className="mb-3 border-t border-line pt-3">
           <label className="label">Links panel (optional)</label>
           <p className="mb-2 text-xs text-slate-550">
             Buttons shown after the message — a meeting link, an agenda, a booking page. URLs may
@@ -581,7 +581,7 @@ function TemplateEditor({
                 <button
                   type="button"
                   aria-label="Remove link"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-crit"
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"
                   onClick={() =>
                     setForm((f) => ({ ...f, links: f.links.filter((_, j) => j !== i) }))
                   }
@@ -601,7 +601,7 @@ function TemplateEditor({
         </div>
 
         {form.kind === "MEETING" && (
-          <div className="mb-3 border-t border-[#e3e6ec] pt-3">
+          <div className="mb-3 border-t border-line pt-3">
             <label className="label">Meeting details</label>
             <p className="mb-2 text-xs text-slate-550">
               Rendered as a card with an “Add to Google Calendar” link and an{" "}
@@ -688,7 +688,7 @@ function TemplateEditor({
         {del.error ? <div className="mt-2"><ErrorNote error={del.error} /></div> : null}
 
         {!isNew && (
-          <div className="mt-4 border-t border-[#e3e6ec] pt-3">
+          <div className="mt-4 border-t border-line pt-3">
             <label className="label">Send test to</label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <input
@@ -718,12 +718,12 @@ function TemplateEditor({
           <ErrorNote error={doPreview.error} />
         ) : preview ? (
           <>
-            <div className="mb-2 border-b border-[#e3e6ec] pb-2 text-sm font-medium">
+            <div className="mb-2 border-b border-line pb-2 text-sm font-medium">
               {preview.subject}
             </div>
             <iframe
               title="preview"
-              className="h-[28rem] w-full rounded border border-[#e3e6ec] bg-white"
+              className="h-[28rem] w-full rounded border border-line bg-white"
               srcDoc={preview.html}
             />
           </>

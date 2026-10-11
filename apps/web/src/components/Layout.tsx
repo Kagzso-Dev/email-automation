@@ -1,22 +1,61 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { useAiCallsConfig } from "../lib/aiCalls";
+import { useInboxUnread } from "../lib/whatsappInbox";
+import { useSidebarHiddenItems } from "../lib/sidebar";
+import type { HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 
-type NavEntry = { to: string; label: string; icon: IconName; end?: boolean };
+type NavEntry = {
+  to: string;
+  label: string;
+  icon: IconName;
+  end?: boolean;
+  /** Set only on items an admin may hide from Settings → Sidebar menu. */
+  hideKey?: HideableNavItem;
+};
 
-const NAV: NavEntry[] = [
-  { to: "/", label: "Dashboard", icon: "dashboard", end: true },
-  { to: "/insights", label: "Insights", icon: "insights" },
-  { to: "/contacts", label: "Contacts", icon: "contacts" },
-  { to: "/lists", label: "Lists", icon: "lists" },
-  { to: "/templates", label: "Templates", icon: "templates" },
-  { to: "/whatsapp-contacts", label: "WhatsApp Contacts", icon: "whatsapp" },
-  { to: "/whatsapp-templates", label: "WhatsApp Templates", icon: "whatsapp" },
-  { to: "/campaigns", label: "Campaigns", icon: "campaigns" },
-  { to: "/send-queue", label: "Send Queue", icon: "activity" },
-  { to: "/triggers", label: "Triggers", icon: "triggers" },
-  { to: "/settings", label: "Settings", icon: "settings" },
+type NavGroup = { label: string; items: NavEntry[] };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "Main",
+    items: [
+      { to: "/", label: "Dashboard", icon: "dashboard", end: true },
+      { to: "/insights", label: "Insights", icon: "insights", hideKey: "insights" },
+      { to: "/contacts", label: "Contacts", icon: "contacts" },
+      { to: "/lists", label: "Lists", icon: "lists", hideKey: "lists" },
+    ],
+  },
+  {
+    label: "Email",
+    items: [
+      { to: "/templates", label: "Templates", icon: "templates" },
+      { to: "/campaigns", label: "Campaigns", icon: "campaigns", hideKey: "campaigns" },
+      { to: "/triggers", label: "Triggers", icon: "triggers", hideKey: "triggers" },
+    ],
+  },
+  {
+    label: "WhatsApp",
+    items: [
+      { to: "/whatsapp-contacts", label: "WhatsApp Contacts", icon: "whatsapp" },
+      { to: "/whatsapp-templates", label: "WhatsApp Templates", icon: "whatsapp" },
+      { to: "/whatsapp-inbox", label: "WhatsApp Inbox", icon: "inbox", hideKey: "whatsapp-inbox" },
+      { to: "/send-queue", label: "Send Queue", icon: "activity" },
+    ],
+  },
+  {
+    label: "Calls",
+    items: [
+      { to: "/ai-call-customers", label: "AI Call Customers", icon: "phone" },
+      { to: "/call-flows", label: "Call Flows", icon: "phone" },
+    ],
+  },
+  {
+    label: "System",
+    items: [{ to: "/settings", label: "Settings", icon: "settings" }],
+  },
 ];
 
 const COLLAPSE_KEY = "dispatch:sidebar-collapsed";
@@ -28,6 +67,26 @@ function cx(...parts: Array<string | false | null | undefined>) {
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const location = useLocation();
+  // "Call Flows" only shows for admins while ENABLE_AI_CALLS + ENABLE_CALL_FLOW_EDITOR are on.
+  const aiCalls = useAiCallsConfig();
+  const showCallFlows = !!aiCalls.data?.flowEditor && !!aiCalls.data.canStart;
+  // "AI Call Customers" only shows for admins while ENABLE_AI_CALLS is on.
+  const showAiCustomers = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
+  // Optional items an admin hid in Settings → Sidebar menu (workspace-wide).
+  const hidden = new Set<string>(useSidebarHiddenItems());
+  // Unread customer messages on the "WhatsApp Inbox" item (admins only; polls while the tab is
+  // visible, and not at all while the item is hidden from the menu).
+  const inboxUnread = useInboxUnread(user?.role === "ADMIN" && !hidden.has("whatsapp-inbox")).data?.messages ?? 0;
+  const groups = NAV_GROUPS.map((g) => ({
+    ...g,
+    items: g.items.filter(
+      (n) =>
+        (n.to !== "/call-flows" || showCallFlows) &&
+        (n.to !== "/ai-call-customers" || showAiCustomers) &&
+        (n.to !== "/whatsapp-inbox" || user?.role === "ADMIN") && // customer messages: admins only
+        !(n.hideKey && hidden.has(n.hideKey)),
+    ),
+  })).filter((g) => g.items.length > 0); // a group with nothing left loses its label too
 
   // Desktop icon-rail state — persisted across reloads.
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -72,7 +131,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-line bg-surface/90 px-3 backdrop-blur md:hidden">
         <button
           type="button"
-          className="grid h-9 w-9 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-surface-muted hover:text-ink"
+          className="grid h-9 w-9 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-tint hover:text-ink"
           aria-label="Open navigation menu"
           aria-expanded={mobileOpen}
           aria-controls="app-sidebar"
@@ -88,7 +147,7 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Backdrop for the mobile drawer */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-ink/40 md:hidden"
+          className="fixed inset-0 z-40 bg-ink/30 backdrop-blur-[6px] animate-overlay-in md:hidden"
           aria-hidden="true"
           onClick={() => setMobileOpen(false)}
         />
@@ -98,9 +157,9 @@ export function Layout({ children }: { children: ReactNode }) {
       <aside
         id="app-sidebar"
         className={cx(
-          "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line bg-surface",
+          "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line/70 bg-surface/90 backdrop-blur-xl",
           "transition-[transform,width] duration-300 ease-in-out-soft motion-reduce:transition-none",
-          "md:sticky md:top-0 md:z-auto md:h-screen",
+          "md:sticky md:top-0 md:z-auto md:h-screen md:bg-surface/80",
           mobileOpen ? "translate-x-0 shadow-rail" : "-translate-x-full",
           "md:translate-x-0",
           collapsed ? "md:w-16" : "md:w-64",
@@ -115,7 +174,7 @@ export function Layout({ children }: { children: ReactNode }) {
         >
           <span
             className={cx(
-              "flex min-w-0 items-center gap-2 font-mono text-sm font-semibold",
+              "flex min-w-0 items-center gap-2 font-mono text-sm font-bold tracking-tight text-ink",
               collapsed && "md:hidden",
             )}
           >
@@ -127,7 +186,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <button
             type="button"
             className={cx(
-              "hidden h-9 w-9 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-surface-muted hover:text-ink md:grid",
+              "hidden h-9 w-9 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-tint hover:text-ink md:grid",
               collapsed ? "md:ml-0" : "md:ml-auto",
             )}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -140,7 +199,7 @@ export function Layout({ children }: { children: ReactNode }) {
           {/* Mobile close */}
           <button
             type="button"
-            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-surface-muted hover:text-ink md:hidden"
+            className="ml-auto grid h-9 w-9 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-tint hover:text-ink md:hidden"
             aria-label="Close navigation menu"
             onClick={() => setMobileOpen(false)}
           >
@@ -149,28 +208,59 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
 
         {/* Primary navigation */}
-        <nav aria-label="Main" className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-          <ul className="flex flex-col gap-0.5">
-            {NAV.map((n) => (
-              <li key={n.to}>
-                <NavLink
-                  to={n.to}
-                  end={n.end}
-                  title={collapsed ? n.label : undefined}
-                  className={({ isActive }) =>
-                    cx(
-                      "nav-link",
-                      collapsed && "md:justify-center md:px-0",
-                      isActive && "nav-link-active",
-                    )
-                  }
-                >
-                  <Icon name={n.icon} size={18} className="shrink-0" />
-                  <span className={cx("truncate", collapsed && "md:hidden")}>{n.label}</span>
-                </NavLink>
-              </li>
-            ))}
-          </ul>
+        {/* Scrolls on its own so the footer below never covers the last item. */}
+        <nav aria-label="Main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4 pt-2">
+          {groups.map((g, gi) => (
+            <div
+              key={g.label}
+              role="group"
+              aria-labelledby={`nav-group-${gi}`}
+              className={cx(gi > 0 && "mt-4", gi > 0 && collapsed && "md:mt-2 md:border-t md:border-line md:pt-2")}
+            >
+              {/* Section label — hidden on the collapsed desktop rail (a divider shows instead). */}
+              <div
+                id={`nav-group-${gi}`}
+                className={cx(
+                  "mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500",
+                  collapsed && "md:sr-only",
+                )}
+              >
+                {g.label}
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {g.items.map((n) => (
+                  <li key={n.to}>
+                    <NavLink
+                      to={n.to}
+                      end={n.end}
+                      title={collapsed ? n.label : undefined}
+                      className={({ isActive }) =>
+                        cx(
+                          "nav-link",
+                          collapsed && "md:justify-center md:px-0",
+                          isActive && "nav-link-active",
+                        )
+                      }
+                    >
+                      <Icon name={n.icon} size={18} className="shrink-0" />
+                      <span className={cx("truncate", collapsed && "md:hidden")}>{n.label}</span>
+                      {n.to === "/whatsapp-inbox" && inboxUnread > 0 && (
+                        <span
+                          className={cx(
+                            "pill-gradient ml-auto",
+                            collapsed && "md:hidden",
+                          )}
+                          aria-label={`${inboxUnread} unread`}
+                        >
+                          {inboxUnread > 99 ? "99+" : inboxUnread}
+                        </span>
+                      )}
+                    </NavLink>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </nav>
 
         {/* Footer — account + sign out */}
@@ -178,7 +268,7 @@ export function Layout({ children }: { children: ReactNode }) {
           {/* Expanded footer: always on mobile, on desktop only when not collapsed */}
           <div className={cx("text-xs text-slate-550", collapsed && "md:hidden")}>
             <div className="truncate text-ink">{user?.email}</div>
-            <div className="mb-2 font-mono uppercase tracking-wide">{user?.role}</div>
+            <div className="mb-2 font-mono uppercase tracking-[0.06em]">{user?.role}</div>
             <button
               type="button"
               className="inline-flex items-center gap-1.5 font-medium text-accent-ink transition-colors hover:underline"
@@ -199,7 +289,7 @@ export function Layout({ children }: { children: ReactNode }) {
               </span>
               <button
                 type="button"
-                className="grid h-8 w-8 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-surface-muted hover:text-crit"
+                className="grid h-8 w-8 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-tint hover:text-crit"
                 aria-label="Sign out"
                 title="Sign out"
                 onClick={() => logout()}
@@ -213,7 +303,14 @@ export function Layout({ children }: { children: ReactNode }) {
 
       {/* Page content */}
       <main className="min-w-0 flex-1 pb-16">
-        <div className="mx-auto max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</div>
+        {/* Keyed on the top-level section only: replays the entrance animation when switching pages
+            without remounting anything a route change wouldn't already remount. */}
+        <div
+          key={location.pathname.split("/")[1]}
+          className="page-enter mx-auto max-w-[1120px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8"
+        >
+          {children}
+        </div>
       </main>
     </div>
   );
@@ -231,10 +328,24 @@ export function PageHeader({
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="page-title">{title}</h1>
+        <h1 className="page-title">
+          <GradientLastWord text={title} />
+        </h1>
         {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
       </div>
       {action ? <div className="flex shrink-0 flex-wrap gap-2">{action}</div> : null}
     </div>
+  );
+}
+
+/** Renders a multi-word title with its last word in the accent gradient ("Send <Queue>"). Text is unchanged. */
+function GradientLastWord({ text }: { text: string }) {
+  const cut = text.trimEnd().lastIndexOf(" ");
+  if (cut <= 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, cut + 1)}
+      <span className="text-gradient">{text.slice(cut + 1)}</span>
+    </>
   );
 }

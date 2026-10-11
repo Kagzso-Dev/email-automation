@@ -10,6 +10,8 @@ import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp
 import { AiCallModal } from "../components/AiCallModal";
 import { Icon } from "../components/icons";
 import { useAiCallsConfig } from "../lib/aiCalls";
+import { formatPhoneDisplay } from "@dispatch/shared";
+import { PhoneInput, phoneInputOk } from "../components/PhoneInput";
 
 interface Contact {
   id: string;
@@ -40,8 +42,10 @@ const statusTone: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   COMPLAINED: "crit",
 };
 
-/** Empty is allowed (phone is optional); otherwise it must be exactly 10 digits. */
-const phoneOk = (s: string) => s.trim() === "" || s.replace(/\D/g, "").length === 10;
+/** Phone is optional; when given it must be valid for its country (shared PhoneInput rules). */
+const phoneOk = (s: string) => phoneInputOk(s, false);
+/** Indian numbers are stored as 10 digits, other countries as +code…; show both with their code. */
+const showPhone = (p: string | null | undefined) => (p ? formatPhoneDisplay(p.startsWith("+") ? p : p.length === 10 ? `+91${p}` : `+${p}`) : "—");
 
 export function ContactsPage() {
   const qc = useQueryClient();
@@ -255,7 +259,7 @@ export function ContactsPage() {
       )}
 
       {sendHint && (
-        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-[#eef0f4] px-3 py-2 text-sm">
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface-muted px-3 py-2 text-sm">
           <span className="text-ink">{sendHint}</span>
           {selectableIds.length > 0 && (
             <button
@@ -332,7 +336,7 @@ export function ContactsPage() {
             ]}
           >
             {items.map((c) => (
-              <tr key={c.id} className="border-b border-[#f0f2f6] last:border-0">
+              <tr key={c.id} className="border-b border-line-subtle last:border-0">
                 <td className="px-4 py-2.5">
                   <input
                     type="checkbox"
@@ -349,7 +353,7 @@ export function ContactsPage() {
                   {[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}
                 </td>
                 <td className="px-4 py-2.5">{c.businessName || "—"}</td>
-                <td className="px-4 py-2.5">{c.phone || "—"}</td>
+                <td className="whitespace-nowrap px-4 py-2.5">{showPhone(c.phone)}</td>
                 <td className="px-4 py-2.5">
                   <Badge tone={statusTone[c.status] ?? "neutral"}>{c.status}</Badge>
                 </td>
@@ -650,18 +654,9 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
           </div>
         </div>
         <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
+          <div className="sm:col-span-2">
             <label className="label">Phone number <span className="text-slate-550">(optional)</span></label>
-            <input
-              className="input"
-              type="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              aria-invalid={!phoneOk(phone)}
-            />
-            {!phoneOk(phone) && (
-              <p className="mt-1 text-xs text-crit">Phone number must contain exactly 10 digits.</p>
-            )}
+            <PhoneInput value={phone} onChange={setPhone} />
           </div>
           <div>
             <label className="label">Business name <span className="text-slate-550">(optional)</span></label>
@@ -759,18 +754,9 @@ function EditContactForm({ contact, onClose }: { contact: Contact; onClose: () =
         </div>
       </div>
       <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
+        <div className="sm:col-span-2">
           <label className="label">Phone number <span className="text-slate-550">(optional)</span></label>
-          <input
-            className="input"
-            type="tel"
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            aria-invalid={!phoneOk(form.phone)}
-          />
-          {!phoneOk(form.phone) && (
-            <p className="mt-1 text-xs text-crit">Phone number must contain exactly 10 digits.</p>
-          )}
+          <PhoneInput value={form.phone} onChange={(phone) => setForm({ ...form, phone })} />
         </div>
         <div>
           <label className="label">Business name <span className="text-slate-550">(optional)</span></label>
@@ -796,7 +782,11 @@ function EditContactForm({ contact, onClose }: { contact: Contact; onClose: () =
         <button type="button" className="btn-ghost" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn-primary" disabled={mut.isPending || !phoneOk(form.phone)}>
+        <button
+          className="btn-primary"
+          // An unchanged stored number is kept as is, even if it predates the stricter check.
+          disabled={mut.isPending || (form.phone !== (contact.phone ?? "") && !phoneOk(form.phone))}
+        >
           {mut.isPending ? "Saving…" : "Save changes"}
         </button>
       </div>

@@ -146,8 +146,10 @@ class FakePlivo(PlivoService):
         self.fail_with = None
         self.hangups: List[str] = []
         self.placed: List[str] = []
+        self.time_limits: list = []
 
-    async def make_outbound_call(self, call_id, to_number):
+    async def make_outbound_call(self, call_id, to_number, time_limit=None):
+        self.time_limits.append(time_limit)
         if self.fail_with:
             raise PlivoError(self.fail_with, "simulated failure")
         self.placed.append(to_number)
@@ -167,8 +169,10 @@ class FakeTwilio(TwilioService):
         self.fail_with = None
         self.hangups: List[str] = []
         self.placed: List[str] = []
+        self.time_limits: list = []
 
-    async def make_outbound_call(self, call_id, to_number):
+    async def make_outbound_call(self, call_id, to_number, time_limit=None):
+        self.time_limits.append(time_limit)
         if self.fail_with:
             raise PlivoError(self.fail_with, "simulated failure")
         self.placed.append(to_number)

@@ -22,13 +22,15 @@ describe("rowsToWhatsAppContacts", () => {
         { Phone: "+91 98765 43210", "First Name": "Ada", company: "Acme" },
         { "Mobile Number": "9123456789", last_name: "Lovelace" },
         { "First Name": "NoPhone" },
-        { Phone: "+1 (415) 555-2671" }, // non-Indian, dropped
+        { Phone: "+1 (415) 555-2671" }, // other country: kept with its code
+        { Phone: "12345" }, // unusable: dropped
       ],
       "91",
     );
     expect(out).toEqual([
       { phone: "919876543210", firstName: "Ada", businessName: "Acme" },
       { phone: "919123456789", lastName: "Lovelace" },
+      { phone: "14155552671" },
     ]);
   });
 });

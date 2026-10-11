@@ -155,6 +155,40 @@ describe("sendTemplateMessage", () => {
     expect(err.message).toContain("does not exist in en");
   });
 
+  it("keeps Meta's subcode and fbtrace_id for the Send Queue, never the token", async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse(
+        {
+          error: {
+            message: "(#200) You do not have the necessary permissions to send messages on behalf of this WhatsApp Business Account",
+            type: "OAuthException",
+            code: 200,
+            error_subcode: 2494102,
+            fbtrace_id: "AbC123xyz",
+          },
+        },
+        { ok: false, status: 403 },
+      ),
+    );
+    const err = await caught(sendTemplateMessage({ to: "919876543210", templateName: "g", languageCode: "en" }));
+    expect(err.retryable).toBe(false);
+    expect(err.code).toBe("200");
+    expect(err.subcode).toBe("2494102");
+    expect(err.fbtraceId).toBe("AbC123xyz");
+    expect(err.message).toContain("Meta 403 (#200)");
+    expect(err.message).toContain("[subcode 2494102, fbtrace_id AbC123xyz]");
+    expect(err.message).not.toContain(DEFAULT_CREDS.accessToken);
+  });
+
+  it("redacts the access token if it ever appears in Meta's error text", async () => {
+    fetchMock.mockResolvedValue(
+      fakeResponse({ error: { message: `bad token ${DEFAULT_CREDS.accessToken}`, code: 190 } }, { ok: false, status: 401 }),
+    );
+    const err = await caught(sendTemplateMessage({ to: "919876543210", templateName: "g", languageCode: "en" }));
+    expect(err.message).not.toContain(DEFAULT_CREDS.accessToken);
+    expect(err.message).toContain("[redacted]");
+  });
+
   it("treats Meta's throughput/rate-limit codes as retryable even on a 400", async () => {
     fetchMock.mockResolvedValue(
       fakeResponse({ error: { message: "Rate limit hit", code: 130429 } }, { ok: false, status: 400 }),

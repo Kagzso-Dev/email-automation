@@ -240,7 +240,7 @@ export function CampaignAssistant({ onNewCampaign }: { onNewCampaign?: () => voi
               type="button"
               aria-label="Close help"
               onClick={() => setOpen(false)}
-              className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-surface-muted hover:text-ink"
+              className="-m-1.5 grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-ink"
             >
               <Icon name="close" size={18} />
             </button>
@@ -252,7 +252,7 @@ export function CampaignAssistant({ onNewCampaign }: { onNewCampaign?: () => voi
                 <div
                   className={
                     m.from === "user"
-                      ? "max-w-[85%] rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-white"
+                      ? "max-w-[85%] rounded-2xl rounded-br-sm bg-accent-soft px-3 py-2 text-sm text-ink shadow-sm"
                       : "max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-muted px-3 py-2 text-sm text-ink"
                   }
                 >
@@ -268,7 +268,7 @@ export function CampaignAssistant({ onNewCampaign }: { onNewCampaign?: () => voi
                     key={s.id}
                     type="button"
                     onClick={() => ask(s.question)}
-                    className="rounded-full border border-line-strong bg-surface px-3 py-1 text-xs text-slate-550 hover:bg-surface-muted hover:text-ink"
+                    className="rounded-full border border-line-strong bg-surface px-3 py-1 text-xs text-slate-550 hover:bg-tint hover:text-ink"
                   >
                     {s.question}
                   </button>
@@ -280,7 +280,7 @@ export function CampaignAssistant({ onNewCampaign }: { onNewCampaign?: () => voi
                       setOpen(false);
                       onNewCampaign();
                     }}
-                    className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs font-medium text-accent-ink hover:bg-accent hover:text-white"
+                    className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs font-medium text-accent-ink transition-colors hover:bg-accent hover:text-ink"
                   >
                     Start a new campaign
                   </button>
@@ -307,7 +307,7 @@ export function CampaignAssistant({ onNewCampaign }: { onNewCampaign?: () => voi
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-label={open ? "Close campaign help" : "Open campaign help"}
-        className="fixed bottom-4 right-4 z-40 grid h-12 w-12 place-items-center rounded-full bg-accent text-white shadow-pop transition-colors hover:bg-accent-ink"
+        className="fixed bottom-4 right-4 z-40 grid h-12 w-12 place-items-center rounded-full bg-gradient-accent text-ink shadow-glow transition-transform hover:-translate-y-0.5"
       >
         <Icon name={open ? "close" : "info"} size={20} />
       </button>

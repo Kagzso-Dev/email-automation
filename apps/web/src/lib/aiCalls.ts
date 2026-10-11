@@ -13,6 +13,10 @@ export interface AiCallsConfig {
   minGapSec: number;
   defaultGapSec: number;
   defaultCountryCode: string;
+  /** ENABLE_CALL_FLOW_EDITOR (with ENABLE_AI_CALLS): Call Flows page + flow picker. */
+  flowEditor: boolean;
+  /** Masked AI_CALL_FLOW_TEST_NUMBERS (admins only), e.g. "+91******3210". */
+  testCallNumbers: string[];
 }
 
 /** Feature flag + limits — gates the "AI Call" button on the Contacts page. */

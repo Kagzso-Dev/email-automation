@@ -1,7 +1,7 @@
 # Kagzso Voice Backend
 
 > **English edition.** Copy of `kagzso-voice-backend` running Nila's script in Indian business English
-> (`app/prompts/nila.md`). Differences: `CALL_LANGUAGE=en`, `CARTESIA_LANGUAGE=en`, `SARVAM_STT_MODE=transcribe`,
+> (`app/flows/builtin/nila.json`). Differences: `CALL_LANGUAGE=en`, `CARTESIA_LANGUAGE=en`, `SARVAM_STT_MODE=transcribe`,
 > Cartesia voice "Kiara" (`f8f5f1b2-f02d-4d8e-a40d-fd850a487b3d`), own MySQL DB `kagzso_voice_en`, port **8002**
 > (the Tamil backend uses 8001). Point a separate ngrok tunnel at 8002 and set `PUBLIC_BASE_URL` to it.
 
@@ -353,7 +353,7 @@ WS /ws/plivo/media   "start" event (callId, streamId)                    status:
 "stop" / hangup_url → outcome classified (interested / callback / dnd …) → status: completed
 ```
 
-- **Nila agent (id 2):** Kagzso outbound screening + handoff, then a 1-minute Tamil/Tanglish conversation. The script lives in [app/prompts/nila.md](app/prompts/nila.md); edit it and restart (it is synced into MySQL on startup).
+- **Nila agent (id 2):** Kagzso outbound screening + handoff, then a 1-minute Tamil/Tanglish conversation. The script lives in [app/flows/builtin/nila.json](app/flows/builtin/nila.json) as blocks that join into the prompt; edit a block's text and restart (it is synced into MySQL on startup). Admins can also edit copies in Dispatch's **Call Flows** page.
 - **Screening flow:** `Hi, is this Ragul?` (spoken verbatim by the system, never via the LLM, no sir/madam) → identity confirmed → `Thank you sir/madam. நான் Nila… Okay-வா?` (honorific only from the `gender` field) → permission → business conversation. Busy / not interested / do-not-call / wrong person end the call immediately. `customer_name` is required for Nila (422 otherwise). The first sentence is spoken ~`GREETING_DELAY_MS` after answer, or right after the customer's "Hello?".
 - **Silence:** after the agent speaks, `SILENCE_REPROMPT_SECONDS` of silence triggers "Hello, கேக்குதா? Hear பண்றீங்களா?" (once); more silence gets "No problem. Thank you for your time. Have a nice day." and a hangup.
 - **Voicemail:** with `PLIVO_MACHINE_DETECTION=true`, Plivo reports answering machines to `/api/webhooks/plivo/machine`; the call is hung up and the outcome is locked to `voicemail`.
@@ -432,7 +432,7 @@ Dispatch (the email-automation-platform in the parent folder) places calls throu
 ```
 
 - `agent_name` can be sent instead of `agent_id`. One of the two is required.
-- The built-in **Follow-up** agent (`app/prompts/followup.md`) opens with
+- The built-in **Follow-up** agent (`app/flows/builtin/followup.json`) opens with
   *"Hello {{addressed_name}}, this is Nila calling…"*. `addressed_name` is "Mr. Ragul" or "Ms. Priya",
   or just "Ragul" when gender is unknown; gender is never guessed. The agent then uses
   `follow_up_detail` as the call context: *"I'm calling regarding: …"*.
@@ -445,6 +445,34 @@ Dispatch (the email-automation-platform in the parent folder) places calls throu
   `X-Kagzso-Signature: sha256=HMAC(secret, "<timestamp>.<body>")`.
 - Callbacks retry on errors, are fire-and-forget (they never delay a live call) and never include
   the phone number.
+
+### Call flows (Dispatch "Call Flows" page)
+
+A call flow is the editable form of an agent's prompt (`app/flows/`): an ordered list of blocks
+joined end to end into the system prompt, plus the greeting line, the two silence lines and a max
+duration. `app/flows/schema.py` validates it (unknown fields, unknown `{{variables}}`,
+`{{phone_number}}`, `[[END_CALL]]`, lengths, missing or extra locked blocks are all rejected).
+
+- **Locked blocks** carry only a key; their text comes from `app/flows/builtin/locked_blocks.json`
+  (do-not-call, wrong person, customer data, outcome and callback rules), so no edit can change them.
+- **Safety rules** (`SAFETY_RULES` in `llm_service.py`) are appended to every prompt, built-in or
+  edited: honest AI disclosure if asked, do-not-call ends the call, no false claims, never ask for
+  OTPs or card details. The built-in prompts are otherwise unchanged
+  (`tests/fixtures/golden_prompts.json` pins them).
+- **Request fields** on `POST /api/calls/outbound`: `flow_id`, `flow_version`, `flow_draft` (test
+  calls of unpublished drafts) and `flow` (the definition). `agent_id` / `agent_name` is still
+  required: it is the **fallback** when the flow is missing or invalid.
+- **One agent row per version:** `flow:<id>@v<n>` (drafts: `…-draft-<hash>`). Sending different
+  content for a version that already exists is refused (published versions are immutable) and the
+  call falls back to the default agent.
+- **Stored on the call:** `calls.variables` gets `flow_id`, `flow_version`, `flow_draft`,
+  `flow_hash` (or `flow_fallback` = `missing` / `invalid` / `version_conflict`), plus a
+  `flow:selected` or `flow:fallback` call event. Status callbacks echo `flow_id` / `flow_version`.
+- `max_duration_sec` becomes the Plivo `time_limit` / Twilio `TimeLimit`, capped at
+  `MAX_CALL_DURATION_SECONDS`.
+- `GET /api/flows/builtin` lists the built-in flows and locked text. `POST /api/flows/preview`
+  validates a flow and renders the greeting, silence lines and full prompt for sample customer data.
+  Both need `X-API-Key`. No database migration is needed on this side.
 
 ## Project layout
 

@@ -1,4 +1,5 @@
 import { parse as parseCsv } from "csv-parse/sync";
+import { toContactPhone } from "@dispatch/shared";
 import ExcelJS from "exceljs";
 // pdf-parse's package entry runs a debug block when required as the main module;
 // the lib path is the plain function with no side effects.
@@ -50,10 +51,13 @@ export function formatFromFilename(filename: string): ImportFormat | null {
   return null;
 }
 
-/** Digits-only phone, or undefined when it isn't exactly 10 digits. */
+/**
+ * Phone in email-contact format (shared rules): Indian numbers as 10 digits,
+ * other countries as E.164 "+…". No country code = India. Undefined if invalid.
+ */
 export function normalizePhone(raw: string): string | undefined {
-  const digits = raw.replace(/\D/g, "");
-  return digits.length === 10 ? digits : undefined;
+  const r = toContactPhone(raw);
+  return r.ok ? r.phone : undefined;
 }
 
 /** Every distinct email address found in free text, lowercased. */

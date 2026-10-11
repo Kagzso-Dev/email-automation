@@ -8,6 +8,8 @@ export const QUEUE = {
   manualBulkSend: "manual-bulk-send",
   whatsappBulkSend: "whatsapp-bulk-send",
   aiCallRun: "ai-call-run",
+  aiCallFollowup: "ai-call-followup",
+  whatsappMediaDownload: "whatsapp-media-download",
 } as const;
 
 export interface CampaignDispatchJob {
@@ -57,6 +59,15 @@ export function enqueueAiCallRun(job: AiCallRunJob) {
   return enqueue(QUEUE.aiCallRun, job, { maxAttempts: 5, dedupeKey: `ai-call-run:${job.runId}` });
 }
 
+/** An approved "call again" follow-up: at `runAt` it becomes a one-call AI call run. */
+export interface AiCallFollowupJob {
+  followupId: string;
+}
+
+export function enqueueAiCallFollowup(job: AiCallFollowupJob, runAt: Date) {
+  return enqueue(QUEUE.aiCallFollowup, job, { runAt, maxAttempts: 5, dedupeKey: `ai-call-followup:${job.followupId}` });
+}
+
 export function enqueueSend(job: SendEmailJob, opts: { dedupeKey: string }) {
   return enqueue(QUEUE.sendEmail, job, {
     dedupeKey: opts.dedupeKey,
@@ -99,4 +110,13 @@ export function enqueueManualBulkSend(job: ManualBulkSendJob) {
     maxAttempts: 5,
     dedupeKey: `manual-bulk-send:${job.batchId}`,
   });
+}
+
+/** Download one inbound WhatsApp media file (queued from the webhook, so the webhook returns at once). */
+export interface WhatsAppMediaDownloadJob {
+  mediaId: string;
+}
+
+export function enqueueWhatsAppMediaDownload(job: WhatsAppMediaDownloadJob) {
+  return enqueue(QUEUE.whatsappMediaDownload, job, { maxAttempts: 4, dedupeKey: `whatsapp-media:${job.mediaId}` });
 }

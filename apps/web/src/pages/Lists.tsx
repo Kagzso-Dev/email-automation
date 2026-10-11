@@ -63,7 +63,7 @@ export function ListsPage() {
       ) : (
         <Table head={["Name", "Members", "Campaigns", ""]}>
           {data!.items.map((l) => (
-            <tr key={l.id} className="border-b border-[#f0f2f6] last:border-0">
+            <tr key={l.id} className="border-b border-line-subtle last:border-0">
               <td className="px-4 py-2.5">
                 <Link to={`/lists/${l.id}`} className="font-medium text-accent-ink hover:underline">
                   {l.name}

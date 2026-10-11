@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -49,11 +49,21 @@ class OutboundCallRequest(BaseModel):
     # Dispatch's ids, echoed back on status callbacks (STATUS_CALLBACK_URL).
     run_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     log_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    # Call flow from Dispatch's "Call Flows" page. The definition is validated in
+    # app/flows; if it is missing or invalid the call uses agent_id / agent_name.
+    flow_id: Optional[str] = Field(None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    flow_version: Optional[int] = Field(None, ge=1, le=100000)
+    flow_draft: bool = False  # unpublished draft (test calls only)
+    flow: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def _agent(self) -> "OutboundCallRequest":
         if self.agent_id is None and not self.agent_name:
             raise ValueError("agent_id or agent_name is required")
+        if (self.flow_id is None) != (self.flow_version is None):
+            raise ValueError("flow_id and flow_version must be sent together")
+        if self.flow is not None and self.flow_id is None:
+            raise ValueError("flow requires flow_id and flow_version")
         return self
 
     @field_validator("phone_number")

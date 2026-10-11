@@ -12,9 +12,9 @@ import {
  * Identity is always carried by a legend + direct labels, never colour alone.
  */
 export const SERIES = {
-  sent: "#2a78d6",
+  sent: "#0091d5",
   opened: "#eb6834",
-  clicked: "#1baf7a",
+  clicked: "#009a80",
 } as const;
 export type SeriesKey = keyof typeof SERIES;
 
@@ -25,14 +25,14 @@ export const SERIES_LABEL: Record<SeriesKey, string> = {
 };
 
 const STATUS = {
-  good: "#0ca30c",
-  warning: "#c98500",
-  critical: "#d03b3b",
+  good: "#009a80",
+  warning: "#d4870a",
+  critical: "#ef4444",
 } as const;
 
-const INK = "#1b1f2a";
-const MUTED = "#8b93a3";
-const GRID = "#e9ebf0";
+const INK = "#111827";
+const MUTED = "#8a94a6";
+const GRID = "#e9eef7";
 
 /* --------------------------------------------------------------- primitives -- */
 
@@ -588,7 +588,7 @@ export function GaugeRing({
 export function CapMeter({ used, limit }: { used: number; limit: number }) {
   const pct = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
   const [ref, seen] = useInView<HTMLDivElement>();
-  const tone = pct >= 90 ? STATUS.critical : pct >= 70 ? STATUS.warning : SERIES.sent;
+  const tone = pct >= 90 ? STATUS.critical : pct >= 70 ? STATUS.warning : "var(--gradient-accent)";
   return (
     <div ref={ref}>
       <div className="mb-1.5 flex items-baseline justify-between">
@@ -626,7 +626,7 @@ export function ChartCard({
     <section className={`card ${className}`}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold text-ink">{title}</h3>
+          <h3 className="text-sm font-bold tracking-[-0.01em] text-ink">{title}</h3>
           {subtitle && <p className="mt-0.5 text-xs text-slate-550">{subtitle}</p>}
         </div>
         {right}
@@ -653,7 +653,7 @@ export function RangeTabs<T extends string | number>({
           type="button"
           onClick={() => onChange(o.value)}
           className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
-            value === o.value ? "bg-accent text-white" : "text-slate-550 hover:text-ink"
+            value === o.value ? "bg-gradient-accent font-semibold text-ink shadow-sm" : "text-slate-550 hover:text-ink"
           }`}
         >
           {o.label}

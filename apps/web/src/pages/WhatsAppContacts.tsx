@@ -6,6 +6,8 @@ import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { SendWhatsApp, type WhatsAppRecipient } from "../components/SendWhatsApp";
 import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp";
+import { formatPhoneDisplay } from "@dispatch/shared";
+import { PhoneInput, phoneInputOk } from "../components/PhoneInput";
 
 interface WContact {
   id: string;
@@ -30,11 +32,10 @@ const statusTone: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   BLOCKED: "crit",
 };
 
-/** India-only "to" number: +91 followed by a 10-digit mobile number starting with 6-9. */
-const phoneOk = (s: string) => {
-  const d = s.replace(/[^\d]/g, "");
-  return /^91[6-9]\d{9}$/.test(d);
-};
+/** Required, and valid for its country (shared PhoneInput rules; +91 = 10-digit mobile). */
+const phoneOk = (s: string) => phoneInputOk(s, true);
+/** Stored as digits with country code (919876543210) → "+91 98765 43210". */
+const showPhone = (digits: string) => formatPhoneDisplay(`+${digits}`);
 
 export function WhatsAppContactsPage() {
   const qc = useQueryClient();
@@ -194,7 +195,7 @@ export function WhatsAppContactsPage() {
       </p>
 
       {sendHint && (
-        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-[#eef0f4] px-3 py-2 text-sm">
+        <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-surface-muted px-3 py-2 text-sm">
           <span className="text-ink">{sendHint}</span>
           {selectableIds.length > 0 && (
             <button
@@ -270,7 +271,7 @@ export function WhatsAppContactsPage() {
             ]}
           >
             {items.map((c) => (
-              <tr key={c.id} className="border-b border-[#f0f2f6] last:border-0">
+              <tr key={c.id} className="border-b border-line-subtle last:border-0">
                 <td className="px-4 py-2.5">
                   <input
                     type="checkbox"
@@ -282,7 +283,7 @@ export function WhatsAppContactsPage() {
                     onChange={(e) => toggleOne(c.id, e.target.checked)}
                   />
                 </td>
-                <td className="px-4 py-2.5 font-mono text-xs">{c.phone}</td>
+                <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{showPhone(c.phone)}</td>
                 <td className="px-4 py-2.5">
                   {[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}
                 </td>
@@ -409,19 +410,8 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
           mut.mutate();
         }}
       >
-        <label className="label">Phone number (India, with +91)</label>
-        <input
-          className="input mb-1"
-          type="tel"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="+91 98765 43210"
-          aria-invalid={phone !== "" && !phoneOk(phone)}
-          required
-        />
-        {phone !== "" && !phoneOk(phone) && (
-          <p className="mb-2 text-xs text-crit">Enter +91 followed by a 10-digit number starting with 6-9.</p>
-        )}
+        <label className="label">Phone number</label>
+        <PhoneInput value={phone} onChange={setPhone} required />
         <div className="mb-3 mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
             <label className="label">First name</label>
@@ -454,7 +444,7 @@ function AddContactModal({ open, onClose }: { open: boolean; onClose: () => void
 
 function EditContactModal({ contact, onClose }: { contact: WContact | null; onClose: () => void }) {
   return (
-    <Modal open={!!contact} onClose={onClose} title={`Edit ${contact?.phone ?? "contact"}`}>
+    <Modal open={!!contact} onClose={onClose} title={`Edit ${contact ? showPhone(contact.phone) : "contact"}`}>
       {contact ? <EditContactForm key={contact.id} contact={contact} onClose={onClose} /> : null}
     </Modal>
   );
@@ -494,15 +484,8 @@ function EditContactForm({ contact, onClose }: { contact: WContact; onClose: () 
         mut.mutate();
       }}
     >
-      <label className="label">Phone number (India, with +91)</label>
-      <input
-        className="input mb-3"
-        type="tel"
-        value={form.phone}
-        onChange={(e) => setForm({ ...form, phone: e.target.value })}
-        aria-invalid={!phoneOk(form.phone)}
-        required
-      />
+      <label className="label">Phone number</label>
+      <PhoneInput className="mb-3" value={form.phone} onChange={(phone) => setForm({ ...form, phone })} required />
       <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <label className="label">First name</label>
@@ -546,7 +529,11 @@ function EditContactForm({ contact, onClose }: { contact: WContact; onClose: () 
         <button type="button" className="btn-ghost" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn-primary" disabled={mut.isPending || !phoneOk(form.phone)}>
+        <button
+          className="btn-primary"
+          // An unchanged stored number is kept as is.
+          disabled={mut.isPending || (form.phone !== contact.phone && !phoneOk(form.phone))}
+        >
           {mut.isPending ? "Saving…" : "Save changes"}
         </button>
       </div>

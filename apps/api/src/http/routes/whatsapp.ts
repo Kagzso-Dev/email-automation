@@ -20,6 +20,10 @@ import {
   setWhatsAppCredentials,
 } from "../../domain/whatsappCredentials.js";
 import { getPhoneNumberInfo } from "../../services/whatsapp.js";
+import { getTemplateVerification } from "../../domain/whatsappTemplateVerify.js";
+import { getArchivedTemplateIds, setTemplateArchived } from "../../domain/whatsappTemplateArchive.js";
+import { getHeaderMediaMap, headerKindForFormat } from "../../domain/whatsappTemplateHeader.js";
+import { mediaView } from "../../domain/whatsappMedia.js";
 import { formatFromFilename, parseWhatsAppContactFile } from "../../domain/whatsappImport.js";
 import {
   createWhatsAppSendBatch,
@@ -189,12 +193,43 @@ whatsappRouter.post(
 whatsappRouter.get(
   "/templates",
   wrap(async (_req, res) => {
-    res.json({
-      items: await prisma.whatsAppTemplate.findMany({
+    const [rows, archived] = await Promise.all([
+      prisma.whatsAppTemplate.findMany({
         orderBy: { updatedAt: "desc" },
         include: { _count: { select: { batches: true } } },
       }),
+      getArchivedTemplateIds(),
+    ]);
+    const headers = await getHeaderMediaMap(rows.map((r) => r.id));
+    // Every row is returned; `archived` lets the page / Send dialog hide archived ones.
+    // `headerMedia`: the image / video / document the template is sent with (null = none).
+    res.json({
+      items: rows.map((r) => {
+        const h = headers.get(r.id);
+        return { ...r, archived: archived.has(r.id), headerMedia: h ? mediaView(h) : null };
+      }),
     });
+  }),
+);
+
+// Archive / restore: hides a template from the page and the Send dialog without
+// deleting it (rows, batches and messages are kept). Stored in the settings table.
+whatsappRouter.post(
+  "/templates/:id/archive",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    if (!(await prisma.whatsAppTemplate.findUnique({ where: { id }, select: { id: true } }))) throw notFound("WhatsApp template");
+    await setTemplateArchived(id, true);
+    res.json({ ok: true, archived: true });
+  }),
+);
+
+whatsappRouter.post(
+  "/templates/:id/restore",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    await setTemplateArchived(id, false);
+    res.json({ ok: true, archived: false });
   }),
 );
 
@@ -203,6 +238,16 @@ whatsappRouter.post(
   wrap(async (req, res) => {
     const body = createWhatsAppTemplateInput.parse(req.body);
     res.status(201).json(await prisma.whatsAppTemplate.create({ data: body }));
+  }),
+);
+
+// Display-only: is each registered template really in Meta, approved, in that
+// language? Meta's list is cached ~5 min; ?refresh=1 re-reads it. Never sends the
+// token anywhere; a Meta error marks rows "unchecked", not failed.
+whatsappRouter.get(
+  "/templates/verify",
+  wrap(async (req, res) => {
+    res.json(await getTemplateVerification(req.query.refresh === "1"));
   }),
 );
 
@@ -246,6 +291,19 @@ whatsappRouter.post(
   "/send",
   wrap(async (req, res) => {
     const { templateId, contactIds, source, purgeAfter } = sendWhatsAppBulkInput.parse(req.body);
+    if ((await getArchivedTemplateIds()).has(templateId)) {
+      throw badRequest("That template is archived — restore it on the WhatsApp Templates page to send it");
+    }
+    // A template whose Meta header is an image / video / document needs that media set first.
+    const needs = (await getTemplateVerification()).items.find((v) => v.id === templateId)?.headerNeedsParameter ?? null;
+    if (needs) {
+      const kind = headerKindForFormat(needs);
+      const media = (await getHeaderMediaMap([templateId])).get(templateId);
+      if (!kind) throw badRequest(`This template's ${needs.toLowerCase()} header isn't supported by Dispatch yet`);
+      if (!media || media.kind !== kind) {
+        throw badRequest(`This template needs a header ${kind} — add it on the WhatsApp Templates page first`);
+      }
+    }
     if (!(await getWhatsAppCredentialsView()).configured) {
       throw new AppError(503, "WhatsApp is not configured — set it up in Settings", "unavailable");
     }

@@ -63,6 +63,8 @@ def build_payload(call: Any, event: str, transcripts: Optional[Iterable[Any]] = 
         "duration_seconds": call.duration_seconds,
         "ended_at": _iso(call.ended_at),
     }
+    if variables.get("flow_id"):  # call flow used (or fallen back from) - for audit on the Dispatch side
+        payload.update({k: variables.get(k) for k in ("flow_id", "flow_version", "flow_fallback")})
     if transcripts is not None:
         payload["transcript"] = [{"speaker": t.speaker, "text": t.text} for t in transcripts]
     return payload

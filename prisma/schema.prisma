@@ -522,6 +522,7 @@ model AiCallRun {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   logs           AiCallLog[]
+  flow           AiCallRunFlow? // pinned call flow version (none = the default agent)
 
   @@index([status])
   @@map("ai_call_runs")
@@ -553,4 +554,263 @@ model AiCallLog {
   @@index([voiceCallId])
   @@index([phone])
   @@map("ai_call_logs")
+}
+
+// Call Flows: the UI-editable form of a voice agent's script ("Call Flows" page,
+// behind ENABLE_CALL_FLOW_EDITOR). The definition JSON is validated by the voice
+// backend (app/flows/schema.py) and mirrored in packages/shared/src/callFlows.ts.
+// A flow has at most one DRAFT; PUBLISHED versions are never updated.
+
+enum CallFlowVersionStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model CallFlow {
+  id             String            @id @default(cuid())
+  name           String            @db.VarChar(100)
+  description    String?           @db.Text
+  base           String            @db.VarChar(16) // built-in it was copied from: nila | followup
+  archivedAt     DateTime?
+  createdById    String?
+  createdByEmail String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  versions       CallFlowVersion[]
+
+  @@map("call_flows")
+}
+
+model CallFlowVersion {
+  id             String                @id @default(cuid())
+  flowId         String
+  version        Int
+  status         CallFlowVersionStatus @default(DRAFT)
+  definition     Json
+  definitionHash String                @db.VarChar(64) // sha-256 of the definition JSON, for audit
+  createdByEmail String?
+  publishedAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  flow           CallFlow              @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  runs           AiCallRunFlow[]
+
+  @@unique([flowId, version])
+  @@map("call_flow_versions")
+}
+
+// Pins one AI call run to the flow version it was started with (separate table
+// so ai_call_runs is not altered). No row = the run uses the default agent.
+model AiCallRunFlow {
+  runId         String          @id
+  flowVersionId String
+  createdAt     DateTime        @default(now())
+  run           AiCallRun       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  flowVersion   CallFlowVersion @relation(fields: [flowVersionId], references: [id], onDelete: Restrict)
+
+  @@index([flowVersionId])
+  @@map("ai_call_run_flows")
+}
+
+// ---------------------------------------------------------------- AI Call Customers (isolated)
+// Saved customers for AI voice calls ("AI Call Customers" tab on the Contacts
+// page), their call stage, a timeline, and follow-ups that wait for admin
+// approval before anything is sent. New tables only: nothing here alters the
+// email, WhatsApp or ai_call_* tables. See apps/api/src/domain/aiCallCustomers.ts.
+
+enum AiCallCustomerStage {
+  NOT_CALLED
+  QUEUED
+  CALLING
+  NO_ANSWER
+  FAILED
+  INTERESTED
+  NOT_INTERESTED
+  FOLLOW_UP_NEEDED
+  CALLBACK_REQUESTED
+  DO_NOT_CALL
+  APPROVED
+  REJECTED
+}
+
+model AiCallCustomer {
+  id             String              @id @default(cuid())
+  customerName   String?             @db.VarChar(100)
+  gender         String              @default("unknown") @db.VarChar(16) // male | female | unknown
+  phone          String              @db.VarChar(20) // E.164, e.g. +919876543210
+  // Same as `phone` while the row is live, null once soft-deleted: a unique
+  // index on it = "one live customer per number" (MySQL has no partial index).
+  activePhone    String?             @unique @db.VarChar(20)
+  businessName   String?             @db.VarChar(160)
+  followUpDetail String?             @db.Text
+  email          String?             @db.VarChar(191) // stored for reference; no email is sent from here
+  whatsappOptIn  Boolean             @default(false)
+  stage          AiCallCustomerStage @default(NOT_CALLED)
+  // Set when the stage came from a call result and an admin has not reviewed it yet.
+  needsReview    Boolean             @default(false)
+  // Permanent: once true, never cleared by the app (the number is never called again).
+  doNotCall      Boolean             @default(false)
+  lastCallLogId  String?             @db.VarChar(191)
+  lastCalledAt   DateTime?
+  createdByEmail String?
+  deletedAt      DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  calls          AiCallCustomerCall[]
+  events         AiCallCustomerEvent[]
+  followups      AiCallFollowup[]
+
+  @@index([deletedAt, stage])
+  @@index([phone])
+  @@map("ai_call_customers")
+}
+
+// Links one ai_call_logs row to the saved customer it called (ai_call_logs is not altered).
+model AiCallCustomerCall {
+  logId      String         @id @db.VarChar(191)
+  customerId String
+  createdAt  DateTime       @default(now())
+  customer   AiCallCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@map("ai_call_customer_calls")
+}
+
+// Timeline / stage history: call, outcome, stage change, follow-up created, approved, …
+model AiCallCustomerEvent {
+  id         String         @id @default(cuid())
+  customerId String
+  type       String         @db.VarChar(32)
+  stage      AiCallCustomerStage?
+  detail     String?        @db.Text
+  refId      String?        @db.VarChar(191) // call log / follow-up id
+  actorEmail String?
+  createdAt  DateTime       @default(now())
+  customer   AiCallCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+  @@map("ai_call_customer_events")
+}
+
+enum AiCallFollowupChannel {
+  WHATSAPP
+  CALL
+}
+
+enum AiCallFollowupStatus {
+  PENDING_APPROVAL
+  APPROVED // handed to the existing WhatsApp batch / AI call run
+  REJECTED
+  CANCELLED // superseded (e.g. the customer became Not interested / Do not call)
+  FAILED // could not be handed over (shown with `error`)
+}
+
+// One follow-up waiting in Send Queue → "AI Call follow-ups". Nothing is sent
+// until an admin approves it; approval creates a normal WhatsApp batch or AI
+// call run, so the existing workers, templates, limits and retries apply.
+model AiCallFollowup {
+  id                 String                @id @default(cuid())
+  customerId         String
+  channel            AiCallFollowupChannel
+  status             AiCallFollowupStatus  @default(PENDING_APPROVAL)
+  reason             String?               @db.VarChar(64) // stage that created it, e.g. "Interested"
+  whatsappTemplateId String?               @db.VarChar(191)
+  scheduledAt        DateTime? // CALL: when to call again
+  attempt            Int                   @default(1) // CALL: retry number
+  note               String?               @db.Text
+  sourceCallLogId    String?               @db.VarChar(191)
+  whatsappBatchId    String?               @db.VarChar(191)
+  aiCallRunId        String?               @db.VarChar(191)
+  error              String?               @db.Text
+  createdByEmail     String? // null = created automatically after a call
+  decidedByEmail     String?
+  decidedAt          DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  customer           AiCallCustomer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([customerId])
+  @@map("ai_call_followups")
+}
+
+// ---------------------------------------------------------------- WhatsApp media (isolated)
+// Files sent / received over WhatsApp: template header media (image, video,
+// document), media in customer messages (downloaded after the webhook), and
+// attachments on Inbox replies. New tables only — whatsapp_templates,
+// whatsapp_sends and whatsapp_inbound_messages are not altered. Files live in
+// WHATSAPP_MEDIA_DIR (private, never served statically). See domain/whatsappMedia.ts.
+
+enum WhatsAppMediaPurpose {
+  INBOUND // from a customer's message
+  TEMPLATE_HEADER // header image / video / document of a registered template
+  REPLY // attachment on an Inbox reply
+}
+
+enum WhatsAppMediaStatus {
+  PENDING // inbound: waiting for download
+  STORED
+  FAILED
+  EXPIRED // inbound: Meta no longer has the media
+}
+
+model WhatsAppMedia {
+  id               String               @id @default(cuid())
+  purpose          WhatsAppMediaPurpose
+  kind             String               @db.VarChar(16) // image | video | audio | document | sticker
+  status           WhatsAppMediaStatus  @default(PENDING)
+  mimeType         String?              @db.VarChar(128)
+  filename         String?              @db.VarChar(255) // display name only, never a path
+  sizeBytes        Int?
+  sha256           String?              @db.VarChar(64)
+  storageKey       String?              @db.VarChar(128) // file name inside WHATSAPP_MEDIA_DIR
+  providerMediaId  String?              @db.VarChar(128) // Meta media id (inbound, or our last upload)
+  providerMediaAt  DateTime? // when providerMediaId was issued (uploads expire after 30 days)
+  inboundMessageId String?              @unique @db.VarChar(191)
+  attempts         Int                  @default(0)
+  error            String?              @db.Text
+  createdByEmail   String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  templateHeaders  WhatsAppTemplateHeaderMedia[]
+  sends            WhatsAppSendMedia[]
+
+  @@index([purpose, status])
+  @@map("whatsapp_media")
+}
+
+// The header media a template is sent with (one per template).
+model WhatsAppTemplateHeaderMedia {
+  templateId     String        @id @db.VarChar(191)
+  mediaId        String
+  updatedByEmail String?
+  updatedAt      DateTime      @updatedAt
+  media          WhatsAppMedia @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@index([mediaId])
+  @@map("whatsapp_template_header_media")
+}
+
+// Which media a sent message carried (history), keyed by whatsapp_sends.id.
+model WhatsAppSendMedia {
+  sendId    String        @id @db.VarChar(191)
+  mediaId   String
+  role      String        @db.VarChar(16) // header | attachment
+  createdAt DateTime      @default(now())
+  media     WhatsAppMedia @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+
+  @@index([mediaId])
+  @@map("whatsapp_send_media")
+}
+
+// WhatsApp Inbox read state: when someone last read each conversation. A
+// customer message is unread if it arrived after lastReadAt (or there is no
+// row yet). New table only — whatsapp_inbound_messages is not altered.
+model WhatsAppConversationRead {
+  phone       String   @id @db.VarChar(32) // digits with country code, as in whatsapp_inbound_messages.phone
+  lastReadAt  DateTime
+  readByEmail String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("whatsapp_conversation_reads")
 }

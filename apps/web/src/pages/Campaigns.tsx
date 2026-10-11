@@ -102,7 +102,7 @@ export function CampaignsPage() {
         <>
           <Table head={["Name", "Template", "List", "Schedule", "Status", ""]}>
             {data!.items.map((c) => (
-              <tr key={c.id} className="border-b border-[#f0f2f6] last:border-0">
+              <tr key={c.id} className="border-b border-line-subtle last:border-0">
                 <td className="px-4 py-2.5">
                   <Link className="font-medium text-accent-ink hover:underline" to={`/campaigns/${c.id}`}>
                     {c.name}
@@ -378,7 +378,7 @@ function CampaignForm({ campaign, onDone }: { campaign?: Campaign; onDone: () =>
         ? (() => {
             const { title, lines } = describeError(create.error);
             return (
-              <div className="rounded-lg bg-[#f9ebe9] px-3 py-2 text-sm text-crit">
+              <div className="rounded-lg bg-crit-soft px-3 py-2 text-sm text-crit">
                 <p className="font-medium">{title}</p>
                 {lines.length > 0 ? (
                   <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">

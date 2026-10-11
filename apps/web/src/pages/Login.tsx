@@ -23,8 +23,8 @@ export function LoginPage() {
 
   return (
     <div className="grid min-h-screen place-items-center px-4">
-      <form onSubmit={onSubmit} className="card w-full max-w-sm">
-        <div className="mb-6 flex items-center gap-2 font-mono text-sm font-semibold">
+      <form onSubmit={onSubmit} className="card page-enter w-full max-w-sm rounded-2xl p-8 shadow-pop">
+        <div className="mb-6 flex items-center gap-2 font-mono text-sm font-bold tracking-tight text-ink">
           <span>📮</span> Dispatch
         </div>
         <label className="label" htmlFor="email">

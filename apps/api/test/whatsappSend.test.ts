@@ -20,14 +20,42 @@ describe("buildWhatsAppVars", () => {
     });
   });
 
-  it("blanks missing fields", () => {
+  it("blanks missing fields (first name falls back to \"there\")", () => {
     expect(buildWhatsAppVars({})).toEqual({
-      first_name: "",
+      first_name: "there",
       last_name: "",
       full_name: "",
       business_name: "",
       phone: "",
     });
+  });
+});
+
+describe('first_name fallback ("there")', () => {
+  it.each([
+    ["empty", ""],
+    ["whitespace only", "   "],
+    ["tabs / newlines", "\t\n "],
+    ["null", null],
+    ["undefined", undefined],
+  ])("%s first name → there", (_label, firstName) => {
+    const vars = buildWhatsAppVars({ firstName, businessName: "Acme" });
+    expect(vars.first_name).toBe("there");
+    expect(renderWhatsAppBody("Hi {{first_name}},", vars)).toBe("Hi there,");
+    expect(buildContentVariables({ variables: ["first_name"] }, vars)).toEqual({ "1": "there" });
+    // No longer a reason to skip the recipient.
+    expect(missingTemplateVariables({ variables: ["first_name"] }, vars)).toEqual([]);
+  });
+
+  it("keeps a real first name as is", () => {
+    expect(buildWhatsAppVars({ firstName: "Ada" }).first_name).toBe("Ada");
+  });
+
+  it("an empty business_name still skips the recipient", () => {
+    for (const businessName of ["", "   ", null]) {
+      const vars = buildWhatsAppVars({ firstName: "", businessName });
+      expect(missingTemplateVariables({ variables: ["first_name", "business_name"] }, vars)).toEqual(["business_name"]);
+    }
   });
 });
 

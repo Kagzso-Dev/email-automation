@@ -5,6 +5,8 @@ import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/Layout";
 import { ErrorNote, Spinner, Table } from "../components/ui";
 import { useConfirm } from "../components/confirm";
+import { HIDEABLE_NAV_ITEMS, type HideableNavItem } from "@dispatch/shared";
+import { SIDEBAR_SETTINGS_KEY, useSidebarHiddenItems } from "../lib/sidebar";
 
 interface ApiKey {
   id: string;
@@ -49,7 +51,7 @@ export function SettingsPage() {
       <PageHeader title="Settings" />
 
       <section className="mb-8">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">API keys</h2>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">API keys</h2>
         {!isAdmin ? (
           <div className="card text-sm text-slate-550">Only admins can manage API keys.</div>
         ) : (
@@ -73,7 +75,7 @@ export function SettingsPage() {
               </div>
               {create.error ? <div className="mt-2"><ErrorNote error={create.error} /></div> : null}
               {freshKey && (
-                <div className="mt-3 rounded-lg bg-[#f8f0e1] p-3 text-sm">
+                <div className="mt-3 rounded-lg bg-warn-soft p-3 text-sm">
                   <div className="mb-1 font-medium text-warn">
                     Your new API key — copy it now. You can also reveal it later from the table below.
                   </div>
@@ -98,7 +100,7 @@ export function SettingsPage() {
                 {keys.data.items.map((k) => {
                   const full = revealed[k.id];
                   return (
-                  <tr key={k.id} className="border-b border-[#f0f2f6] last:border-0">
+                  <tr key={k.id} className="border-b border-line-subtle last:border-0">
                     <td className="px-4 py-2.5">{k.name}</td>
                     <td className="px-4 py-2.5 font-mono text-xs">
                       <span className="break-all">{full ?? `${k.prefix}…`}</span>
@@ -158,16 +160,131 @@ export function SettingsPage() {
         )}
       </section>
 
-      <SenderSection />
-
       <WhatsAppSection isAdmin={isAdmin} />
 
       <BulkSendPacingSection isAdmin={isAdmin} />
 
       <AllowedDomainsSection isAdmin={isAdmin} />
 
-      {isAdmin && <JobsSection />}
+      <SidebarMenuSection isAdmin={isAdmin} />
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ sidebar menu */
+
+const SIDEBAR_ITEM_LABELS: Record<HideableNavItem, string> = {
+  insights: "Insights",
+  lists: "Lists",
+  campaigns: "Campaigns",
+  triggers: "Triggers",
+  "whatsapp-inbox": "WhatsApp Inbox",
+};
+
+function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
+  const qc = useQueryClient();
+  const saved = useSidebarHiddenItems();
+  const savedKey = saved.join(",");
+  const [hidden, setHidden] = useState<HideableNavItem[]>(saved);
+  const [message, setMessage] = useState<string | null>(null);
+
+  // Follow the server value (first load, or a save from another tab).
+  useEffect(() => {
+    setHidden(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedKey]);
+
+  const dirty = [...hidden].sort().join(",") !== [...saved].sort().join(",");
+
+  const save = useMutation({
+    mutationFn: (hiddenItems: HideableNavItem[]) =>
+      api<{ hiddenItems: HideableNavItem[] }>("/api/settings/sidebar", {
+        method: "PUT",
+        json: { hiddenItems },
+        notify: false,
+      }),
+    onSuccess: (res, sent) => {
+      // Writing the cache updates the sidebar immediately — no reload.
+      qc.setQueryData(SIDEBAR_SETTINGS_KEY, res);
+      setHidden(res.hiddenItems);
+      setMessage(sent.length === 0 ? "Saved — all menu items are shown." : "Saved — the sidebar is updated.");
+    },
+    onMutate: () => setMessage(null),
+  });
+
+  const toggle = (item: HideableNavItem, show: boolean) => {
+    setMessage(null);
+    setHidden((h) => (show ? h.filter((x) => x !== item) : [...h, item]));
+  };
+
+  return (
+    <section className="mb-8">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Sidebar</h2>
+      <div className="card space-y-3 text-sm">
+        <div className="font-semibold text-ink">Sidebar menu</div>
+        <p className="text-slate-550">
+          Hidden pages are only removed from the menu. They still work if you open the link directly.
+          This applies to everyone in the workspace.
+        </p>
+
+        <ul className="divide-y divide-line-subtle">
+          {HIDEABLE_NAV_ITEMS.map((item) => {
+            const shown = !hidden.includes(item);
+            return (
+              <li key={item} className="flex items-center justify-between gap-3 py-2">
+                <span>{SIDEBAR_ITEM_LABELS[item]}</span>
+                <label className="flex items-center gap-2 text-xs text-slate-550">
+                  {shown ? "Shown" : "Hidden"}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={shown}
+                    aria-label={`Show ${SIDEBAR_ITEM_LABELS[item]} in the sidebar`}
+                    disabled={!isAdmin || save.isPending}
+                    onClick={() => toggle(item, !shown)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-[background-color,box-shadow] duration-200 ease-in-out-soft disabled:opacity-50 ${
+                      shown ? "bg-gradient-accent shadow-[0_2px_8px_rgba(0,194,255,0.3)]" : "bg-line-strong"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_3px_rgba(17,24,39,0.25)] transition-transform duration-200 ease-in-out-soft ${
+                        shown ? "translate-x-[18px]" : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+
+        {isAdmin ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!dirty || save.isPending}
+              onClick={() => save.mutate(hidden)}
+            >
+              {save.isPending ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={save.isPending || (saved.length === 0 && hidden.length === 0)}
+              onClick={() => save.mutate([])}
+            >
+              Reset to default
+            </button>
+            {message && !dirty && <span className="text-ok">{message}</span>}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-550">Only admins can change which menu items are shown.</p>
+        )}
+
+        {save.error && <ErrorNote error={save.error} />}
+      </div>
+    </section>
   );
 }
 
@@ -184,76 +301,8 @@ interface SendConfig {
 
 const code = "rounded bg-accent-soft px-1 font-mono text-xs text-accent-ink";
 
-function SenderSection() {
-  const { data, isLoading } = useQuery({
-    queryKey: ["send-config"],
-    queryFn: () => api<SendConfig>("/api/settings/config"),
-  });
-
-  return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">
-        Sender &amp; deliverability
-      </h2>
-      <div className="card space-y-3 text-sm">
-        {isLoading || !data ? (
-          <Spinner />
-        ) : (
-          <>
-            <dl className="grid gap-x-4 gap-y-1 sm:grid-cols-[7rem_1fr]">
-              <dt className="text-slate-550">Provider</dt>
-              <dd className="font-mono text-xs">
-                {data.emailProvider}
-                {data.smtpHost ? ` · ${data.smtpHost}` : ""}
-              </dd>
-              <dt className="text-slate-550">From</dt>
-              <dd className="break-all font-mono text-xs">{data.emailFrom}</dd>
-              <dt className="text-slate-550">Send limit</dt>
-              <dd className="font-mono text-xs">
-                {data.dailyCap.toLocaleString()} / 24h · {data.ratePerSec}/sec
-              </dd>
-            </dl>
-            <p className="text-slate-550">
-              Sender identity and limits are set through environment variables (
-              <code className={code}>EMAIL_FROM</code>, <code className={code}>EMAIL_PROVIDER</code>,{" "}
-              <code className={code}>SEND_DAILY_CAP</code>).
-            </p>
-
-            {data.emailProvider === "mock" ? (
-              <p className="rounded-lg bg-[#f8f0e1] p-3 text-warn">
-                Running in <b>mock</b> mode — messages are written to{" "}
-                <code className={code}>./.mail-outbox</code> and never actually sent. Set{" "}
-                <code className={code}>EMAIL_PROVIDER=smtp</code> to send for real.
-              </p>
-            ) : (
-              <>
-                <p className="font-medium">
-                  DNS records for your sending domain — use the values your SMTP provider gives you:
-                </p>
-                <ul className="list-disc pl-5 text-slate-550">
-                  <li>
-                    SPF: authorise the provider's servers, e.g.{" "}
-                    <code>v=spf1 include:_spf.google.com ~all</code>
-                  </li>
-                  <li>DKIM: publish the signing key the provider generates for the domain</li>
-                  <li>
-                    DMARC: <code>v=DMARC1; p=none; rua=mailto:dmarc@yourdomain</code>
-                  </li>
-                </ul>
-                <p className="text-slate-550">
-                  SMTP has no delivery callbacks, so <b>bounce and complaint rates stay at 0</b> and
-                  addresses are not auto-suppressed on a hard bounce — mark bad addresses{" "}
-                  <code className={code}>BOUNCED</code> / <code className={code}>UNSUBSCRIBED</code> in
-                  Contacts. Open and click tracking are unaffected.
-                </p>
-              </>
-            )}
-          </>
-        )}
-      </div>
-    </section>
-  );
-}
+/** The credentials editor is hidden; WhatsApp is configured via .env only. */
+const SHOW_WHATSAPP_CREDENTIALS_FORM = false;
 
 function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
   const { data, isLoading } = useQuery({
@@ -264,18 +313,18 @@ function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">WhatsApp</h2>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">WhatsApp</h2>
       <div className="card space-y-3 text-sm">
         {isLoading || !data ? (
           <Spinner />
         ) : data.configured ? (
-          <p className="rounded-lg bg-[#e7f1ec] p-3 text-ok">
+          <p className="rounded-lg bg-ok-soft p-3 text-ok">
             Connected — sending WhatsApp messages through the Meta WhatsApp Cloud API from phone
             number ID <code className={code}>{data.phoneNumberId}</code>.
           </p>
         ) : (
-          <p className="rounded-lg bg-[#f8f0e1] p-3 text-warn">
-            Not configured — fill in the Meta access token and phone number ID below to enable the
+          <p className="rounded-lg bg-warn-soft p-3 text-warn">
+            Not configured — set the Meta access token and phone number ID in .env to enable the
             “Send message” buttons. This is fully separate from email — leaving it blank has no
             effect on email sending.
           </p>
@@ -284,8 +333,8 @@ function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
           Delivery receipts and replies arrive on the webhook{" "}
           <code className={code}>/api/webhooks/whatsapp</code> — set{" "}
           <code className={code}>https://&lt;your public API host&gt;/api/webhooks/whatsapp</code> as
-          the callback URL in your Meta app (WhatsApp → Configuration), with the same verify token
-          as below, and subscribe to the <code className={code}>messages</code> field.
+          the callback URL in your Meta app (WhatsApp → Configuration), with the verify token
+          from .env, and subscribe to the <code className={code}>messages</code> field.
         </p>
         <p className="text-slate-550">
           WhatsApp contacts, templates and sends are stored separately from email and never touch
@@ -293,11 +342,12 @@ function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
         </p>
       </div>
 
-      {isAdmin ? (
-        <WhatsAppCredentialsForm />
-      ) : (
-        <p className="mt-2 text-xs text-slate-550">Only admins can manage WhatsApp credentials.</p>
-      )}
+      {SHOW_WHATSAPP_CREDENTIALS_FORM &&
+        (isAdmin ? (
+          <WhatsAppCredentialsForm />
+        ) : (
+          <p className="mt-2 text-xs text-slate-550">Only admins can manage WhatsApp credentials.</p>
+        ))}
     </section>
   );
 }
@@ -470,13 +520,13 @@ function WhatsAppCredentialsForm() {
       {check.error && <ErrorNote error={check.error} />}
       {check.data &&
         (check.data.ok ? (
-          <p className="rounded-lg bg-[#e7f1ec] p-3 text-xs text-ok">
+          <p className="rounded-lg bg-ok-soft p-3 text-xs text-ok">
             Connection OK — {check.data.phoneNumber.displayPhoneNumber ?? check.data.phoneNumber.id}
             {check.data.phoneNumber.verifiedName ? ` (${check.data.phoneNumber.verifiedName})` : ""}
             {check.data.phoneNumber.qualityRating ? `, quality ${check.data.phoneNumber.qualityRating}` : ""}.
           </p>
         ) : (
-          <p className="rounded-lg bg-[#f8f0e1] p-3 text-xs text-warn">
+          <p className="rounded-lg bg-warn-soft p-3 text-xs text-warn">
             Connection failed — {check.data.error}
           </p>
         ))}
@@ -542,7 +592,7 @@ function BulkSendPacingSection({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">
         Bulk send pacing
       </h2>
       <div className="card space-y-3 text-sm">
@@ -644,7 +694,7 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">
         Approved sending domains
       </h2>
       <div className="card space-y-3 text-sm">
@@ -678,7 +728,7 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
         {list.isLoading ? (
           <Spinner />
         ) : items.length > 0 ? (
-          <ul className="divide-y divide-[#f0f2f6]">
+          <ul className="divide-y divide-line-subtle">
             {items.map((d) => (
               <li key={d.id} className="flex items-center justify-between py-2">
                 <span className="font-mono text-xs">@{d.domain}</span>
@@ -703,76 +753,6 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
           </ul>
         ) : null}
       </div>
-    </section>
-  );
-}
-
-interface Job {
-  id: string;
-  queue: string;
-  status: string;
-  attempts: number;
-  maxAttempts: number;
-  runAt: string;
-  lastError?: string | null;
-  updatedAt: string;
-}
-
-function JobsSection() {
-  const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ["jobs"],
-    queryFn: () => api<{ items: Job[]; counts: { queue: string; status: string; _count: { _all: number } }[] }>("/api/jobs?limit=25"),
-    refetchInterval: 5000,
-  });
-  const retry = useMutation({
-    mutationFn: (id: string) => api(`/api/jobs/${id}/retry`, { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["jobs"] }),
-  });
-
-  return (
-    <section className="mt-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">
-        Job queue
-      </h2>
-      {isLoading || !data ? (
-        <Spinner />
-      ) : (
-        <>
-          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1 font-mono text-xs text-slate-550">
-            {data.counts.map((c) => (
-              <span key={c.queue + c.status}>
-                {c.queue}/{c.status} <b className="text-ink">{c._count._all}</b>
-              </span>
-            ))}
-          </div>
-          <Table head={["Queue", "Status", "Attempts", "Run at", "Error", ""]}>
-            {data.items.map((j) => (
-              <tr key={j.id} className="border-b border-[#f0f2f6] last:border-0">
-                <td className="px-4 py-2 font-mono text-xs">{j.queue}</td>
-                <td className="px-4 py-2">{j.status}</td>
-                <td className="px-4 py-2 font-mono tabular-nums">
-                  {j.attempts}/{j.maxAttempts}
-                </td>
-                <td className="px-4 py-2 text-slate-550">{new Date(j.runAt).toLocaleString()}</td>
-                <td className="max-w-[16rem] truncate px-4 py-2 text-xs text-crit">
-                  {j.lastError ?? ""}
-                </td>
-                <td className="px-4 py-2 text-right">
-                  {(j.status === "DEAD" || j.status === "FAILED") && (
-                    <button
-                      className="text-xs text-accent-ink hover:underline"
-                      onClick={() => retry.mutate(j.id)}
-                    >
-                      Retry
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </Table>
-        </>
-      )}
     </section>
   );
 }

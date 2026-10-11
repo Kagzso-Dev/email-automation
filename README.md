@@ -204,3 +204,135 @@ which greets *"Hello Mr. Ragul, this is Nila from Kagzso AI and Automation…"* 
 
 Unit tests: `npm test` (parsing, E.164, random selection, planning, signatures, route gates) and,
 in the voice backend, `pytest` (Follow-up agent, prompt variables, endpoint, callbacks).
+
+### Call Flows (edit the voice script in the UI)
+
+Off by default. With `ENABLE_AI_CALLS=true` **and** `ENABLE_CALL_FLOW_EDITOR=true`, admins get a
+**Call Flows** page in the sidebar and a *Call flow* picker in the AI Call window. With the editor
+flag off (or the picker left on *Default flow*), calls go out exactly as before.
+
+- **A flow is a copy of a built-in script**: *Nila screening* or *Customer follow-up*. The built-ins
+  live in the voice backend (`kagzso-voice-backend-english/app/flows/builtin/*.json`) and rebuild
+  the old `nila.md` / `followup.md` prompts byte for byte (a regression test checks this).
+- **Editable:** name, voice id, greeting line, the script blocks (greeting, main script, questions,
+  objection handling, closing, tone & style, rules), the two no-response lines, and the max duration
+  (capped by the voice backend's `MAX_CALL_DURATION_SECONDS`). The transfer number is saved but not
+  used yet (live transfer isn't implemented).
+- **Fixed in code:** the locked safety blocks (do-not-call, wrong person, customer-data rules,
+  outcome / callback rules), the safety rules every prompt gets (honest AI disclosure if asked,
+  do-not-call ends the call, no false claims, never ask for OTPs / card details), unanswered /
+  busy / voicemail handling, do-not-call lists, caps, auth and webhook signatures.
+- **Variables:** `{{customer_name}}` (or `{{name}}`), `{{honorific}}` (Mr./Ms.), `{{title}}`
+  (sir/madam), `{{gender}}`, `{{addressed_name}}`, `{{follow_up_detail}}`, `{{company_name}}`,
+  `{{business_type}}`. Anything else, including `{{phone_number}}`, is rejected.
+- **Versions:** saving creates or updates the flow's single draft; **Publish** freezes it as
+  version *n* (published versions are never edited; *Restore into draft* copies an old one back).
+  A run pins the published version it started with, so later edits never change queued calls.
+- **Preview** renders the greeting, no-response lines and full AI prompt with sample customer data
+  through the voice backend (the same code a real call uses).
+- **Test call to my number** places one real call with the draft or any version, only to numbers
+  listed in `AI_CALL_FLOW_TEST_NUMBERS`. It counts toward the daily cap and is refused while
+  another run is in progress.
+- **Fallback:** if a flow sent to the voice backend is missing or invalid, or a published version
+  arrives with different content, the call still goes out with the default agent and the call log
+  records `flow_fallback` (`missing` / `invalid` / `version_conflict`).
+
+Setup: `npm run prisma:deploy` (applies `0018_call_flows`: three new tables, `call_flows`,
+`call_flow_versions`, `ai_call_run_flows`; no existing table changes), then set the two flags.
+
+**Rollback:** set `ENABLE_CALL_FLOW_EDITOR=false` (calls use the default agent at once). To remove
+the tables, run `prisma/migrations/0018_call_flows/down.sql` against the database, then
+`npx prisma migrate resolve --rolled-back 0018_call_flows`.
+
+### AI Call Customers and follow-ups
+
+With `ENABLE_AI_CALLS=true`, admins get an **AI Call Customers** page in the sidebar
+(`/ai-call-customers`, next to Call Flows). It is separate from the email **Contacts** page and the
+**WhatsApp Contacts** page, which are unchanged. Editors don't see it.
+
+- **Customers:** name, gender, phone, business, follow-up detail, optional email and a WhatsApp
+  opt-in flag. They are stored in their own table (`ai_call_customers`), never in the email
+  `Contact` table or in WhatsApp contacts. *Add customer* adds one; *Import file* takes a
+  `.xlsx` / `.csv` (columns auto-detected, preview with errors highlighted, only valid rows are
+  imported, then a summary of imported / skipped / duplicates). *Download sample file* gives
+  `scripts/sample-ai-call-customers.xlsx`. *Delete* is a soft delete: the row leaves the list, but its
+  call history and do-not-call status are kept.
+- **Phone numbers (+91 default):** every customer phone goes through the shared
+  `normalizePhoneE164`. A 10-digit number, `91XXXXXXXXXX`, `0XXXXXXXXXX` and `+91 XXXXX XXXXX` all
+  become `+91XXXXXXXXXX`. A number with another explicit country code (`+44 …`) is kept. Customers
+  are deduped on the normalized number and shown as `+91 XXXXX XXXXX`. The email and WhatsApp
+  contact forms and their stored numbers are not changed.
+- **Calling:** tick customers and press *Call selected*, or use *AI Call* and pick *Saved
+  customers* (random N / selected / all) or *Upload file* (as before). The same planner, limits,
+  do-not-call list, call flows and voice backend are used.
+- **Call stages:** Not called → Queued → Calling → a suggested stage from the result. *No answer*
+  and *Failed* come from the call status. *Interested*, *Not interested*, *Follow-up needed* and
+  *Callback requested* come from the voice backend's AI outcome. The call's transcript and summary
+  are on the customer's *call detail*, where an admin can **Approve**, **Reject** or change the
+  stage. **Do not call** is applied at once, is permanent, and blocks every future call to that
+  number (also for soft-deleted customers).
+- **Follow-ups → Send Queue → AI Call follow-ups:** *Interested*, *Follow-up needed* and
+  *Approved* create a WhatsApp follow-up if the customer opted in, otherwise a scheduled
+  call-again. *Callback requested* creates a call-again. *No answer* creates a call-again only up to
+  `AI_CALL_FOLLOWUP_MAX_RETRIES` times. *Not interested*, *Do not call* and *Failed* create nothing.
+  Admins can also add a follow-up from the call detail. Every follow-up starts as **Pending
+  approval**, and **nothing is sent until an admin approves it** (with *Edit* to pick the Meta
+  template or change the call time first, and *Reject* to drop it). On approval, WhatsApp goes
+  through the existing WhatsApp batch sender (it appears on the WhatsApp tab), and a call-again
+  becomes a one-call AI call run at the chosen time (the existing call worker, daily cap and
+  do-not-call checks apply). There are no email follow-ups: email can only go to rows of the email
+  `Contact` table, which this feature does not touch.
+- **Timeline:** each customer shows call → outcome → follow-up created → approved → sent →
+  replied. "Sent" and "replied" come from the WhatsApp ledger and inbound WhatsApp messages.
+  Email replies are not tracked.
+
+Setup: `npm run prisma:deploy` applies `0019_ai_call_customers`. It creates four new tables
+(`ai_call_customers`, `ai_call_customer_calls`, `ai_call_customer_events`,
+`ai_call_followups`) and changes no existing table.
+
+**Rollback:** set `ENABLE_AI_CALLS=false` to hide the page and the follow-up queue. To remove the
+tables, run `prisma/migrations/0019_ai_call_customers/down.sql`, then
+`npx prisma migrate resolve --rolled-back 0019_ai_call_customers`.
+
+### WhatsApp media (header media, received files, Inbox)
+
+WhatsApp only, following Meta's Cloud API media rules:
+
+| Type | Formats | Max size |
+|---|---|---|
+| Image | JPG, PNG | 5 MB |
+| Video | MP4, 3GP (H.264 + AAC) | 16 MB |
+| Audio | AAC, AMR, MP3, M4A, OGG (Opus) | 16 MB |
+| Document | PDF, DOC/DOCX, XLS/XLSX, PPT/PPTX, TXT | 100 MB |
+| Sticker | WebP | 500 KB animated / 100 KB static |
+
+- **Template header media.** If a Meta template has an image, video or document header,
+  set the file on **WhatsApp Templates → Header**. Every send of that template then includes it.
+  The file is uploaded to Meta when first sent, and that media ID is reused until Meta's 30-day
+  expiry. Templates without header media send exactly as before. The Send dialog only offers a
+  media-header template once its header file is set. Header *variables* (text) and location headers
+  aren't supported yet.
+- **Files customers send.** Images, videos, voice notes, documents and stickers that arrive through
+  the webhook are recorded at once and downloaded in the background (`whatsapp-media-download`
+  queue). Each download gets a fresh Meta URL, is authenticated, size-capped, checked against Meta's
+  sha256 and against its real content type, then stored once. Webhook redeliveries never download
+  twice. Media older than Meta's 7-day limit is marked *expired*.
+- **WhatsApp Inbox** (admins). Conversations with image, video and audio previews, document
+  downloads, captions and delivery status. You can reply with text or one attachment, but only
+  within **24 hours of the customer's last message** (Meta's customer-service window). After that,
+  send an approved template.
+- **Storage and security.** Files live in `WHATSAPP_MEDIA_DIR` (default `.whatsapp-media`, which
+  git ignores) under random names. They are never served statically: the only way to get them is
+  `GET /api/whatsapp/media/:id/file`, and customer files are ADMIN-only. The type is detected from
+  the file's bytes, not its name. Media is only downloaded from Meta's own HTTPS hosts. API
+  responses never contain paths, tokens or Meta media IDs.
+
+Setup: run `npm run prisma:deploy`. It applies `0020_whatsapp_media`, which adds three new tables
+(`whatsapp_media`, `whatsapp_template_header_media`, `whatsapp_send_media`) and changes no existing
+table. Until it's applied, sends and the templates page work as before, without header media.
+Receiving media needs the Meta webhook connected (a public HTTPS callback to
+`/api/webhooks/whatsapp`, subscribed to `messages`).
+
+**Rollback:** run `prisma/migrations/0020_whatsapp_media/down.sql`, then
+`npx prisma migrate resolve --rolled-back 0020_whatsapp_media`. Stored files stay in the folder
+until you delete them.

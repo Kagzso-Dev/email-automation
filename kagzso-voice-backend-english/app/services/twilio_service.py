@@ -94,7 +94,8 @@ class TwilioService:
         return f"{self.cfg.public_ws_base_url}/ws/twilio/media"  # no query string allowed
 
     # ---------------------- API calls ----------------------
-    async def make_outbound_call(self, call_id: str, to_number: str) -> OutboundCallResult:
+    async def make_outbound_call(self, call_id: str, to_number: str, time_limit: Optional[int] = None) -> OutboundCallResult:
+        """time_limit: per-call cap in seconds (a call flow's max duration); None = MAX_CALL_DURATION_SECONDS."""
         data = [
             ("To", to_number),
             ("From", self.cfg.TWILIO_FROM_NUMBER),
@@ -102,7 +103,7 @@ class TwilioService:
             ("Method", "POST"),
             ("StatusCallback", self.status_url(call_id)),
             ("StatusCallbackMethod", "POST"),
-            ("TimeLimit", str(self.cfg.MAX_CALL_DURATION_SECONDS)),
+            ("TimeLimit", str(time_limit or self.cfg.MAX_CALL_DURATION_SECONDS)),
             ("Timeout", "45"),
         ]
         for event in ("initiated", "ringing", "answered", "completed"):

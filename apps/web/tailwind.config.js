@@ -3,37 +3,74 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      // Every color resolves to a CSS variable defined once in src/index.css (:root), stored as
+      // RGB channels so Tailwind opacity modifiers (bg-ink/40, bg-wa/60) keep working.
       colors: {
-        ink: "#1b1f2a",
-        // Neutral ramp — `slate-550` kept for back-compat with existing markup.
+        ink: "rgb(var(--c-ink) / <alpha-value>)",
+        // Neutral text ramp — `slate-550` kept for back-compat with existing markup.
         slate: {
-          400: "#8b93a3",
-          500: "#6b7482",
-          550: "#565f6e",
-          600: "#454e5c",
+          400: "rgb(var(--c-text-faint) / <alpha-value>)",
+          500: "rgb(var(--c-text-muted) / <alpha-value>)",
+          550: "rgb(var(--c-text-body) / <alpha-value>)",
+          600: "rgb(var(--c-text-strong) / <alpha-value>)",
         },
-        accent: { DEFAULT: "#3a4fb8", ink: "#2c3c96", soft: "#eef0fb" },
-        ok: "#2f7d5d",
-        warn: "#9c6412",
-        crit: "#bd4238",
-        // Semantic surface + line tokens (previously scattered hex literals).
-        surface: { DEFAULT: "#ffffff", sunken: "#f6f7f9", muted: "#eef0f4" },
-        line: { DEFAULT: "#e3e6ec", strong: "#d5d9e2", subtle: "#f0f2f6" },
+        accent: {
+          DEFAULT: "rgb(var(--c-accent) / <alpha-value>)",
+          ink: "rgb(var(--c-accent-ink) / <alpha-value>)",
+          soft: "rgb(var(--c-accent-soft) / <alpha-value>)",
+          teal: "rgb(var(--c-accent-teal) / <alpha-value>)",
+        },
+        tint: "var(--hover-tint)",
+        ok: {
+          DEFAULT: "rgb(var(--c-ok) / <alpha-value>)",
+          soft: "rgb(var(--c-ok-soft) / <alpha-value>)",
+          bright: "rgb(var(--c-ok-bright) / <alpha-value>)",
+        },
+        warn: {
+          DEFAULT: "rgb(var(--c-warn) / <alpha-value>)",
+          soft: "rgb(var(--c-warn-soft) / <alpha-value>)",
+          bright: "rgb(var(--c-warn-bright) / <alpha-value>)",
+        },
+        crit: {
+          DEFAULT: "rgb(var(--c-crit) / <alpha-value>)",
+          soft: "rgb(var(--c-crit-soft) / <alpha-value>)",
+          line: "rgb(var(--c-crit-line) / <alpha-value>)",
+          bright: "rgb(var(--c-crit-bright) / <alpha-value>)",
+        },
+        // WhatsApp brand green — kept recognizable on the WhatsApp send actions.
+        wa: {
+          DEFAULT: "rgb(var(--c-wa) / <alpha-value>)",
+          ink: "rgb(var(--c-wa-ink) / <alpha-value>)",
+        },
+        surface: {
+          DEFAULT: "rgb(var(--c-surface) / <alpha-value>)",
+          sunken: "rgb(var(--c-surface-sunken) / <alpha-value>)",
+          muted: "rgb(var(--c-surface-muted) / <alpha-value>)",
+        },
+        line: {
+          DEFAULT: "rgb(var(--c-line) / <alpha-value>)",
+          strong: "rgb(var(--c-line-strong) / <alpha-value>)",
+          subtle: "rgb(var(--c-line-subtle) / <alpha-value>)",
+        },
+      },
+      backgroundImage: {
+        "gradient-accent": "var(--gradient-accent)",
       },
       fontFamily: {
         sans: ["'IBM Plex Sans'", "ui-sans-serif", "system-ui", "sans-serif"],
         mono: ["'IBM Plex Mono'", "ui-monospace", "monospace"],
       },
       borderRadius: {
-        lg: "0.625rem", // 10px — default control radius
-        xl: "0.875rem", // 14px — cards
-        "2xl": "1.125rem", // 18px — modals / large panels
+        lg: "0.75rem", // 12px — default control radius
+        xl: "1rem", // 16px — cards, tables
+        "2xl": "1.25rem", // 20px — modals / large panels
       },
       boxShadow: {
-        sm: "0 1px 2px rgba(20,23,30,0.06)",
-        card: "0 1px 2px rgba(20,23,30,0.04), 0 10px 30px rgba(20,23,30,0.05)",
-        pop: "0 12px 32px rgba(20,23,30,0.12)",
-        rail: "0 0 0 1px rgba(20,23,30,0.05), 4px 0 24px rgba(20,23,30,0.06)",
+        sm: "0 1px 2px rgba(17,24,39,0.05)",
+        card: "var(--shadow-card)",
+        pop: "var(--shadow-pop)",
+        rail: "0 0 0 1px rgba(17,24,39,0.04), 4px 0 30px rgba(17,24,39,0.08)",
+        glow: "var(--shadow-glow)",
       },
       transitionTimingFunction: {
         "in-out-soft": "cubic-bezier(0.4, 0, 0.2, 1)",
@@ -63,6 +100,10 @@ export default {
           "65%": { opacity: "1", transform: "translateY(3px) scale(1)" },
           "100%": { transform: "translateY(0) scale(1)" },
         },
+        "page-in": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
         "mail-pop": {
           "0%": { opacity: "0", transform: "translateY(-7px) rotate(-10deg)" },
           "55%": { opacity: "1", transform: "translateY(1px) rotate(4deg)" },
@@ -76,6 +117,7 @@ export default {
         "dialog-in": "dialog-in 190ms cubic-bezier(0.16, 1, 0.3, 1)",
         "dialog-out": "dialog-out 130ms ease-in forwards",
         "toast-in": "toast-in 340ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "page-in": "page-in 260ms cubic-bezier(0.4, 0, 0.2, 1) backwards",
         "mail-pop": "mail-pop 440ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both",
       },
     },

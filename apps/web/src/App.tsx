@@ -7,9 +7,12 @@ import { InsightsPage } from "./pages/Insights";
 import { ContactsPage } from "./pages/Contacts";
 import { WhatsAppContactsPage } from "./pages/WhatsAppContacts";
 import { WhatsAppTemplatesPage } from "./pages/WhatsAppTemplates";
+import { WhatsAppInboxPage } from "./pages/WhatsAppInbox";
 import { ListsPage } from "./pages/Lists";
 import { ListDetailPage } from "./pages/ListDetail";
 import { TemplatesPage } from "./pages/Templates";
+import { CallFlowsPage } from "./pages/CallFlows";
+import { AiCallCustomersPage } from "./pages/AiCallCustomers";
 import { CampaignsPage } from "./pages/Campaigns";
 import { CampaignDetailPage } from "./pages/CampaignDetail";
 import { SendQueuePage } from "./pages/SendQueue";
@@ -40,9 +43,12 @@ export function App() {
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/whatsapp-contacts" element={<WhatsAppContactsPage />} />
         <Route path="/whatsapp-templates" element={<WhatsAppTemplatesPage />} />
+        <Route path="/whatsapp-inbox" element={<WhatsAppInboxPage />} />
         <Route path="/lists" element={<ListsPage />} />
         <Route path="/lists/:id" element={<ListDetailPage />} />
         <Route path="/templates" element={<TemplatesPage />} />
+        <Route path="/ai-call-customers" element={<AiCallCustomersPage />} />
+        <Route path="/call-flows" element={<CallFlowsPage />} />
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="/send-queue" element={<SendQueuePage />} />

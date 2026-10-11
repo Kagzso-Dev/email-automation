@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import agents, calls, dev_tests, health, twilio_webhooks, webhooks
+from app.api import agents, calls, dev_tests, flows, health, twilio_webhooks, webhooks
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db import repositories as repo
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
         async with session_factory()() as db:
             agent = await repo.ensure_default_agent(db, DEFAULT_AGENT)
             log.info("Default agent ready: id=%s name=%s", agent.id, agent.name)
-            for fields in BUILTIN_AGENTS:  # prompt files in app/prompts are the source of truth
+            for fields in BUILTIN_AGENTS:  # flow files in app/flows/builtin are the source of truth
                 agent = await repo.upsert_agent_by_name(db, fields)
                 log.info("Agent ready: id=%s name=%s", agent.id, agent.name)
     except Exception as exc:
@@ -78,6 +78,7 @@ if settings.cors_origins:
 app.include_router(health.router)
 app.include_router(calls.router)
 app.include_router(agents.router)
+app.include_router(flows.router)
 app.include_router(webhooks.router)
 app.include_router(dev_tests.router)
 app.include_router(plivo_stream.router)

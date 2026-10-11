@@ -24,6 +24,15 @@ export interface PlaceCallInput {
   phone: string; // E.164
   runId: string;
   logId: string;
+  /** Pinned call flow version (absent = the default agent, exactly as before). */
+  flow?: PinnedFlow | null;
+}
+
+export interface PinnedFlow {
+  flowId: string;
+  version: number;
+  draft: boolean;
+  definition: unknown;
 }
 
 export interface VoiceCallDetail {
@@ -91,12 +100,49 @@ export async function placeVoiceCall(input: PlaceCallInput): Promise<{ callId: s
       follow_up_detail: input.followUpDetail || undefined,
       run_id: input.runId,
       log_id: input.logId,
+      ...(input.flow
+        ? {
+            flow_id: input.flow.flowId,
+            flow_version: input.flow.version,
+            flow_draft: input.flow.draft,
+            flow: input.flow.definition,
+          }
+        : {}),
       ...(aiCallsConfig.voiceAgentId
         ? { agent_id: aiCallsConfig.voiceAgentId }
         : { agent_name: aiCallsConfig.voiceAgentName }),
     },
   );
   return { callId: res.call_id, providerCallId: res.provider_call_id ?? null };
+}
+
+export interface VoiceFlowCatalog {
+  flows: Record<string, Record<string, unknown>>;
+  locked_blocks: Record<string, string>;
+  variables: string[];
+  groups: string[];
+  limits: { max_duration_sec: number; max_block_chars: number; max_prompt_chars: number };
+}
+
+export interface VoiceFlowPreview {
+  valid: boolean;
+  errors: string[];
+  greeting: string | null;
+  system_prompt: string | null;
+  script_chars: number | null;
+  silence_reprompt: string | null;
+  silence_closing: string | null;
+  max_duration_sec: number | null;
+}
+
+/** Built-in flows (the defaults to copy) + locked block text, from the voice backend. */
+export function getBuiltinFlows(): Promise<VoiceFlowCatalog> {
+  return request<VoiceFlowCatalog>("GET", "/api/flows/builtin");
+}
+
+/** Validate a flow and render it exactly as a call would (the voice backend is the authority). */
+export function previewFlow(definition: unknown, sample: Record<string, unknown> = {}): Promise<VoiceFlowPreview> {
+  return request<VoiceFlowPreview>("POST", "/api/flows/preview", { flow: definition, sample });
 }
 
 export function getVoiceCall(voiceCallId: string): Promise<VoiceCallDetail> {

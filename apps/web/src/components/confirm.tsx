@@ -103,7 +103,7 @@ function ConfirmDialog({
 
   return (
     <div
-      className={`fixed inset-0 z-[60] grid place-items-center bg-black/30 p-4 ${
+      className={`fixed inset-0 z-[60] grid place-items-center bg-ink/30 p-4 backdrop-blur-[6px] ${
         closing ? "animate-overlay-out" : "animate-overlay-in"
       }`}
       onClick={() => close(false)}
@@ -112,7 +112,7 @@ function ConfirmDialog({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="confirm-title"
-        className={`w-full max-w-sm rounded-2xl bg-white p-6 shadow-pop ${
+        className={`w-full max-w-sm rounded-2xl border border-line/70 bg-surface p-6 shadow-pop ${
           closing ? "animate-dialog-out" : "animate-dialog-in"
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -120,7 +120,7 @@ function ConfirmDialog({
         <div className="flex gap-3.5">
           <span
             className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full ${
-              tone === "danger" ? "bg-[#f9ebe9] text-crit" : "bg-accent-soft text-accent-ink"
+              tone === "danger" ? "bg-crit-soft text-crit" : "bg-accent-soft text-accent-ink"
             }`}
           >
             <Icon name={tone === "danger" ? "trash" : "info"} size={18} />

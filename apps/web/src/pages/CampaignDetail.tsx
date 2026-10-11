@@ -116,7 +116,7 @@ export function CampaignDetailPage() {
         </div>
       </div>
 
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-550">Stats</h2>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Stats</h2>
       {stats.isLoading ? (
         <Spinner />
       ) : stats.data ? (
@@ -175,7 +175,7 @@ function CampaignStats({ stats }: { stats: Stats }) {
         <ChartCard title="Conversion funnel" subtitle="How far this campaign's messages got">
           <Funnel
             stages={[
-              { label: "Reached provider", value: reached, color: "#9ec5f4" },
+              { label: "Reached provider", value: reached, color: "#7fd6f5" },
               { label: "Delivered", value: delivered, color: SERIES.sent },
               { label: "Opened", value: opened, color: SERIES.opened },
               { label: "Clicked", value: c.CLICKED ?? 0, color: SERIES.clicked },
@@ -192,10 +192,10 @@ function CampaignStats({ stats }: { stats: Stats }) {
             { label: "Delivered", value: c.DELIVERED ?? 0, color: SERIES.clicked },
             { label: "Opened", value: c.OPENED ?? 0, color: SERIES.opened },
             { label: "Clicked", value: c.CLICKED ?? 0, color: SERIES.sent },
-            { label: "Sent", value: c.SENT ?? 0, color: "#9ec5f4" },
-            { label: "Queued", value: c.QUEUED ?? 0, color: "#c9ccd6" },
-            { label: "Bounced", value: c.BOUNCED ?? 0, color: "#d03b3b" },
-            { label: "Failed", value: c.FAILED ?? 0, color: "#8b93a3" },
+            { label: "Sent", value: c.SENT ?? 0, color: "#7fd6f5" },
+            { label: "Queued", value: c.QUEUED ?? 0, color: "#c7d2e6" },
+            { label: "Bounced", value: c.BOUNCED ?? 0, color: "#ef4444" },
+            { label: "Failed", value: c.FAILED ?? 0, color: "#8a94a6" },
           ].filter((s) => s.value > 0)}
         />
       </ChartCard>

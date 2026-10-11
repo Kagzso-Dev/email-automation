@@ -41,7 +41,21 @@ export const aiCallsConfig = {
   minGapSec: intIn(process.env.AI_CALLS_MIN_GAP_SEC, 10, 5, 3600),
   /** A call with no final status after this long is marked FAILED and the run moves on. */
   callTimeoutSec: intIn(process.env.AI_CALLS_CALL_TIMEOUT_SEC, 900, 120, 7200),
+  /** "Call Flows" editor + flow picker in the AI Call modal. Off = every call uses the default agent. */
+  flowEditorEnabled: ["true", "1", "yes"].includes((process.env.ENABLE_CALL_FLOW_EDITOR ?? "").trim().toLowerCase()),
+  /** AI Call Customers: how many "call again" drafts a No answer may create per customer. */
+  followupMaxRetries: intIn(process.env.AI_CALL_FOLLOWUP_MAX_RETRIES, 2, 0, 10),
+  /** E.164 numbers the "Test call to my number" button may dial (comma-separated). Empty = test calls off. */
+  flowTestNumbers: (process.env.AI_CALL_FLOW_TEST_NUMBERS ?? "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter((n) => /^\+[1-9]\d{7,14}$/.test(n)),
 } as const;
+
+/** Both flags: AI calls on and the Call Flows editor on. */
+export function isCallFlowEditorEnabled(): boolean {
+  return aiCallsConfig.enabled && aiCallsConfig.flowEditorEnabled;
+}
 
 /** True when calls can actually be placed (flag on + voice backend reachable config). */
 export function isAiCallsConfigured(): boolean {

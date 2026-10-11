@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useTemplateVerification } from "../lib/whatsapp";
 import { useToast } from "./toast";
 import { ErrorNote, Modal } from "./ui";
 
@@ -21,6 +22,10 @@ interface WhatsAppTemplate {
   providerTemplateName: string | null;
   variables: string[];
   buttonLabels: string[];
+  /** Archived on the WhatsApp Templates page — never offered here. */
+  archived?: boolean;
+  /** Header media set on the WhatsApp Templates page (needed when the Meta template has a media header). */
+  headerMedia?: { kind: string } | null;
 }
 
 /**
@@ -78,6 +83,24 @@ function SendBody({
     queryKey: ["whatsapp-templates"],
     queryFn: () => api<{ items: WhatsAppTemplate[] }>("/api/whatsapp/templates"),
   });
+  // Only templates Meta reports as approved (badge "Verified") and that Dispatch can
+  // actually send are offered here. Every row stays listed on the WhatsApp Templates page.
+  const verification = useTemplateVerification().byId;
+  const verified = (templates.data?.items ?? []).filter(
+    (t) => !t.archived && t.providerTemplateName && verification.get(t.id)?.status === "verified",
+  );
+  // A media header (image / video / document) is sent from the file set on the WhatsApp
+  // Templates page; until it is set — or for header types Dispatch can't fill — the template is blocked.
+  const headerKind: Record<string, string> = { IMAGE: "image", VIDEO: "video", DOCUMENT: "document" };
+  const headerProblem = (t: WhatsAppTemplate): string | null => {
+    const needs = verification.get(t.id)?.headerNeedsParameter;
+    if (!needs) return null;
+    const kind = headerKind[needs];
+    if (!kind) return `${needs.toLowerCase()} header not supported`;
+    return t.headerMedia?.kind === kind ? null : `needs a header ${kind} (add it on the WhatsApp Templates page)`;
+  };
+  const blocked = verified.filter((t) => headerProblem(t));
+  const sendable = verified.filter((t) => !headerProblem(t));
 
   const start = useMutation({
     mutationFn: () =>
@@ -119,12 +142,17 @@ function SendBody({
         required
       >
         <option value="">Select…</option>
-        {templates.data?.items.map((t) => (
-          <option key={t.id} value={t.id} disabled={!t.providerTemplateName}>
-            {t.providerTemplateName ? t.name : `${t.name} — needs Meta template name`}
+        {sendable.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
           </option>
         ))}
       </select>
+      {blocked.length > 0 && (
+        <p className="-mt-2 mb-3 text-xs text-warn">
+          Not available: {blocked.map((t) => `${t.name} — ${headerProblem(t)}`).join("; ")}.
+        </p>
+      )}
       {templates.data && templates.data.items.length === 0 && (
         <p className="mb-3 text-xs text-warn">
           No WhatsApp templates yet — create one on the WhatsApp Templates page first.

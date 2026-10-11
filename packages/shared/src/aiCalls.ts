@@ -160,6 +160,8 @@ export const startAiCallsInput = z
     maxCalls: z.coerce.number().int().min(1).max(500).default(10),
     /** true: validate and report what would happen, create nothing. */
     dryRun: z.boolean().default(false),
+    /** Call flow to use (its latest published version is pinned to the run). Absent = the default agent. */
+    flowId: z.string().min(1).max(64).optional().nullable(),
   })
   .refine((v) => v.mode !== "selected" || v.selectedIndexes.length > 0, {
     message: "Select at least one row to call",

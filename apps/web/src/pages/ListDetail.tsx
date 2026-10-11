@@ -104,7 +104,7 @@ export function ListDetailPage() {
       ) : (
         <Table head={["Email", "Name", "Business", "Status", "Added", ""]}>
           {members.data!.items.map((m) => (
-            <tr key={m.id} className="border-b border-[#f0f2f6] last:border-0">
+            <tr key={m.id} className="border-b border-line-subtle last:border-0">
               <td className="px-4 py-2.5 font-mono text-xs">{m.email}</td>
               <td className="px-4 py-2.5">{contactName(m) || "—"}</td>
               <td className="px-4 py-2.5">{m.businessName || "—"}</td>
@@ -241,7 +241,7 @@ function AddMembersModal({
               <label
                 key={c.id}
                 className={`flex items-center gap-2 border-b border-line-subtle px-3 py-2 text-sm last:border-0 ${
-                  already ? "opacity-50" : "cursor-pointer hover:bg-surface-muted"
+                  already ? "opacity-50" : "cursor-pointer hover:bg-tint"
                 }`}
               >
                 <input

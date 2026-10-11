@@ -116,8 +116,8 @@ export function useToast(): ToastApi {
 }
 
 const toneStyles: Record<ToastTone, { wrap: string; badge: string; icon: IconName }> = {
-  error: { wrap: "border-[#e6c3bf] bg-[#fdf3f2] text-crit", badge: "bg-[#f9e3e0] text-crit", icon: "info" },
-  success: { wrap: "border-[#bfe0cf] bg-[#f1f8f4] text-ok", badge: "bg-[#dcefe4] text-ok", icon: "mail" },
+  error: { wrap: "border-crit-line bg-crit-soft text-crit", badge: "bg-crit-soft text-crit", icon: "info" },
+  success: { wrap: "border-ok-bright/30 bg-ok-soft text-ok", badge: "bg-ok-bright/20 text-ok", icon: "mail" },
   info: { wrap: "border-line-strong bg-surface text-ink", badge: "bg-surface-muted text-ink", icon: "info" },
 };
 

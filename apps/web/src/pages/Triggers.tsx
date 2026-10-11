@@ -95,7 +95,7 @@ export function TriggersPage() {
                 </div>
               )}
 
-              <div className="mt-3 rounded-lg bg-[#f6f7f9] p-3">
+              <div className="mt-3 rounded-lg bg-surface-sunken p-3">
                 <div className="label">Webhook URL</div>
                 <code className="block break-all text-xs">{t.webhookUrl}</code>
                 <button

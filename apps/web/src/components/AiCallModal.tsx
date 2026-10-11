@@ -17,6 +17,7 @@ import type {
   AiCallStatus,
   AiCallsConfig,
 } from "../lib/aiCalls";
+import { useCallFlows } from "../lib/callFlows";
 import { useToast } from "./toast";
 import { Badge, ErrorNote, Modal, Spinner, type BadgeTone } from "./ui";
 
@@ -30,19 +31,30 @@ export function AiCallModal({
   open,
   onClose,
   config,
+  preselectedCustomerIds,
 }: {
   open: boolean;
   onClose: () => void;
   config: AiCallsConfig;
+  /** From "Call selected" on AI Call Customers: start on "Saved customers" with these ticked. */
+  preselectedCustomerIds?: string[];
 }) {
   return (
     <Modal open={open} onClose={onClose} title="Start AI Calls" wide>
-      {open ? <AiCallFlow config={config} onClose={onClose} /> : null}
+      {open ? <AiCallFlow config={config} onClose={onClose} preselectedCustomerIds={preselectedCustomerIds} /> : null}
     </Modal>
   );
 }
 
-function AiCallFlow({ config, onClose }: { config: AiCallsConfig; onClose: () => void }) {
+function AiCallFlow({
+  config,
+  onClose,
+  preselectedCustomerIds,
+}: {
+  config: AiCallsConfig;
+  onClose: () => void;
+  preselectedCustomerIds?: string[];
+}) {
   const [runId, setRunId] = useState<string | null>(null);
   const resumed = useRef(false);
   const runs = useQuery({
@@ -60,7 +72,7 @@ function AiCallFlow({ config, onClose }: { config: AiCallsConfig; onClose: () =>
 
   if (runs.isLoading) return <Spinner />;
   if (runId) return <RunStatus runId={runId} onNewRun={() => setRunId(null)} onClose={onClose} />;
-  return <SetupFlow config={config} onStarted={setRunId} onClose={onClose} />;
+  return <SetupFlow config={config} onStarted={setRunId} onClose={onClose} preselectedCustomerIds={preselectedCustomerIds} />;
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -73,14 +85,32 @@ const FIELD_LABELS: Record<AiCallField, string> = {
 };
 const PREVIEW_LIMIT = 300;
 
+/** Saved customers shaped like a parsed sheet, so the preview / selection below works unchanged. */
+const SAVED_HEADERS = ["customer_name", "gender", "follow_up_detail", "phone"];
+const SAVED_MAPPING: AiCallColumnMapping = {
+  customer_name: "customer_name",
+  gender: "gender",
+  follow_up_detail: "follow_up_detail",
+  phone: "phone",
+};
+interface SavedCustomer {
+  id: string;
+  customerName: string | null;
+  gender: string;
+  followUpDetail: string | null;
+  phone: string;
+}
+
 function SetupFlow({
   config,
   onStarted,
   onClose,
+  preselectedCustomerIds,
 }: {
   config: AiCallsConfig;
   onStarted: (runId: string) => void;
   onClose: () => void;
+  preselectedCustomerIds?: string[];
 }) {
   const toast = useToast();
   const qc = useQueryClient();
@@ -93,6 +123,51 @@ function SetupFlow({
   const [gapSeconds, setGapSeconds] = useState(config.defaultGapSec);
   const [maxCalls, setMaxCalls] = useState(Math.min(10, config.maxPerRun));
   const [plan, setPlan] = useState<AiCallPlanSummary | null>(null);
+  // "" = the default flow (whatever agent the server is configured with), exactly as before.
+  const [flowId, setFlowId] = useState("");
+  const flows = useCallFlows(config.flowEditor);
+  const publishedFlows = (flows.data?.items ?? []).filter((f) => f.published);
+  const chosenFlow = publishedFlows.find((f) => f.id === flowId) ?? null;
+  // Where the customers come from: an uploaded file (as before) or the saved AI Call Customers.
+  const [source, setSource] = useState<"upload" | "saved">(preselectedCustomerIds?.length ? "saved" : "upload");
+  const [savedIds, setSavedIds] = useState<string[] | null>(null);
+  const saved = useQuery({
+    queryKey: ["ai-call-customers-callable"],
+    queryFn: () => api<{ items: SavedCustomer[] }>("/api/ai-call-customers/callable"),
+    enabled: source === "saved",
+  });
+  useEffect(() => {
+    if (source !== "saved" || !saved.data || sheet) return;
+    const list = saved.data.items;
+    if (list.length === 0) return;
+    setSheet({
+      headers: SAVED_HEADERS,
+      rows: list.map((c) => ({
+        customer_name: c.customerName ?? "",
+        gender: c.gender ?? "",
+        follow_up_detail: c.followUpDetail ?? "",
+        phone: c.phone,
+      })),
+      mapping: SAVED_MAPPING,
+      truncated: false,
+    });
+    setMapping(SAVED_MAPPING);
+    setSavedIds(list.map((c) => c.id));
+    setPlan(null);
+    const pre = new Set(preselectedCustomerIds ?? []);
+    const idx = list.map((c, i) => (pre.has(c.id) ? i : -1)).filter((i) => i >= 0);
+    setSelected(new Set(idx));
+    if (idx.length > 0) setMode("selected");
+  }, [source, saved.data, sheet, preselectedCustomerIds]);
+
+  function switchSource(next: "upload" | "saved") {
+    setSource(next);
+    setSheet(null);
+    setMapping(null);
+    setSavedIds(null);
+    setSelected(new Set());
+    setPlan(null);
+  }
 
   const parse = useMutation({
     mutationFn: (file: File) => {
@@ -139,29 +214,34 @@ function SetupFlow({
   );
   const callable = rows.length - counts.invalid - counts.duplicates;
 
-  const body = {
-    rows,
+  const options = {
     mode,
     randomCount,
     selectedIndexes: [...selected].sort((a, b) => a - b),
     gapSeconds,
     maxCalls,
+    ...(flowId ? { flowId } : {}),
   };
+  // Saved customers: the server reloads them by id (in this order) and links each call to its customer.
+  const usingSaved = source === "saved" && !!savedIds;
+  const startPath = usingSaved ? "/api/ai-call-customers/call" : "/api/ai-calls/start";
+  const body = usingSaved ? { customerIds: savedIds, ...options } : { rows, ...options };
 
   const review = useMutation({
     mutationFn: () =>
-      api<AiCallPlanSummary>("/api/ai-calls/start", { method: "POST", json: { ...body, dryRun: true }, notify: false }),
+      api<AiCallPlanSummary>(startPath, { method: "POST", json: { ...body, dryRun: true }, notify: false }),
     onSuccess: setPlan,
   });
 
   const start = useMutation({
     mutationFn: () =>
-      api<AiCallPlanSummary & { runId: string }>("/api/ai-calls/start", { method: "POST", json: body, notify: false }),
+      api<AiCallPlanSummary & { runId: string }>(startPath, { method: "POST", json: body, notify: false }),
     onSuccess: (res) => {
       toast.success(`AI calls started — ${res.toCall} customer${res.toCall === 1 ? "" : "s"}`, [
         "Calls are placed one at a time. You can close this window; the run keeps going.",
       ]);
       void qc.invalidateQueries({ queryKey: ["ai-call-runs"] });
+      void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });
       onStarted(res.runId);
     },
   });
@@ -184,12 +264,13 @@ function SetupFlow({
   if (plan) {
     return (
       <div>
-        <div className="mb-4 rounded-lg border border-[#e6c3bf] bg-[#faece9] px-4 py-3">
+        <div className="mb-4 rounded-lg border border-crit-line bg-crit-soft px-4 py-3">
           <div className="text-base font-semibold text-crit">
             You are about to call {plan.toCall} customer{plan.toCall === 1 ? "" : "s"}.
           </div>
           <p className="mt-1 text-sm text-ink">
             Real phone calls will be placed by the AI agent, one at a time, waiting {gapSeconds}s after each call ends.
+            {" "}Script: {chosenFlow ? `${chosenFlow.name} (v${chosenFlow.published!.version})` : "default flow"}.
             {mode === "random" && " The random selection is made when you press Start."}
           </p>
         </div>
@@ -212,10 +293,43 @@ function SetupFlow({
     );
   }
 
+  const sourcePicker = (
+    <div className="mb-4 flex flex-wrap items-center gap-4 text-sm" role="radiogroup" aria-label="Customers to call">
+      <span className="label mb-0">Customers</span>
+      <label className="flex items-center gap-2">
+        <input type="radio" name="ai-source" checked={source === "saved"} onChange={() => switchSource("saved")} />
+        Saved customers
+      </label>
+      <label className="flex items-center gap-2">
+        <input type="radio" name="ai-source" checked={source === "upload"} onChange={() => switchSource("upload")} />
+        Upload file
+      </label>
+    </div>
+  );
+
+  /* ---------- step: saved customers loading */
+  if (source === "saved" && (!sheet || !mapping)) {
+    return (
+      <div>
+        {sourcePicker}
+        {saved.isLoading ? (
+          <Spinner />
+        ) : saved.error ? (
+          <ErrorNote error={saved.error} />
+        ) : (
+          <p className="text-sm text-slate-550">
+            No saved customers yet — add or import them on the AI Call Customers tab, or upload a file.
+          </p>
+        )}
+      </div>
+    );
+  }
+
   /* ---------- step: upload */
   if (!sheet || !mapping) {
     return (
       <div>
+        {sourcePicker}
         <p className="mb-3 text-sm text-slate-550">
           Upload a <b>.xlsx</b> or <b>.csv</b> file with the columns <code>customer_name</code>,{" "}
           <code>gender</code>, <code>follow_up_detail</code> and <code>phone</code> (variants like <i>name</i>,{" "}
@@ -253,23 +367,28 @@ function SetupFlow({
 
   return (
     <div>
+      {sourcePicker}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
         <span>
-          <b>{rows.length}</b> row{rows.length === 1 ? "" : "s"} read
+          <b>{rows.length}</b> {usingSaved ? "saved customer" : "row"}
+          {rows.length === 1 ? "" : "s"}
+          {usingSaved ? "" : " read"}
           {sheet.truncated && <span className="text-warn"> (file truncated to the first {rows.length})</span>}
         </span>
-        <button
-          className="text-xs text-accent-ink hover:underline"
-          onClick={() => {
-            setSheet(null);
-            setMapping(null);
-          }}
-        >
-          Upload a different file
-        </button>
+        {!usingSaved && (
+          <button
+            className="text-xs text-accent-ink hover:underline"
+            onClick={() => {
+              setSheet(null);
+              setMapping(null);
+            }}
+          >
+            Upload a different file
+          </button>
+        )}
       </div>
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-4">
+      <div className={`mb-4 grid gap-3 sm:grid-cols-4 ${usingSaved ? "hidden" : ""}`}>
         {AI_CALL_FIELDS.map((f) => (
           <div key={f}>
             <label className="label">
@@ -301,10 +420,10 @@ function SetupFlow({
         )}
       </div>
 
-      <div className="mb-4 max-h-72 overflow-auto rounded-lg border border-[#e3e6ec]">
-        <table className="w-full min-w-[40rem] text-xs">
-          <thead className="sticky top-0 bg-white">
-            <tr className="border-b border-[#e3e6ec] text-left text-slate-550">
+      <div className="mb-4 max-h-72 overflow-auto rounded-lg border border-line">
+        <table className="table-soft w-full min-w-[40rem] text-xs">
+          <thead className="sticky top-0 z-10 bg-surface-sunken">
+            <tr className="border-b border-line text-left text-slate-550">
               <th className="px-2 py-2">
                 <input
                   type="checkbox"
@@ -336,8 +455,8 @@ function SetupFlow({
               return (
                 <tr
                   key={i}
-                  className={`border-b border-[#f0f2f6] last:border-0 ${
-                    bad ? "bg-[#f9ebe9]" : c.duplicate || c.warnings.length ? "bg-[#fbf6ec]" : ""
+                  className={`border-b border-line-subtle last:border-0 ${
+                    bad ? "bg-crit-soft" : c.duplicate || c.warnings.length ? "bg-warn-soft" : ""
                   }`}
                 >
                   <td className="px-2 py-1.5">
@@ -434,6 +553,23 @@ function SetupFlow({
           </div>
         </div>
       </div>
+
+      {config.flowEditor && (
+        <div className="mb-4 max-w-md">
+          <label className="label">Call flow</label>
+          <select className="input" value={flowId} onChange={(e) => setFlowId(e.target.value)}>
+            <option value="">Default flow (server default)</option>
+            {publishedFlows.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name} — v{f.published!.version}
+              </option>
+            ))}
+          </select>
+          <span className="text-xs text-slate-550">
+            Only published flows are listed. The version is fixed when the run starts.
+          </span>
+        </div>
+      )}
 
       {formProblem && <p className="mb-3 text-sm text-warn">{formProblem}</p>}
       {review.error && <ErrorNote error={review.error} />}
@@ -546,10 +682,10 @@ function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () =
         <span className="ml-auto text-xs text-slate-550">Updates every 3 seconds</span>
       </div>
 
-      <div className="mb-4 max-h-96 overflow-auto rounded-lg border border-[#e3e6ec]">
-        <table className="w-full min-w-[40rem] text-sm">
-          <thead className="sticky top-0 bg-white">
-            <tr className="border-b border-[#e3e6ec] text-left text-xs uppercase tracking-wide text-slate-550">
+      <div className="mb-4 max-h-96 overflow-auto rounded-lg border border-line">
+        <table className="table-soft w-full min-w-[40rem] text-sm">
+          <thead className="sticky top-0 z-10 bg-surface-sunken">
+            <tr className="border-b border-line text-left text-xs uppercase tracking-[0.06em] text-slate-550">
               <th className="px-3 py-2">#</th>
               <th className="px-3 py-2">Customer</th>
               <th className="px-3 py-2">Phone</th>
@@ -587,7 +723,7 @@ function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRun: () =
 function LogRow({ log: l }: { log: AiCallLog }) {
   const detail = l.error || l.summary || l.transcript;
   return (
-    <tr className="border-b border-[#f0f2f6] align-top last:border-0">
+    <tr className="border-b border-line-subtle align-top last:border-0">
       <td className="px-3 py-2 text-slate-550">{l.position + 1}</td>
       <td className="px-3 py-2">
         {l.customerName || "—"}
