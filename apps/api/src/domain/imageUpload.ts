@@ -14,8 +14,6 @@ const EXT_BY_MIME: Record<string, string> = {
   "image/gif": "gif",
 };
 
-export const ACCEPTED_IMAGE_MIME = Object.keys(EXT_BY_MIME);
-
 /** Permanent, user-facing upload failure — surfaced as a 400. */
 export class ImageUploadError extends Error {
   constructor(message: string) {

@@ -18,12 +18,6 @@ export const SERIES = {
 } as const;
 export type SeriesKey = keyof typeof SERIES;
 
-export const SERIES_LABEL: Record<SeriesKey, string> = {
-  sent: "Sent",
-  opened: "Opened",
-  clicked: "Clicked",
-};
-
 const STATUS = {
   good: "#009a80",
   warning: "#d4870a",

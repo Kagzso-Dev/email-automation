@@ -26,17 +26,6 @@ export const campaignTone: Record<string, BadgeTone> = {
   FAILED: "crit",
 };
 
-export const emailTone: Record<string, BadgeTone> = {
-  QUEUED: "neutral",
-  SENT: "accent",
-  DELIVERED: "ok",
-  OPENED: "ok",
-  CLICKED: "ok",
-  BOUNCED: "crit",
-  COMPLAINED: "crit",
-  FAILED: "crit",
-};
-
 export function EmptyState({
   children,
   icon,
@@ -82,28 +71,6 @@ export function SkeletonCards({ count = 4 }: { count?: number }) {
           <Skeleton className="mt-3 h-7 w-16" />
         </div>
       ))}
-    </div>
-  );
-}
-
-/** Table-shaped skeleton — a header bar plus `rows` lines. */
-export function SkeletonTable({ rows = 6 }: { rows?: number }) {
-  return (
-    <div
-      className="overflow-hidden rounded-xl border border-line bg-surface"
-      role="status"
-      aria-label="Loading"
-    >
-      <div className="border-b border-line px-4 py-3">
-        <Skeleton className="h-3 w-32" />
-      </div>
-      <div className="divide-y divide-line-subtle">
-        {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="px-4 py-3">
-            <Skeleton className="h-4 w-full max-w-[28rem]" />
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

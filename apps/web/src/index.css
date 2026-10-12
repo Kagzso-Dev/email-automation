@@ -261,10 +261,6 @@
     @apply shadow-pop;
     transform: translateY(-2px);
   }
-  .field-error {
-    @apply mt-1 text-xs text-crit;
-    animation: error-in var(--motion-base) var(--ease-out) backwards;
-  }
 
   /* Typography scale — use these for a consistent hierarchy across pages. */
   .page-title {
@@ -282,9 +278,6 @@
   }
   .metric-value {
     @apply font-mono text-2xl font-semibold tabular-nums tracking-tight text-ink;
-  }
-  .metric-value-empty {
-    @apply font-mono text-2xl font-semibold tabular-nums text-slate-400;
   }
 
   /* Gradient chip behind an icon (stat cards, empty states). */
@@ -579,12 +572,6 @@
 @keyframes fade-in-from {
   from {
     opacity: 0;
-  }
-}
-@keyframes error-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
   }
 }
 @keyframes badge-pop {

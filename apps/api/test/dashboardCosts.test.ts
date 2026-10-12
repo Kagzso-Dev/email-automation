@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   combinedCost,
   costRatesInput,
