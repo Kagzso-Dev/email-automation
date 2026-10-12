@@ -3,13 +3,13 @@ import { formatMoney } from "../../lib/costs";
 import { useCallCostByFlow } from "../../lib/callCostByFlow";
 import { ErrorNote, Skeleton } from "../ui";
 import { EstimatedPill } from "./CostCards";
+import { fullNumber as full } from "../../lib/numberFormat";
 
 /**
  * Dashboard → AI Calls: "Cost by call flow". Per flow (and "Default agent"):
  * billed calls, billed minutes, estimated cost and cost per call — the same
  * calls and rates as the "Call bills" card, so the totals match it.
  */
-const full = new Intl.NumberFormat("en");
 
 export function CallCostByFlow({ span }: { span: number }) {
   const q = useCallCostByFlow(span);

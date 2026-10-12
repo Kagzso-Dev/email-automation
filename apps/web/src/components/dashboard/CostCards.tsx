@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { formatMoney, type DashboardCosts } from "../../lib/costs";
 import { Modal, Skeleton } from "../ui";
+import { fullNumber as full } from "../../lib/numberFormat";
 
 /**
  * Dashboard cost cards. Nothing here is an invoice: Dispatch stores no
@@ -16,7 +17,6 @@ const CATEGORY_LABEL: Record<string, string> = {
   authentication: "Authentication",
   service: "Service",
 };
-const full = new Intl.NumberFormat("en");
 const plural = (n: number, one: string, many = `${one}s`) => `${full.format(n)} ${n === 1 ? one : many}`;
 
 export function EstimatedPill() {

@@ -4,6 +4,7 @@ import { AreaChart, ChartCard, Legend } from "../charts";
 import { Badge, ErrorNote, type BadgeTone } from "../ui";
 import type { WhatsAppDashboard } from "../../lib/dashboard";
 import { ChartEmpty, SectionHeading, SectionSkeleton, StatTile } from "./parts";
+import { fullNumber as full } from "../../lib/numberFormat";
 
 const WA_SERIES = [
   { key: "sent", label: "Sent", color: "#0091d5" },
@@ -14,7 +15,6 @@ const WA_SERIES = [
 
 const BATCH_TONE: Record<string, BadgeTone> = { RUNNING: "warn", DONE: "ok", CANCELLED: "neutral" };
 
-const full = new Intl.NumberFormat("en");
 
 export function WhatsAppSection({
   data,

@@ -3,6 +3,7 @@ import { ErrorNote, Modal } from "./ui";
 import { Icon } from "./icons";
 import { useToast } from "./toast";
 import { analyzeAgainstHistory, downloadFiltered, type HistoryAnalysis, type HistoryChannel } from "../lib/historyFilter";
+import { fullNumber as full } from "../lib/numberFormat";
 
 const CHANNEL_TEXT: Record<HistoryChannel, { label: string; field: string; history: string }> = {
   email: { label: "Email", field: "email", history: "email send history (Send Queue batches, campaigns and triggers)" },
@@ -10,7 +11,6 @@ const CHANNEL_TEXT: Record<HistoryChannel, { label: string; field: string; histo
   "ai-call": { label: "AI Call", field: "phone", history: "AI call history (every call placed)" },
 };
 
-const full = new Intl.NumberFormat("en");
 
 /**
  * Send Queue → "Upload new file": upload a csv / xlsx, compare it with this

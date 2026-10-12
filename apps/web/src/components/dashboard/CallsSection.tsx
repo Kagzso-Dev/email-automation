@@ -6,6 +6,7 @@ import { formatDuration, humanizeOutcome, type CallsDashboard } from "../../lib/
 import { ChartEmpty, SectionHeading, SectionSkeleton, StatTile } from "./parts";
 import { RankedBars } from "./WhatsAppSection";
 import { CallCostByFlow } from "./CallCostByFlow";
+import { fullNumber as full } from "../../lib/numberFormat";
 
 const CALL_SERIES = [
   { key: "total", label: "Calls", color: "#0091d5" },
@@ -16,7 +17,6 @@ const CALL_SERIES = [
 // Outcome slices: accent hues first, then neutrals; identity also carried by the legend text.
 const OUTCOME_COLORS = ["#0091d5", "#009a80", "#eb6834", "#7a5af5", "#d4870a", "#ef4444", "#8a94a6", "#c7d2e6"];
 
-const full = new Intl.NumberFormat("en");
 
 export function CallsSection({
   data,

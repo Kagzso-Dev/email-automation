@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { prefersReducedMotion } from "../lib/motion";
+import { fullNumber as full } from "../lib/numberFormat";
 
 /* ------------------------------------------------------------------ palette --
  * Categorical series hues, validated against the app's white card surface
@@ -78,7 +79,6 @@ export function useInView<T extends Element>() {
 }
 
 const compact = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-const full = new Intl.NumberFormat("en");
 
 export function AnimatedNumber({
   value,
