@@ -12,6 +12,7 @@ import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { applyWhatsAppStatusEvent } from "./whatsappTracking.js";
 import { queueInboundMedia } from "./whatsappMedia.js";
+import { recordStatusPricing, type MetaStatusPricing } from "./whatsappPricing.js";
 
 /* ---------------------------------------------------------------- verification */
 
@@ -53,6 +54,7 @@ interface MetaStatus {
   timestamp?: string;
   recipient_id?: string;
   errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[];
+  pricing?: MetaStatusPricing;
 }
 
 interface MetaMedia {
@@ -254,6 +256,9 @@ export async function processMetaWebhook(
           errorMessage: err ? (err.error_data?.details ?? err.message ?? err.title) : undefined,
         });
         result.statuses++;
+        // Added: Meta's pricing info for the cost estimate. Runs after the status update
+        // above has finished and never throws (see domain/whatsappPricing.ts).
+        await recordStatusPricing(s);
       }
 
       for (const m of value.messages ?? []) {

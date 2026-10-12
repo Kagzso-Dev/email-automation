@@ -76,8 +76,11 @@ curl -X POST http://localhost:4000/api/webhooks/dev/simulate/<emailLogId>/bounce
 ## Tests
 
 ```bash
-npm test        # unit: rendering, conditions, idempotency
+npm test        # unit + HTTP-gate tests (no database needed)
 ```
+
+Covers rendering, conditions, idempotency, WhatsApp, AI calls, call flows, the dashboard channel
+numbers and the Send Queue file tools. `npm run typecheck` and `npm run build` should also pass.
 
 Integration tests against a real MySQL are stubbed for milestone M9 (see design doc §11).
 
@@ -336,3 +339,66 @@ Receiving media needs the Meta webhook connected (a public HTTPS callback to
 **Rollback:** run `prisma/migrations/0020_whatsapp_media/down.sql`, then
 `npx prisma migrate resolve --rolled-back 0020_whatsapp_media`. Stored files stay in the folder
 until you delete them.
+
+## Dashboard (Email, WhatsApp and AI Calls)
+
+The Dashboard (`/`) shows real usage for all three channels. A switch at the top picks **All**,
+**Email**, **WhatsApp** or **Calls** (remembered for the browser session), and one **7d / 14d / 30d**
+toggle drives every section. Numbers refresh every 45 seconds while the tab is visible. Days are UTC,
+like the email engagement chart. Nothing is invented: with no data you see zeros and empty states.
+
+- **All:** one card per channel (emails sent, WhatsApp sent, calls made) with the change against the
+  previous period of the same length, then the three sections below.
+- **Email:** the existing daily send cap, active contacts, active campaigns and engagement chart,
+  unchanged, plus open rate, click rate, bounced and failed for the range.
+- **WhatsApp:** sent, delivered, read, failed (with success rate), incoming messages and replies,
+  unread (admins only), a daily chart, the last 5 Send Queue batches, top templates, and a link to the
+  Inbox when there are unread messages.
+- **Calls** (admins, when `ENABLE_AI_CALLS=true`): total calls, answered rate, average and total
+  duration, pending follow-ups, a daily chart, the outcomes breakdown and calls by flow.
+
+Each section loads on its own, so one failing section doesn't break the others. Links to pages
+hidden in **Settings → Sidebar** are hidden here too; the numbers still show.
+
+The data comes from read-only endpoints next to the existing ones (whose responses are unchanged):
+`GET /api/dashboard/email`, `/api/dashboard/whatsapp` and `/api/dashboard/calls`, each with
+`?days=7|14|30`. They only read existing tables; no migration is needed.
+
+## Send Queue tools
+
+Both tools are read-only (they never change contacts, batches or history) and sit in the toolbar
+above each Send Queue tab, next to the Status filter.
+
+**Upload new file (filter new data).** Upload a `.csv` or `.xlsx` of people you plan to contact. It's
+compared with that tab's history only: Email with email, WhatsApp with WhatsApp, AI Call with AI calls.
+The email or phone column is detected (you can change it). Emails are compared trimmed and lowercased.
+Phones are normalized with the channel's default country code (91 unless configured), so
+`98765 43210`, `09876543210` and `+919876543210` match. You get a summary (total, invalid, duplicates in
+the file, already used, failed before, new) and two downloads in your file's own format: **new only**
+and an **already-used report** (with a *Previous status* column). Sent, done and still-sending entries
+count as used; failed ones stay in the new file so they can be retried. Up to 20 MB and 100,000 rows.
+Endpoints: `POST /api/send-queue/filter/:channel/analyze` and `/download` (`email`, `whatsapp`,
+`ai-call`).
+
+**Download all history.** Exports the complete history of the active tab as one CSV, whatever the
+Status filter, page or page size: `send-history-{channel}-{YYYY-MM-DD}.csv`. Email and WhatsApp give one
+row per recipient (batch ID, template, name, email or phone, status, result, sent / delivered / opened /
+failed times, error, batch started / completed) using the per-batch download's column names. AI Call
+follow-ups give one row per follow-up. The file is streamed from
+`GET /api/send-queue/history/:channel/export` (`email`, `whatsapp`, `ai-followups`); the button is
+disabled when there's no history.
+
+AI call data in both tools is admin-only and returns 404 while `ENABLE_AI_CALLS=false`, like the AI Call
+follow-ups tab.
+
+## Look and feel
+
+- **Theme:** soft blue-lavender background, white cards, a cyan-to-green accent gradient and navy text.
+  All colors are CSS variables in `apps/web/src/index.css` (`:root`) that the Tailwind config reads, so
+  changing one value updates the whole app. Primary buttons use navy text on the gradient for contrast,
+  and animations are switched off for users who prefer reduced motion.
+- **Logo:** `apps/web/src/components/Logo.tsx` shows the hexagon logo on the login card, in the sidebar
+  (expanded and collapsed) and in the mobile top bar. The files live in `apps/web/public/`
+  (`logo-512.png`, `logo-128.png`, `logo-64.png`, `favicon.ico`, `favicon-16.png`, `favicon-32.png`,
+  `apple-touch-icon.png`). To change the logo, replace those files with the same names and bump the
+  `?v=` number in `Logo.tsx` and `apps/web/index.html` so browsers fetch the new ones.

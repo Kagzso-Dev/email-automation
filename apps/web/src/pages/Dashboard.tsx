@@ -13,6 +13,8 @@ import { SectionHeading, StatTile } from "../components/dashboard/parts";
 import { ChannelSummary, type ChannelSummaryItem } from "../components/dashboard/ChannelSummary";
 import { WhatsAppSection } from "../components/dashboard/WhatsAppSection";
 import { CallsSection } from "../components/dashboard/CallsSection";
+import { CallBillsTile, TotalCostLine, WhatsAppCostTile } from "../components/dashboard/CostCards";
+import { useDashboardCosts } from "../lib/costs";
 import {
   AreaChart,
   CapMeter,
@@ -92,6 +94,8 @@ export function DashboardPage() {
   const emailDash = useEmailDashboard(range, showEmail);
   const waDash = useWhatsAppDashboard(range, showWhatsApp);
   const callsDash = useCallsDashboard(range, showCalls);
+  // Cost cards (estimates from Settings → Cost rates); same range and refresh as the sections.
+  const costs = useDashboardCosts(range, showWhatsApp || showCalls);
   const [active, setActive] = useState<Record<string, boolean>>({
     sent: true,
     opened: true,
@@ -186,7 +190,10 @@ export function DashboardPage() {
 
       <div className="space-y-8">
         {channel === "all" && (
-          <ChannelSummary items={summary} span={range} onPick={(k) => setPicked(k)} />
+          <>
+            <ChannelSummary items={summary} span={range} onPick={(k) => setPicked(k)} />
+            <TotalCostLine costs={costs.data} />
+          </>
         )}
 
         {showEmail && (
@@ -258,7 +265,7 @@ export function DashboardPage() {
               </>
             )}
             {emailDash.data && (
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="stagger mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <StatTile label="Open rate" value={emailDash.data.totals.openRate} format="pct" sub={`of ${emailDash.data.totals.sent.toLocaleString()} sent · last ${range} days`} />
                 <StatTile label="Click rate" value={emailDash.data.totals.clickRate} format="pct" sub={`${emailDash.data.totals.clicked.toLocaleString()} clicked`} />
                 <StatTile label="Bounced" value={emailDash.data.totals.bounced} />
@@ -269,7 +276,13 @@ export function DashboardPage() {
         )}
 
         {showWhatsApp && (
-          <WhatsAppSection data={waDash.data} isLoading={waDash.isLoading} error={waDash.error} showInboxLink={showInboxLink} />
+          <WhatsAppSection
+            data={waDash.data}
+            isLoading={waDash.isLoading}
+            error={waDash.error}
+            showInboxLink={showInboxLink}
+            costTile={<WhatsAppCostTile costs={costs.data} isLoading={costs.isLoading} error={costs.error} isAdmin={isAdmin} />}
+          />
         )}
 
         {showCalls && (
@@ -279,6 +292,7 @@ export function DashboardPage() {
             error={callsDash.error}
             showCustomersLink={!hidden.has("ai-call-customers")}
             showFlowsLink={showFlowsLink}
+            costTile={<CallBillsTile costs={costs.data} isLoading={costs.isLoading} error={costs.error} />}
           />
         )}
       </div>

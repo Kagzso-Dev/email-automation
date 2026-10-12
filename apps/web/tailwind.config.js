@@ -72,8 +72,11 @@ export default {
         rail: "0 0 0 1px rgba(17,24,39,0.04), 4px 0 30px rgba(17,24,39,0.08)",
         glow: "var(--shadow-glow)",
       },
+      // Motion tokens live in src/index.css (:root --motion-* / --ease-*).
       transitionTimingFunction: {
-        "in-out-soft": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "in-out-soft": "var(--ease-standard)",
+        "out-soft": "var(--ease-out)",
+        spring: "var(--ease-spring)",
       },
       keyframes: {
         shimmer: {
@@ -88,7 +91,7 @@ export default {
           to: { opacity: "0" },
         },
         "dialog-in": {
-          from: { opacity: "0", transform: "translateY(8px) scale(0.96)" },
+          from: { opacity: "0", transform: "translateY(12px) scale(0.96)" },
           to: { opacity: "1", transform: "translateY(0) scale(1)" },
         },
         "dialog-out": {
@@ -112,13 +115,13 @@ export default {
       },
       animation: {
         shimmer: "shimmer 1.4s infinite",
-        "overlay-in": "overlay-in 150ms ease-out",
-        "overlay-out": "overlay-out 120ms ease-in forwards",
-        "dialog-in": "dialog-in 190ms cubic-bezier(0.16, 1, 0.3, 1)",
-        "dialog-out": "dialog-out 130ms ease-in forwards",
-        "toast-in": "toast-in 340ms cubic-bezier(0.16, 1, 0.3, 1)",
-        "page-in": "page-in 260ms cubic-bezier(0.4, 0, 0.2, 1) backwards",
-        "mail-pop": "mail-pop 440ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both",
+        "overlay-in": "overlay-in var(--motion-base) var(--ease-out)",
+        "overlay-out": "overlay-out var(--motion-fast) var(--ease-in) forwards",
+        "dialog-in": "dialog-in var(--motion-base) var(--ease-out)",
+        "dialog-out": "dialog-out var(--motion-fast) var(--ease-in) forwards",
+        "toast-in": "toast-in 340ms var(--ease-out)",
+        "page-in": "page-in 250ms var(--ease-out) backwards",
+        "mail-pop": "mail-pop 400ms var(--ease-out) 90ms both",
       },
     },
   },

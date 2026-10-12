@@ -323,7 +323,7 @@ function ConversationView({ phone, onBack }: { phone: string; onBack: () => void
           ))}
       </div>
 
-      <div ref={scroller} className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-sunken px-3 py-4 sm:px-4">
+      <div ref={scroller} className="msg-list scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto bg-surface-sunken px-3 py-4 sm:px-4">
         {thread.isLoading ? (
           <ThreadSkeleton />
         ) : thread.error ? (

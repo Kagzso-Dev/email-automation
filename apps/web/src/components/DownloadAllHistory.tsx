@@ -16,7 +16,7 @@ export function DownloadAllHistoryButton({ channel }: { channel: HistoryExportCh
   return (
     <button
       type="button"
-      className="btn-ghost"
+      className="btn-ghost queue-action"
       disabled={busy || empty}
       aria-busy={busy}
       aria-label={busy ? "Preparing history download" : "Download all history"}
@@ -33,8 +33,7 @@ export function DownloadAllHistoryButton({ channel }: { channel: HistoryExportCh
       }}
     >
       <Icon name="download" size={16} className={busy ? "animate-pulse" : undefined} />
-      {/* Icon-only on phones so the Status row keeps its one-line layout. */}
-      <span className="hidden sm:inline">{busy ? "Preparing…" : "Download all history"}</span>
+      {busy ? "Preparing…" : "Download all history"}
     </button>
   );
 }

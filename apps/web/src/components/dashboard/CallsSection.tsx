@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { AreaChart, ChartCard, Donut, Legend } from "../charts";
 import { ErrorNote } from "../ui";
@@ -23,12 +23,15 @@ export function CallsSection({
   error,
   showCustomersLink,
   showFlowsLink,
+  costTile,
 }: {
   data: CallsDashboard | undefined;
   isLoading: boolean;
   error: unknown;
   showCustomersLink: boolean;
   showFlowsLink: boolean;
+  /** Optional "Call bills" card, shown after the stat cards. */
+  costTile?: ReactNode;
 }) {
   const [active, setActive] = useState<Record<string, boolean>>({ total: true, completed: true, unanswered: true });
   const series = useMemo(() => CALL_SERIES.filter((s) => active[s.key]).map((s) => ({ ...s })), [active]);
@@ -48,7 +51,7 @@ export function CallsSection({
         <SectionSkeleton tiles={4} />
       ) : (
         <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className={`stagger grid gap-4 sm:grid-cols-2 ${costTile ? "lg:grid-cols-3 xl:grid-cols-5" : "lg:grid-cols-4"}`}>
             <StatTile
               label="Total calls"
               value={data.totals.total}
@@ -72,6 +75,7 @@ export function CallsSection({
               sub="Waiting for approval in Send Queue"
               to="/send-queue"
             />
+            {costTile}
           </div>
 
           <div className={`grid gap-4 ${data.outcomes.length > 0 ? "lg:grid-cols-[1.6fr_1fr]" : ""}`}>

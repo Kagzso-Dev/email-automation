@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: BadgeTone }) {
@@ -49,7 +49,7 @@ export function EmptyState({
   return (
     <div className="rounded-xl border border-dashed border-line-strong bg-surface/80 p-10 text-center text-sm leading-[1.6] text-slate-550">
       {icon ? (
-        <span className="icon-chip mx-auto mb-3 h-11 w-11">
+        <span className="icon-chip float-soft mx-auto mb-3 h-11 w-11">
           <Icon name={icon} size={20} />
         </span>
       ) : null}
@@ -113,6 +113,13 @@ export function ErrorNote({ error }: { error: unknown }) {
   return <div className="rounded-lg border border-crit-line bg-crit-soft px-3 py-2 text-sm text-crit">{msg}</div>;
 }
 
+/** Matches the overlay-out / dialog-out duration (--motion-fast). */
+const MODAL_CLOSE_MS = 150;
+
+function prefersReducedMotion() {
+  return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
+
 export function Modal({
   open,
   onClose,
@@ -127,18 +134,37 @@ export function Modal({
   /** Wider dialog for tables (default keeps the standard width). */
   wide?: boolean;
 }) {
-  if (!open) return null;
+  // Closing animation: stay mounted ~150ms after `open` turns false, showing the last
+  // open content (callers often clear the data the body reads). Reduced motion: close instantly.
+  const [shown, setShown] = useState(open);
+  if (open && !shown) setShown(true);
+  const closing = shown && !open;
+  if (closing && prefersReducedMotion()) setShown(false);
+  const lastOpen = useRef({ title, children });
+  if (open) lastOpen.current = { title, children };
+  useEffect(() => {
+    if (!closing) return;
+    const t = window.setTimeout(() => setShown(false), MODAL_CLOSE_MS);
+    return () => window.clearTimeout(t);
+  }, [closing]);
+
+  if (!open && !shown) return null;
+  const view = open ? { title, children } : lastOpen.current;
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4 backdrop-blur-[6px] animate-overlay-in"
+      className={`fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4 backdrop-blur-[6px] ${
+        closing ? "pointer-events-none animate-overlay-out" : "animate-overlay-in"
+      }`}
       onClick={onClose}
     >
       <div
-        className={`scroll-thin max-h-[85vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-2xl border border-line/70 bg-surface p-6 shadow-pop animate-dialog-in`}
+        className={`scroll-thin max-h-[85vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-2xl border border-line/70 bg-surface p-6 shadow-pop ${
+          closing ? "animate-dialog-out" : "animate-dialog-in"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 className="text-lg font-bold tracking-[-0.01em] text-ink">{title}</h2>
+          <h2 className="text-lg font-bold tracking-[-0.01em] text-ink">{view.title}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -148,7 +174,7 @@ export function Modal({
             <Icon name="close" size={18} />
           </button>
         </div>
-        {children}
+        {view.children}
       </div>
     </div>
   );

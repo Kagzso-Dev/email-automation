@@ -13,6 +13,7 @@ import { todaysCount } from "../../queue/dailyCap.js";
 import { aiCallsConfig } from "../../config/aiCalls.js";
 import { env } from "../../env.js";
 import { AppError, badRequest, wrap } from "../errors.js";
+import { dashboardCosts } from "../../domain/dashboardCosts.js";
 
 export const statsRouter = Router();
 statsRouter.use(authRequired);
@@ -86,5 +87,16 @@ statsRouter.get(
   requireRole("ADMIN"),
   wrap(async (req, res) => {
     res.json(await callsDashboard(spanOf(req.query.days)));
+  }),
+);
+
+// Cost cards (always estimates: stored counts / minutes × the rate card in Settings).
+// Call costs are included only for those who can see the Calls section.
+statsRouter.get(
+  "/dashboard/costs",
+  wrap(async (req, res) => {
+    res.json(
+      await dashboardCosts(spanOf(req.query.days), { includeCalls: aiCallsConfig.enabled && req.user?.role === "ADMIN" }),
+    );
   }),
 );

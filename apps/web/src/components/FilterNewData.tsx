@@ -21,7 +21,12 @@ export function FilterNewDataButton({ channel }: { channel: HistoryChannel }) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" className="btn-ghost" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="btn-primary queue-action"
+        title="Upload a file to filter out data that was already sent"
+        onClick={() => setOpen(true)}
+      >
         <Icon name="download" size={16} className="rotate-180" /> Upload new file
       </button>
       {open && <FilterNewDataDialog channel={channel} onClose={() => setOpen(false)} />}

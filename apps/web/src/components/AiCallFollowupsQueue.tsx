@@ -9,7 +9,7 @@ import { useToast } from "./toast";
 import { Badge, EmptyState, ErrorNote, Modal, type BadgeTone } from "./ui";
 import { QueuePagination, ScrollTable, SkeletonRows } from "./QueueTable";
 import type { QueueViewProps } from "../pages/SendQueue";
-import { DownloadAllHistoryButton } from "./DownloadAllHistory";
+import { QueueActions } from "./QueueActions";
 
 /**
  * Send Queue → "AI Call follow-ups": drafts created after AI calls. Nothing is
@@ -90,27 +90,27 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <label className="text-xs font-medium uppercase tracking-[0.06em] text-slate-550">Status</label>
-        <select
-          className="input sm:max-w-[14rem]"
-          value={status}
-          onChange={(e) => setView({ status: e.target.value, page: 1 })}
-        >
-          {STATUS_FILTERS.map((f) => (
-            <option key={f.value} value={f.value}>
-              {f.label}
-            </option>
-          ))}
-        </select>
-        {q.data && q.data.pending > 0 && (
-          <span className="text-sm text-warn">
-            {q.data.pending} waiting for approval — nothing is sent until you approve.
-          </span>
-        )}
-        <div className="ml-auto">
-          <DownloadAllHistoryButton channel="ai-followups" />
+      <div className="queue-toolbar">
+        <div className="queue-toolbar-filter flex-wrap">
+          <label className="text-xs font-medium uppercase tracking-[0.06em] text-slate-550">Status</label>
+          <select
+            className="input sm:max-w-[14rem]"
+            value={status}
+            onChange={(e) => setView({ status: e.target.value, page: 1 })}
+          >
+            {STATUS_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+          {q.data && q.data.pending > 0 && (
+            <span className="text-sm text-warn">
+              {q.data.pending} waiting for approval — nothing is sent until you approve.
+            </span>
+          )}
         </div>
+        <QueueActions upload="ai-call" history="ai-followups" />
       </div>
 
       {q.isLoading ? (

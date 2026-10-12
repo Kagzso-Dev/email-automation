@@ -23,7 +23,7 @@ export function ChannelSummary({
   onPick: (key: ChannelSummaryItem["key"]) => void;
 }) {
   return (
-    <div className={`grid gap-4 sm:grid-cols-2 ${items.length === 3 ? "lg:grid-cols-3" : ""}`}>
+    <div className={`stagger grid gap-4 sm:grid-cols-2 ${items.length === 3 ? "lg:grid-cols-3" : ""}`}>
       {items.map((it) => (
         <button
           key={it.key}

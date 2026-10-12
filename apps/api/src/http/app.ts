@@ -12,6 +12,7 @@ import { contactsRouter } from "./routes/contacts.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
 import { whatsappMediaRouter } from "./routes/whatsappMedia.js";
 import { whatsappTemplateSyncRouter } from "./routes/whatsappTemplateSync.js";
+import { callCostByFlowRouter } from "./routes/callCostByFlow.js";
 import { listsRouter } from "./routes/lists.js";
 import { templatesRouter } from "./routes/templates.js";
 import { campaignsRouter } from "./routes/campaigns.js";
@@ -86,6 +87,7 @@ export function createApp() {
   app.use("/api/ai-call-followups", aiCallFollowupsRouter);
   app.use("/api/send-queue/filter", historyFilterRouter); // read-only "filter new data"
   app.use("/api/send-queue/history", sendQueueHistoryRouter); // read-only "download all history"
+  app.use("/api", callCostByFlowRouter);
   app.use("/api", statsRouter);
 
   app.use(errorHandler);

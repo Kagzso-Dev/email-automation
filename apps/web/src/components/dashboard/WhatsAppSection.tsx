@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { AreaChart, ChartCard, Legend } from "../charts";
 import { Badge, ErrorNote, type BadgeTone } from "../ui";
@@ -21,12 +21,15 @@ export function WhatsAppSection({
   isLoading,
   error,
   showInboxLink,
+  costTile,
 }: {
   data: WhatsAppDashboard | undefined;
   isLoading: boolean;
   error: unknown;
   /** Admin, and "WhatsApp Inbox" isn't hidden in Settings → Sidebar menu. */
   showInboxLink: boolean;
+  /** Optional "Cost" card, shown right after "Failed". */
+  costTile?: ReactNode;
 }) {
   const [active, setActive] = useState<Record<string, boolean>>({ sent: true, delivered: true, read: true, failed: true });
   const series = useMemo(() => WA_SERIES.filter((s) => active[s.key]).map((s) => ({ ...s })), [active]);
@@ -48,11 +51,22 @@ export function WhatsAppSection({
         <SectionSkeleton tiles={6} />
       ) : (
         <div className="space-y-4">
-          <div className={`grid gap-4 sm:grid-cols-2 ${unread ? "lg:grid-cols-3 xl:grid-cols-6" : "lg:grid-cols-5"}`}>
+          <div
+            className={`stagger grid gap-4 sm:grid-cols-2 ${
+              costTile
+                ? unread
+                  ? "lg:grid-cols-4 xl:grid-cols-7"
+                  : "lg:grid-cols-3 xl:grid-cols-6"
+                : unread
+                  ? "lg:grid-cols-3 xl:grid-cols-6"
+                  : "lg:grid-cols-5"
+            }`}
+          >
             <StatTile label="Sent" value={data.totals.sent} sub={`${data.totals.successRate.toFixed(1)}% success`} />
             <StatTile label="Delivered" value={data.totals.delivered} />
             <StatTile label="Read" value={data.totals.read} />
             <StatTile label="Failed" value={data.totals.failed} />
+            {costTile}
             <StatTile label="Incoming" value={data.totals.incoming} sub={`${full.format(data.totals.replies)} replies to your messages`} />
             {unread && (
               <StatTile

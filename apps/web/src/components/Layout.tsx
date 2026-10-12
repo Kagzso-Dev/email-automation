@@ -6,6 +6,7 @@ import { useInboxUnread } from "../lib/whatsappInbox";
 import { useSidebarHiddenItems } from "../lib/sidebar";
 import type { HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
+import { Logo } from "./Logo";
 
 type NavEntry = {
   to: string;
@@ -140,7 +141,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <Icon name="menu" size={20} />
         </button>
         <span className="flex items-center gap-2 font-mono text-sm font-semibold">
-          <span aria-hidden="true">📮</span> Dispatch
+          <Logo size={28} /> Dispatch
         </span>
       </header>
 
@@ -159,12 +160,19 @@ export function Layout({ children }: { children: ReactNode }) {
         className={cx(
           "fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line/70 bg-surface/90 backdrop-blur-xl",
           "transition-[transform,width] duration-300 ease-in-out-soft motion-reduce:transition-none",
-          "md:sticky md:top-0 md:z-auto md:h-screen md:bg-surface/80",
+          "md:sticky md:top-0 md:z-auto md:h-screen md:bg-surface/80 md:shadow-[4px_0_24px_rgba(17,24,39,0.04)]",
           mobileOpen ? "translate-x-0 shadow-rail" : "-translate-x-full",
           "md:translate-x-0",
           collapsed ? "md:w-16" : "md:w-64",
         )}
       >
+        {/* Collapsed desktop rail: logo only, centred */}
+        {collapsed && (
+          <div className="hidden shrink-0 justify-center pt-3 md:flex">
+            <Logo size={28} />
+          </div>
+        )}
+
         {/* Brand + collapse / close toggles */}
         <div
           className={cx(
@@ -178,7 +186,7 @@ export function Layout({ children }: { children: ReactNode }) {
               collapsed && "md:hidden",
             )}
           >
-            <span aria-hidden="true">📮</span>
+            <Logo size={28} />
             <span className="truncate">Dispatch</span>
           </span>
 
@@ -215,7 +223,7 @@ export function Layout({ children }: { children: ReactNode }) {
               key={g.label}
               role="group"
               aria-labelledby={`nav-group-${gi}`}
-              className={cx(gi > 0 && "mt-4", gi > 0 && collapsed && "md:mt-2 md:border-t md:border-line md:pt-2")}
+              className={cx(gi > 0 && "mt-5", gi > 0 && collapsed && "md:mt-2 md:border-t md:border-line/70 md:pt-2")}
             >
               {/* Section label — hidden on the collapsed desktop rail (a divider shows instead). */}
               <div
@@ -243,7 +251,7 @@ export function Layout({ children }: { children: ReactNode }) {
                       }
                     >
                       <Icon name={n.icon} size={18} className="shrink-0" />
-                      <span className={cx("truncate", collapsed && "md:hidden")}>{n.label}</span>
+                      <span className={cx("nav-label truncate", collapsed && "md:hidden")}>{n.label}</span>
                       {n.to === "/whatsapp-inbox" && inboxUnread > 0 && (
                         <span
                           className={cx(
@@ -263,17 +271,22 @@ export function Layout({ children }: { children: ReactNode }) {
           ))}
         </nav>
 
-        {/* Footer — account + sign out */}
-        <div className="shrink-0 border-t border-line px-3 py-3">
+        {/* Footer — account + sign out (pinned below the scrolling menu) */}
+        <div className={cx("shrink-0 border-t border-line/70 p-3", collapsed && "md:px-2")}>
           {/* Expanded footer: always on mobile, on desktop only when not collapsed */}
-          <div className={cx("text-xs text-slate-550", collapsed && "md:hidden")}>
-            <div className="truncate text-ink">{user?.email}</div>
-            <div className="mb-2 font-mono uppercase tracking-[0.06em]">{user?.role}</div>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 font-medium text-accent-ink transition-colors hover:underline"
-              onClick={() => logout()}
-            >
+          <div className={cx("sidebar-user", collapsed && "md:hidden")}>
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="sidebar-avatar" aria-hidden="true">
+                {user?.email?.[0] ?? "?"}
+              </span>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-ink" title={user?.email}>
+                  {user?.email}
+                </div>
+                <span className="sidebar-role">{user?.role}</span>
+              </div>
+            </div>
+            <button type="button" className="sidebar-signout" onClick={() => logout()}>
               <Icon name="logout" size={14} /> Sign out
             </button>
           </div>
@@ -281,15 +294,12 @@ export function Layout({ children }: { children: ReactNode }) {
           {/* Collapsed rail footer: desktop only, only when collapsed */}
           {collapsed && (
             <div className="hidden flex-col items-center gap-2 md:flex">
-              <span
-                className="grid h-8 w-8 place-items-center rounded-full bg-accent-soft font-mono text-xs font-semibold uppercase text-accent-ink"
-                title={user?.email}
-              >
+              <span className="sidebar-avatar" title={user?.email}>
                 {user?.email?.[0] ?? "?"}
               </span>
               <button
                 type="button"
-                className="grid h-8 w-8 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-tint hover:text-crit"
+                className="grid h-8 w-8 place-items-center rounded-lg text-slate-550 transition-colors hover:bg-crit-soft hover:text-crit"
                 aria-label="Sign out"
                 title="Sign out"
                 onClick={() => logout()}

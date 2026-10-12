@@ -44,7 +44,7 @@ function prefersReducedMotion() {
 }
 
 /** Count from 0 → `value` once, easing out. Honours reduced-motion. */
-export function useCountUp(value: number, durationMs = 900) {
+export function useCountUp(value: number, durationMs = 700) {
   const [display, setDisplay] = useState(() => (prefersReducedMotion() ? value : 0));
   const fromRef = useRef(0);
 

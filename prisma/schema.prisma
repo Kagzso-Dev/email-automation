@@ -814,3 +814,19 @@ model WhatsAppConversationRead {
 
   @@map("whatsapp_conversation_reads")
 }
+
+// Meta's pricing info for a message we sent, from the status webhook
+// (statuses[].pricing: billable, category, pricing_model). Used only by the
+// Dashboard cost estimate; the amount always comes from the rate card in
+// Settings. Keyed by the Meta message id (whatsapp_sends.providerMessageId).
+// New table only — whatsapp_sends is not altered.
+model WhatsAppMessagePricing {
+  providerMessageId String   @id @db.VarChar(191)
+  billable          Boolean?
+  category          String?  @db.VarChar(64)
+  pricingModel      String?  @db.VarChar(32)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("whatsapp_message_pricing")
+}

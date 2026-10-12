@@ -9,8 +9,8 @@ import { useToast } from "../components/toast";
 import { formatDateTime } from "../lib/schedule";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { AiCallFollowupsQueue } from "../components/AiCallFollowupsQueue";
-import { FilterNewDataButton } from "../components/FilterNewData";
-import { DownloadAllHistoryButton } from "../components/DownloadAllHistory";
+import { QueueActions } from "../components/QueueActions";
+import { useScrolledShadow } from "../lib/useScrolledShadow";
 
 /**
  * Send Queue — batch history for the two send channels, each on its own tab.
@@ -75,8 +75,6 @@ export function SendQueuePage() {
     setView: (patch) => setViews((v) => ({ ...v, [t]: { ...v[t], ...patch } })),
   });
 
-  const activeTab: QueueTab = tab === "ai-followups" && !showAi ? "email" : tab;
-
   function pick(next: QueueTab) {
     setTab(next);
     try {
@@ -91,13 +89,6 @@ export function SendQueuePage() {
       <PageHeader
         title="Send Queue"
         subtitle="Track sent batches — which recipients are still sending, done, or failed. Email and WhatsApp are kept separate."
-        action={
-          // Compares an uploaded file with the active tab's channel only (keyed so switching tabs starts fresh).
-          <FilterNewDataButton
-            key={activeTab}
-            channel={activeTab === "ai-followups" ? "ai-call" : activeTab}
-          />
-        }
       />
       <Tabs
         tabs={[
@@ -128,24 +119,26 @@ function StatusFilter({
 }: {
   value: "" | BatchStatus;
   onChange: (v: "" | BatchStatus) => void;
-  /** Shown at the right end of the row ("Download all history"). */
+  /** Right side of the toolbar row (the Upload / Download action group). */
   action?: ReactNode;
 }) {
   return (
-    <div className="mb-4 flex items-center gap-2">
-      <label className="text-xs font-medium uppercase tracking-[0.06em] text-slate-550">Status</label>
-      <select
-        className="input sm:max-w-[14rem]"
-        value={value}
-        onChange={(e) => onChange(e.target.value as "" | BatchStatus)}
-      >
-        {STATUS_FILTERS.map((f) => (
-          <option key={f.value} value={f.value}>
-            {f.label}
-          </option>
-        ))}
-      </select>
-      {action ? <div className="ml-auto shrink-0">{action}</div> : null}
+    <div className="queue-toolbar">
+      <div className="queue-toolbar-filter">
+        <label className="text-xs font-medium uppercase tracking-[0.06em] text-slate-550">Status</label>
+        <select
+          className="input sm:max-w-[14rem]"
+          value={value}
+          onChange={(e) => onChange(e.target.value as "" | BatchStatus)}
+        >
+          {STATUS_FILTERS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {action}
     </div>
   );
 }
@@ -309,7 +302,7 @@ function EmailQueue({ view, setView }: QueueViewProps) {
       <StatusFilter
         value={status}
         onChange={(v) => setView({ status: v, page: 1 })}
-        action={<DownloadAllHistoryButton channel="email" />}
+        action={<QueueActions upload="email" history="email" />}
       />
       {q.isLoading ? (
         <ScrollTable head={HEAD}>
@@ -403,6 +396,7 @@ function EmailQueue({ view, setView }: QueueViewProps) {
 }
 
 function EmailBatchDetail({ id }: { id: string }) {
+  const shadowRef = useScrolledShadow<HTMLDivElement>();
   const q = useQuery({
     queryKey: ["email-batch", id],
     queryFn: () => api<EmailBatchDetailView>(`/api/contacts/send/batches/${id}`),
@@ -436,7 +430,7 @@ function EmailBatchDetail({ id }: { id: string }) {
         )}
       </div>
 
-      <div className="scroll-thin mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-white">
+      <div ref={shadowRef} className="scroll-shadow scroll-thin mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-white">
         <table className="table-soft w-full min-w-[36rem] text-sm">
           <thead className="sticky top-0 z-10 bg-surface-sunken">
             <tr className="border-b border-line text-left text-xs uppercase tracking-[0.06em] text-slate-550">
@@ -547,7 +541,7 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
       <StatusFilter
         value={status}
         onChange={(v) => setView({ status: v, page: 1 })}
-        action={<DownloadAllHistoryButton channel="whatsapp" />}
+        action={<QueueActions upload="whatsapp" history="whatsapp" />}
       />
       {q.isLoading ? (
         <ScrollTable head={HEAD}>
@@ -641,6 +635,7 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
 }
 
 function WhatsAppBatchDetail({ id }: { id: string }) {
+  const shadowRef = useScrolledShadow<HTMLDivElement>();
   const q = useQuery({
     queryKey: ["whatsapp-batch", id],
     queryFn: () => api<WaBatchDetailView>(`/api/whatsapp/send/batches/${id}`),
@@ -674,7 +669,7 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
         )}
       </div>
 
-      <div className="scroll-thin mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-white">
+      <div ref={shadowRef} className="scroll-shadow scroll-thin mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-white">
         <table className="table-soft w-full min-w-[36rem] text-sm">
           <thead className="sticky top-0 z-10 bg-surface-sunken">
             <tr className="border-b border-line text-left text-xs uppercase tracking-[0.06em] text-slate-550">

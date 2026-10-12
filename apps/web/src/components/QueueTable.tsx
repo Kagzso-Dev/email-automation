@@ -1,4 +1,5 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useScrolledShadow } from "../lib/useScrolledShadow";
 
 /**
  * Send Queue building blocks shared by the Email, WhatsApp and AI Call
@@ -41,15 +42,23 @@ export function ScrollTable({
   scrollKey?: string;
   minWidth?: string;
 }) {
-  const box = useRef<HTMLDivElement>(null);
+  const box = useRef<HTMLDivElement | null>(null);
   const maxHeight = useFillHeight(box);
+  const shadowRef = useScrolledShadow<HTMLDivElement>();
+  const setBox = useCallback(
+    (el: HTMLDivElement | null) => {
+      box.current = el;
+      shadowRef(el);
+    },
+    [shadowRef],
+  );
   useEffect(() => {
     if (box.current) box.current.scrollTop = 0;
   }, [scrollKey]);
   return (
     <div
-      ref={box}
-      className="scroll-thin -mx-4 overflow-auto overscroll-contain rounded-xl border-y border-line/70 bg-surface shadow-card sm:mx-0 sm:rounded-xl sm:border-x"
+      ref={setBox}
+      className="scroll-shadow scroll-thin -mx-4 overflow-auto overscroll-contain rounded-xl border-y border-line/70 bg-surface shadow-card sm:mx-0 sm:rounded-xl sm:border-x"
       style={{ maxHeight: maxHeight ?? undefined, scrollBehavior: "smooth" }}
     >
       <table className="table-soft w-full text-sm" style={{ minWidth }}>

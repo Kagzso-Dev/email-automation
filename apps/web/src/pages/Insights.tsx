@@ -113,7 +113,7 @@ export function InsightsPage() {
             </div>
           </ChartCard>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:col-span-2">
+          <div className="stagger grid gap-4 sm:grid-cols-2 lg:col-span-2">
             <InsightCard
               icon="insights"
               tone={engagementTone(data.engagement.delta)}

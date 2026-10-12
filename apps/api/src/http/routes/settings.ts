@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { allowedDomainInput, bulkSendSettingsInput, idParam, sidebarSettingsInput } from "@dispatch/shared";
+import { allowedDomainInput, bulkSendSettingsInput, costRatesInput, idParam, sidebarSettingsInput } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { env } from "../../env.js";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../../domain/settings.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { conflict, notFound, wrap } from "../errors.js";
+import { getCostRates, setCostRates } from "../../domain/dashboardCosts.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(authRequired);
@@ -98,5 +99,24 @@ settingsRouter.delete(
     if (!existing) throw notFound("Approved domain");
     await prisma.allowedDomain.delete({ where: { id } });
     res.status(204).end();
+  }),
+);
+
+/* ---------------------------------------------- cost rates (Dashboard estimates) */
+
+// The rate card the Dashboard cost cards use. Admins only (read and write).
+settingsRouter.get(
+  "/cost-rates",
+  requireRole("ADMIN"),
+  wrap(async (_req, res) => {
+    res.json(await getCostRates());
+  }),
+);
+
+settingsRouter.put(
+  "/cost-rates",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    res.json(await setCostRates(costRatesInput.parse(req.body)));
   }),
 );

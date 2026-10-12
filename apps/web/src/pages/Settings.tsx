@@ -4,9 +4,11 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/Layout";
 import { ErrorNote, Spinner, Table } from "../components/ui";
+import { Icon } from "../components/icons";
 import { useConfirm } from "../components/confirm";
 import { HIDEABLE_NAV_ITEMS, type HideableNavItem } from "@dispatch/shared";
 import { SIDEBAR_SETTINGS_KEY, useSidebarHiddenItems } from "../lib/sidebar";
+import { CostRatesSection } from "../components/CostRatesSection";
 
 interface ApiKey {
   id: string;
@@ -47,18 +49,18 @@ export function SettingsPage() {
   });
 
   return (
-    <div>
-      <PageHeader title="Settings" />
+    <div className="settings-page">
+      <PageHeader title="Settings" subtitle="Manage API keys, WhatsApp, sending limits and your workspace." />
 
-      <section className="mb-8">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">API keys</h2>
+      <section className="settings-section">
+        <h2 className="settings-heading">API keys</h2>
         {!isAdmin ? (
-          <div className="card text-sm text-slate-550">Only admins can manage API keys.</div>
+          <div className="settings-card text-slate-550">Only admins can manage API keys.</div>
         ) : (
           <>
-            <div className="card mb-4">
+            <div className="settings-card mb-4">
               <label className="label">New key name</label>
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="settings-row">
                 <input
                   className="input"
                   value={name}
@@ -66,7 +68,7 @@ export function SettingsPage() {
                   placeholder="Production webhook"
                 />
                 <button
-                  className="btn-primary whitespace-nowrap"
+                  className="btn-primary settings-btn"
                   disabled={!name || create.isPending}
                   onClick={() => create.mutate()}
                 >
@@ -75,13 +77,13 @@ export function SettingsPage() {
               </div>
               {create.error ? <div className="mt-2"><ErrorNote error={create.error} /></div> : null}
               {freshKey && (
-                <div className="mt-3 rounded-lg bg-warn-soft p-3 text-sm">
+                <div className="mt-4 rounded-[14px] border border-warn-bright/30 bg-warn-soft p-3.5 text-sm">
                   <div className="mb-1 font-medium text-warn">
                     Your new API key — copy it now. You can also reveal it later from the table below.
                   </div>
-                  <code className="block break-all">{freshKey}</code>
+                  <code className="mt-1 block break-all rounded-md bg-surface/70 px-2 py-1.5 font-mono text-xs text-ink">{freshKey}</code>
                   <button
-                    className="mt-2 text-xs text-accent-ink hover:underline"
+                    className="text-action -ml-2 mt-2"
                     onClick={async () => {
                       await navigator.clipboard?.writeText(freshKey);
                       setCopied(true);
@@ -101,12 +103,12 @@ export function SettingsPage() {
                   const full = revealed[k.id];
                   return (
                   <tr key={k.id} className="border-b border-line-subtle last:border-0">
-                    <td className="px-4 py-2.5">{k.name}</td>
-                    <td className="px-4 py-2.5 font-mono text-xs">
-                      <span className="break-all">{full ?? `${k.prefix}…`}</span>
+                    <td className="px-4 py-3 font-medium text-ink">{k.name}</td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <span className="mono-pill break-all">{full ?? `${k.prefix}…`}</span>
                       {full ? (
                         <button
-                          className="ml-2 font-sans text-accent-ink hover:underline"
+                          className="text-action ml-1.5"
                           onClick={async () => {
                             await navigator.clipboard?.writeText(full);
                             setCopiedId(k.id);
@@ -116,7 +118,7 @@ export function SettingsPage() {
                         </button>
                       ) : (
                         <button
-                          className="ml-2 font-sans text-accent-ink hover:underline"
+                          className="text-action ml-1.5"
                           onClick={async () => {
                             const { key } = await api<{ key: string }>(`/api/api-keys/${k.id}/reveal`);
                             setRevealed((r) => ({ ...r, [k.id]: key }));
@@ -135,7 +137,7 @@ export function SettingsPage() {
                     </td>
                     <td className="px-4 py-2.5 text-right">
                       <button
-                        className="text-xs text-crit hover:underline"
+                        className="text-action-danger"
                         onClick={async () => {
                           const ok = await confirm({
                             title: `Revoke key "${k.name}"?`,
@@ -154,7 +156,7 @@ export function SettingsPage() {
                 })}
               </Table>
             ) : (
-              <div className="card text-sm text-slate-550">No API keys yet.</div>
+              <div className="settings-card text-slate-550">No API keys yet.</div>
             )}
           </>
         )}
@@ -167,6 +169,8 @@ export function SettingsPage() {
       <AllowedDomainsSection isAdmin={isAdmin} />
 
       <SidebarMenuSection isAdmin={isAdmin} />
+
+      <CostRatesSection isAdmin={isAdmin} />
     </div>
   );
 }
@@ -218,9 +222,9 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
   };
 
   return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">Sidebar</h2>
-      <div className="card space-y-3 text-sm">
+    <section className="settings-section">
+      <h2 className="settings-heading">Sidebar</h2>
+      <div className="settings-card space-y-4">
         <div className="font-semibold text-ink">Sidebar menu</div>
         <p className="text-slate-550">
           Hidden pages are only removed from the menu. They still work if you open the link directly.
@@ -231,8 +235,8 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
           {HIDEABLE_NAV_ITEMS.map((item) => {
             const shown = !hidden.includes(item);
             return (
-              <li key={item} className="flex items-center justify-between gap-3 py-2">
-                <span>{SIDEBAR_ITEM_LABELS[item]}</span>
+              <li key={item} className="flex items-center justify-between gap-3 py-3">
+                <span className="font-medium text-ink">{SIDEBAR_ITEM_LABELS[item]}</span>
                 <label className="flex items-center gap-2 text-xs text-slate-550">
                   {shown ? "Shown" : "Hidden"}
                   <button
@@ -247,7 +251,7 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
                     }`}
                   >
                     <span
-                      className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_3px_rgba(17,24,39,0.25)] transition-transform duration-200 ease-in-out-soft ${
+                      className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_3px_rgba(17,24,39,0.25)] transition-transform duration-[var(--motion-base)] ease-spring ${
                         shown ? "translate-x-[18px]" : "translate-x-0.5"
                       }`}
                     />
@@ -259,10 +263,10 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
         </ul>
 
         {isAdmin ? (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2.5 border-t border-line-subtle pt-4">
             <button
               type="button"
-              className="btn-primary"
+              className="btn-primary settings-btn"
               disabled={!dirty || save.isPending}
               onClick={() => save.mutate(hidden)}
             >
@@ -270,7 +274,7 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
             </button>
             <button
               type="button"
-              className="btn-ghost"
+              className="btn-ghost settings-btn"
               disabled={save.isPending || (saved.length === 0 && hidden.length === 0)}
               onClick={() => save.mutate([])}
             >
@@ -299,7 +303,28 @@ interface SendConfig {
   bulkSend: { minDelaySec: number; maxDelaySec: number };
 }
 
-const code = "rounded bg-accent-soft px-1 font-mono text-xs text-accent-ink";
+const code = "code-chip";
+
+/** A code chip with a small copy button (clipboard only — a visual helper). */
+function CopyChip({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="code-chip gap-1.5 pr-1">
+      {text}
+      <button
+        type="button"
+        className="rounded px-1 font-sans text-[11px] font-medium text-accent-ink transition-colors hover:bg-tint"
+        aria-label={`Copy ${text}`}
+        onClick={async () => {
+          await navigator.clipboard?.writeText(text);
+          setCopied(true);
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </span>
+  );
+}
 
 /** The credentials editor is hidden; WhatsApp is configured via .env only. */
 const SHOW_WHATSAPP_CREDENTIALS_FORM = false;
@@ -312,26 +337,32 @@ function WhatsAppSection({ isAdmin }: { isAdmin: boolean }) {
   });
 
   return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">WhatsApp</h2>
-      <div className="card space-y-3 text-sm">
+    <section className="settings-section">
+      <h2 className="settings-heading">WhatsApp</h2>
+      <div className="settings-card space-y-4">
         {isLoading || !data ? (
           <Spinner />
         ) : data.configured ? (
-          <p className="rounded-lg bg-ok-soft p-3 text-ok">
-            Connected — sending WhatsApp messages through the Meta WhatsApp Cloud API from phone
-            number ID <code className={code}>{data.phoneNumberId}</code>.
-          </p>
+          <div className="settings-banner-ok">
+            <Icon name="check" size={18} className="mt-0.5 shrink-0" />
+            <p>
+              Connected — sending WhatsApp messages through the Meta WhatsApp Cloud API from phone
+              number ID <code className={code}>{data.phoneNumberId}</code>.
+            </p>
+          </div>
         ) : (
-          <p className="rounded-lg bg-warn-soft p-3 text-warn">
-            Not configured — set the Meta access token and phone number ID in .env to enable the
-            “Send message” buttons. This is fully separate from email — leaving it blank has no
-            effect on email sending.
-          </p>
+          <div className="settings-banner-warn">
+            <Icon name="info" size={18} className="mt-0.5 shrink-0" />
+            <p>
+              Not configured — set the Meta access token and phone number ID in .env to enable the
+              “Send message” buttons. This is fully separate from email — leaving it blank has no
+              effect on email sending.
+            </p>
+          </div>
         )}
         <p className="text-slate-550">
           Delivery receipts and replies arrive on the webhook{" "}
-          <code className={code}>/api/webhooks/whatsapp</code> — set{" "}
+          <CopyChip text="/api/webhooks/whatsapp" /> — set{" "}
           <code className={code}>https://&lt;your public API host&gt;/api/webhooks/whatsapp</code> as
           the callback URL in your Meta app (WhatsApp → Configuration), with the verify token
           from .env, and subscribe to the <code className={code}>messages</code> field.
@@ -591,11 +622,11 @@ function BulkSendPacingSection({ isAdmin }: { isAdmin: boolean }) {
   });
 
   return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">
+    <section className="settings-section">
+      <h2 className="settings-heading">
         Bulk send pacing
       </h2>
-      <div className="card space-y-3 text-sm">
+      <div className="settings-card space-y-4">
         <p className="text-slate-550">
           When you send a template to several contacts at once from the Contacts page, they go out one
           at a time with a random gap in this range between each — never all at once — to avoid
@@ -615,36 +646,42 @@ function BulkSendPacingSection({ isAdmin }: { isAdmin: boolean }) {
           >
             <div>
               <label className="label">Min gap (seconds)</label>
-              <input
-                className="input w-28"
-                type="number"
-                min={1}
-                max={3600}
-                value={min}
-                disabled={!isAdmin || save.isPending}
-                onChange={(e) => {
-                  setMin(e.target.value);
-                  setDirty(true);
-                }}
-              />
+              <div className="input-suffix">
+                <input
+                  className="input w-32 pr-11"
+                  type="number"
+                  min={1}
+                  max={3600}
+                  value={min}
+                  disabled={!isAdmin || save.isPending}
+                  onChange={(e) => {
+                    setMin(e.target.value);
+                    setDirty(true);
+                  }}
+                />
+                <span>sec</span>
+              </div>
             </div>
             <div>
               <label className="label">Max gap (seconds)</label>
-              <input
-                className="input w-28"
-                type="number"
-                min={1}
-                max={3600}
-                value={max}
-                disabled={!isAdmin || save.isPending}
-                onChange={(e) => {
-                  setMax(e.target.value);
-                  setDirty(true);
-                }}
-              />
+              <div className="input-suffix">
+                <input
+                  className="input w-32 pr-11"
+                  type="number"
+                  min={1}
+                  max={3600}
+                  value={max}
+                  disabled={!isAdmin || save.isPending}
+                  onChange={(e) => {
+                    setMax(e.target.value);
+                    setDirty(true);
+                  }}
+                />
+                <span>sec</span>
+              </div>
             </div>
             {isAdmin && (
-              <button className="btn-primary whitespace-nowrap" disabled={!dirty || save.isPending}>
+              <button className="btn-primary settings-btn" disabled={!dirty || save.isPending}>
                 {save.isPending ? "Saving…" : "Save"}
               </button>
             )}
@@ -693,11 +730,11 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
   const items = list.data?.items ?? [];
 
   return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.06em] text-slate-550">
+    <section className="settings-section">
+      <h2 className="settings-heading">
         Approved sending domains
       </h2>
-      <div className="card space-y-3 text-sm">
+      <div className="settings-card space-y-4">
         <p className="text-slate-550">
           {items.length === 0
             ? "No restriction — email can be sent to any address. Add a domain to restrict sending."
@@ -706,7 +743,7 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
 
         {isAdmin && (
           <form
-            className="flex flex-col gap-2 sm:flex-row"
+            className="settings-row"
             onSubmit={(e) => {
               e.preventDefault();
               if (domain.trim()) add.mutate();
@@ -718,7 +755,7 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
               onChange={(e) => setDomain(e.target.value)}
               placeholder="gmail.com"
             />
-            <button className="btn-primary whitespace-nowrap" disabled={!domain.trim() || add.isPending}>
+            <button className="btn-primary settings-btn" disabled={!domain.trim() || add.isPending}>
               Add domain
             </button>
           </form>
@@ -730,11 +767,11 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
         ) : items.length > 0 ? (
           <ul className="divide-y divide-line-subtle">
             {items.map((d) => (
-              <li key={d.id} className="flex items-center justify-between py-2">
-                <span className="font-mono text-xs">@{d.domain}</span>
+              <li key={d.id} className="flex items-center justify-between gap-3 py-2.5">
+                <span className="domain-chip">@{d.domain}</span>
                 {isAdmin && (
                   <button
-                    className="text-xs text-crit hover:underline"
+                    className="text-action-danger"
                     onClick={async () => {
                       const ok = await confirm({
                         title: `Remove @${d.domain} from the approved list?`,
