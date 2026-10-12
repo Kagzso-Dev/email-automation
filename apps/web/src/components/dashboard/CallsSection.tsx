@@ -5,6 +5,7 @@ import { ErrorNote } from "../ui";
 import { formatDuration, humanizeOutcome, type CallsDashboard } from "../../lib/dashboard";
 import { ChartEmpty, SectionHeading, SectionSkeleton, StatTile } from "./parts";
 import { RankedBars } from "./WhatsAppSection";
+import { CallCostByFlow } from "./CallCostByFlow";
 
 const CALL_SERIES = [
   { key: "total", label: "Calls", color: "#0091d5" },
@@ -131,6 +132,8 @@ export function CallsSection({
               <RankedBars items={data.topFlows.map((f) => ({ key: f.id ?? "default", label: f.name, value: f.calls }))} unit="calls" />
             )}
           </div>
+
+          <CallCostByFlow span={data.span} />
         </div>
       )}
     </section>
