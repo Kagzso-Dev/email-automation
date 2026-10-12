@@ -10,6 +10,7 @@
 // Sent at, …, Error) with the batch columns around them, so both files read alike.
 
 import { prisma } from "../prisma.js";
+import { csvCell } from "./csv.js";
 import { deliveryFor } from "./aiCallFollowups.js";
 import { historyResult, type HistorySource } from "./historyFilter.js";
 
@@ -19,9 +20,7 @@ export type ExportChannel = "email" | "whatsapp" | "ai-followups";
 const PAGE = 200;
 
 /** RFC-4180 quoting — same rule as the per-batch CSV in the browser. */
-export function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
+export { csvCell };
 export const csvLine = (cells: (string | null | undefined)[]) => cells.map((c) => csvCell(c ?? "")).join(",");
 
 function groupBy<T>(rows: T[], key: (r: T) => string): Map<string, T[]> {

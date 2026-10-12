@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Icon, type IconName } from "./icons";
+import { prefersReducedMotion } from "../lib/motion";
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: BadgeTone }) {
   const tones: Record<BadgeTone, string> = {
@@ -82,10 +83,6 @@ export function ErrorNote({ error }: { error: unknown }) {
 
 /** Matches the overlay-out / dialog-out duration (--motion-fast). */
 const MODAL_CLOSE_MS = 150;
-
-function prefersReducedMotion() {
-  return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-}
 
 export function Modal({
   open,

@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { prefersReducedMotion } from "../lib/motion";
 
 /* ------------------------------------------------------------------ palette --
  * Categorical series hues, validated against the app's white card surface
@@ -29,13 +30,6 @@ const MUTED = "#8a94a6";
 const GRID = "#e9eef7";
 
 /* --------------------------------------------------------------- primitives -- */
-
-function prefersReducedMotion() {
-  return (
-    typeof window !== "undefined" &&
-    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-  );
-}
 
 /** Count from 0 → `value` once, easing out. Honours reduced-motion. */
 export function useCountUp(value: number, durationMs = 700) {

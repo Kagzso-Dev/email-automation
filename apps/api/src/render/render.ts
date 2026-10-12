@@ -4,6 +4,7 @@ import { sanitizeEmailHtml } from "./sanitize.js";
 import { sign } from "./signing.js";
 import {
   buildIcs,
+  escapeHtml,
   meetingUid,
   renderImageHtml,
   renderImageText,
@@ -27,14 +28,6 @@ export class RenderError extends Error {
 export type RenderVars = Record<string, string | number | boolean | null | undefined>;
 
 const VAR_RE = /\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}/g;
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 /**
  * Turns a plain-letter message into simple email HTML: blank lines become

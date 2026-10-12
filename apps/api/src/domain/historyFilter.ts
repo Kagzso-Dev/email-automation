@@ -8,6 +8,7 @@ import { parse as parseCsv } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import { normalizePhoneE164, toWhatsAppDigits } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
+import { csvCell } from "./csv.js";
 
 export type HistoryChannel = "email" | "whatsapp" | "ai-call";
 export const HISTORY_CHANNELS: HistoryChannel[] = ["email", "whatsapp", "ai-call"];
@@ -361,11 +362,6 @@ function plainValue(v: ExcelJS.CellValue): ExcelJS.CellValue {
     return ((v as { result?: ExcelJS.CellValue }).result ?? null) as ExcelJS.CellValue;
   }
   return v;
-}
-
-/** RFC-4180 quoting: wrap in quotes and double any embedded quote when needed. */
-function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
 /**
