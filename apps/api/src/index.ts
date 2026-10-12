@@ -4,8 +4,10 @@ import { logger } from "./logger.js";
 import { prisma } from "./prisma.js";
 import { createApp } from "./http/app.js";
 import { initSentry } from "./observability/sentry.js";
+import { productionConfigWarnings } from "./config/productionChecks.js";
 
 initSentry("api");
+for (const warning of productionConfigWarnings()) logger.warn({ check: "production-config" }, warning);
 
 const app = createApp();
 const server = app.listen(env.API_PORT, () => {

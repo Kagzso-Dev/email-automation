@@ -7,6 +7,7 @@ import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { uploadsRoot } from "../domain/imageUpload.js";
 import { errorHandler } from "./errors.js";
+import { securityHeaders } from "./securityHeaders.js";
 import { authRouter } from "./routes/auth.js";
 import { contactsRouter } from "./routes/contacts.js";
 import { whatsappRouter } from "./routes/whatsapp.js";
@@ -37,6 +38,8 @@ import { sendQueueHistoryRouter } from "./routes/sendQueueHistory.js";
 export function createApp() {
   const app = express();
   app.set("trust proxy", 1);
+  app.disable("x-powered-by");
+  app.use(securityHeaders);
 
   app.use((req, _res, next) => {
     req.id = (req.headers["x-request-id"] as string) || randomUUID();

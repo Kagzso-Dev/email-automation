@@ -4,8 +4,10 @@ import { prisma } from "./prisma.js";
 import { startAllWorkers } from "./queue/workers.js";
 import { startScheduler } from "./queue/scheduler.js";
 import { initSentry } from "./observability/sentry.js";
+import { productionConfigWarnings } from "./config/productionChecks.js";
 
 initSentry("worker");
+for (const warning of productionConfigWarnings()) logger.warn({ check: "production-config" }, warning);
 
 const workers = startAllWorkers();
 const scheduler = startScheduler();
