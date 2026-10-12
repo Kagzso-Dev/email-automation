@@ -1,0 +1,74 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`render output (characterization) > meeting template with links, video and escaped variables 1`] = `
+{
+  "attachments": [
+    {
+      "content": "BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Dispatch//Email Automation//EN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:log_1@localhost4000
+DTSTAMP:20260115T100000Z
+DTSTART;TZID=Asia/Kolkata:20260201T093000
+DTEND;TZID=Asia/Kolkata:20260201T100000
+SUMMARY:Demo "call" <1>
+DESCRIPTION:Line 1 <b>\\nLine 2 & more\\n\\nJoin: https://meet.example.com/abc
+LOCATION:Room <A> & B
+URL:https://meet.example.com/abc
+END:VEVENT
+END:VCALENDAR
+",
+      "contentType": "text/calendar; charset="utf-8"; method=PUBLISH",
+      "filename": "invite.ics",
+    },
+  ],
+  "html": "Hello Ada &lt;A&amp;B&gt;,
+
+See  "soon" &amp; bring Acme "Co".
+Thanks
+<div style="margin:20px 0"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fvideo.example.com%2Fv&s=tNN8ggHzrnt5DnzQISkvej5rRzc4ZxrFpUweDQ-L9ZU" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#2563eb;color:#ffffff">&#9654; Watch video</a></div><div style="margin-top:24px"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fexample.com%2Fbook%3Fa%3D1%26b%3D2&s=YGe1v-RtLeJkgfPHGEY3fn70zVwL3MN3B8NaoNQZ1X0" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937;margin:0 8px 8px 0">Book &lt;now&gt; &amp; save</a><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fexample.com%2Fdocs&s=77LtPxS244380bo2bKcE2Eg2WglXsEZ2RmRcjUgOUJ8" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937;margin:0 8px 8px 0">Docs</a></div>
+<div style="border:1px solid #e3e6ec;border-radius:8px;padding:16px;margin-top:24px">
+<div style="font-weight:600;font-size:16px;margin-bottom:8px">Demo &quot;call&quot; &lt;1&gt;</div>
+<table style="font-size:14px;border-collapse:collapse"><tr><td style="padding:2px 0;color:#8a92a0">When</td><td style="padding:2px 0 2px 12px">2026-02-01 09:30 – 10:00 (Asia/Kolkata)</td></tr><tr><td style="padding:2px 0;color:#8a92a0">Where</td><td style="padding:2px 0 2px 12px">Room &lt;A&gt; &amp; B</td></tr></table>
+<p style="font-size:14px;margin:10px 0 0">Line 1 &lt;b&gt;<br>Line 2 &amp; more</p>
+<div style="margin-top:14px"><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fmeet.example.com%2Fabc&s=A5OrQ0gf60u7Th994rHCvafOdNoEgdiW7G4zuw01Upw" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#2563eb;color:#ffffff;margin-right:8px">Join the meeting</a><a href="http://localhost:4000/api/track/click/log_1?u=https%3A%2F%2Fcalendar.google.com%2Fcalendar%2Frender%3Faction%3DTEMPLATE%26text%3DDemo%2B%2522call%2522%2B%253C1%253E%26dates%3D20260201T093000%252F20260201T100000%26details%3DLine%2B1%2B%253Cb%253E%250ALine%2B2%2B%2526%2Bmore%250A%250AJoin%253A%2Bhttps%253A%252F%252Fmeet.example.com%252Fabc%26location%3DRoom%2B%253CA%253E%2B%2526%2BB%26ctz%3DAsia%252FKolkata&s=B9P6glwbuCHKcJ8QNVkrar1K1SGtAv8SVkWTtmQO_bI" style="display:inline-block;padding:8px 14px;border-radius:6px;text-decoration:none;font-size:14px;background:#f0f2f6;color:#1f2937">Add to Google Calendar</a></div>
+<div style="font-size:12px;color:#8a92a0;margin-top:10px">A calendar invite (invite.ics) is attached.</div>
+</div><div style="margin-top:32px;font-size:12px;color:#8a92a0">1 Test Way, Testville &middot; <a href="http://localhost:4000/api/track/click/log_1?u=http%3A%2F%2Flocalhost%3A4000%2Fu%2Fx&s=6l0HiWz_piUyzR8cSEuTfeJeNSXiD37QtT6s2TVgYM4">Unsubscribe</a></div><img src="http://localhost:4000/api/track/open/log_1.png" width="1" height="1" alt="" style="display:none" />",
+  "subject": "Hi Ada <A&B> & team",
+  "text": "Hello Ada <A&B>,
+
+See  "soon" & bring Acme "Co".
+Thanks
+Watch video: https://video.example.com/v
+Book <now> & save: https://example.com/book?a=1&b=2
+Docs: https://example.com/docs
+
+--- Meeting ---
+Demo "call" <1>
+When: 2026-02-01 09:30 – 10:00 (Asia/Kolkata)
+Where: Room <A> & B
+
+Line 1 <b>
+Line 2 & more
+
+Join: https://meet.example.com/abc
+
+Add to Google Calendar: https://calendar.google.com/calendar/render?action=TEMPLATE&text=Demo+%22call%22+%3C1%3E&dates=20260201T093000%2F20260201T100000&details=Line+1+%3Cb%3E%0ALine+2+%26+more%0A%0AJoin%3A+https%3A%2F%2Fmeet.example.com%2Fabc&location=Room+%3CA%3E+%26+B&ctz=Asia%2FKolkata
+
+---
+1 Test Way, Testville
+Unsubscribe: http://localhost:4000/u/x",
+}
+`;
+
+exports[`render output (characterization) > standard template, preview mode (no tracking) 1`] = `
+{
+  "attachments": undefined,
+  "html": "<p>Hi &lt;script&gt;x&lt;/script&gt;</p><a href="https://example.com/a?x=1&amp;y=2" rel="noopener noreferrer">link</a><div style="margin-top:32px;font-size:12px;color:#8a92a0">1 Test Way, Testville</div>",
+  "subject": "Plain",
+  "text": "Hi <script>x</script>
+link",
+}
+`;
