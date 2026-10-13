@@ -612,6 +612,20 @@ model AiCallRunFlow {
   @@map("ai_call_run_flows")
 }
 
+// Trial numbers the "Test call to my number" popup may dial (added by admins in
+// the UI; AI_CALL_FLOW_TEST_NUMBERS still works alongside). Removing one sets
+// deletedAt; adding the same number again brings that row back.
+model AiCallTestNumber {
+  id        String    @id @default(cuid())
+  phone     String    @unique @db.VarChar(20) // E.164, e.g. +919876543210
+  label     String?   @db.VarChar(60)
+  createdBy String    @db.VarChar(191) // admin email
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  @@map("ai_call_test_numbers")
+}
+
 // ---------------------------------------------------------------- AI Call Customers (isolated)
 // Saved customers for AI voice calls ("AI Call Customers" tab on the Contacts
 // page), their call stage, a timeline, and follow-ups that wait for admin
@@ -829,4 +843,17 @@ model WhatsAppMessagePricing {
   updatedAt         DateTime @updatedAt
 
   @@map("whatsapp_message_pricing")
+}
+
+// Settings → Branding & Labels: display-only names (app name, sidebar section and
+// menu labels) an admin changed. Only changed keys have a row; no row (or no
+// table) means the built-in default text. updatedBy is the admin's user id.
+// New table only — no existing table is altered.
+model BrandingSetting {
+  key       String   @id @db.VarChar(64)
+  value     String   @db.VarChar(64)
+  updatedBy String   @db.VarChar(191)
+  updatedAt DateTime @updatedAt
+
+  @@map("branding_settings")
 }

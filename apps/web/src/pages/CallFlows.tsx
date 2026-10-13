@@ -9,6 +9,8 @@ import {
   type CallFlowDefinition,
   type CallFlowGroup,
   type CallFlowTextBlock,
+  type TestCallNumber,
+  type TestCallNumberList,
 } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { useAiCallsConfig, type AiCallRun } from "../lib/aiCalls";
@@ -26,7 +28,7 @@ import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { Icon } from "../components/icons";
-import { PhoneInput } from "../components/PhoneInput";
+import { PhoneInput, phoneError } from "../components/PhoneInput";
 
 /**
  * "Call Flows": edit what the AI voice agent says. A flow is a copy of a built-in
@@ -161,7 +163,6 @@ export function CallFlowsPage() {
             key={selectedId}
             flowId={selectedId}
             catalog={catalog.data}
-            testNumbers={config.data!.testCallNumbers}
             onClose={() => setSelectedId(null)}
           />
         ) : (
@@ -378,12 +379,10 @@ type FieldKey = "greeting" | "silence.reprompt" | "silence.closing" | `block:${s
 function CallFlowEditor({
   flowId,
   catalog,
-  testNumbers,
   onClose,
 }: {
   flowId: string;
   catalog: CallFlowCatalog;
-  testNumbers: string[];
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -728,7 +727,6 @@ function CallFlowEditor({
           onClose={() => setTesting(false)}
           flowId={flowId}
           versions={versions}
-          testNumbers={testNumbers}
         />
       )}
     </div>
@@ -837,27 +835,70 @@ function TestCallModal({
   onClose,
   flowId,
   versions,
-  testNumbers,
 }: {
   open: boolean;
   onClose: () => void;
   flowId: string;
   versions: CallFlowVersion[];
-  testNumbers: string[];
 }) {
   const toast = useToast();
+  const confirm = useConfirm();
+  const qc = useQueryClient();
   const [version, setVersion] = useState(versions[0]?.version ?? 1);
-  const [phone, setPhone] = useState("");
+  const [numberId, setNumberId] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [newLabel, setNewLabel] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [gender, setGender] = useState("unknown");
   const [followUpDetail, setFollowUpDetail] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
 
+  const numbers = useQuery({
+    queryKey: ["call-flow-test-numbers"],
+    queryFn: () => api<TestCallNumberList>("/api/call-flows/test-numbers"),
+    enabled: open,
+  });
+  const items = numbers.data?.items ?? [];
+  const savedCount = items.filter((n) => n.source === "saved").length;
+  const max = numbers.data?.max ?? 5;
+  const tableMissing = !!numbers.data?.tableMissing;
+  const selectedId = items.some((n) => n.id === numberId) ? numberId : (items[0]?.id ?? "");
+  const refreshNumbers = () => qc.invalidateQueries({ queryKey: ["call-flow-test-numbers"] });
+
+  const add = useMutation({
+    mutationFn: () =>
+      api<TestCallNumber>("/api/call-flows/test-numbers", {
+        method: "POST",
+        json: { phone: newPhone, label: newLabel.trim() || null },
+        notify: false,
+      }),
+    onSuccess: (n) => {
+      setNewPhone("");
+      setNewLabel("");
+      setNumberId(n.id);
+      toast.success("Trial number added", [n.masked]);
+      void refreshNumbers();
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (n: TestCallNumber) =>
+      api(`/api/call-flows/test-numbers/${encodeURIComponent(n.id)}`, { method: "DELETE", notify: false }),
+    onSuccess: (_r, n) => {
+      toast.success("Trial number removed", [n.masked]);
+      void refreshNumbers();
+    },
+  });
+  const askRemove = async (n: TestCallNumber) => {
+    if (await confirm({ title: `Remove ${n.masked}?`, body: "Test calls can no longer go to this number.", confirmText: "Remove", tone: "danger" })) {
+      remove.mutate(n);
+    }
+  };
+
   const start = useMutation({
     mutationFn: () =>
       api<{ runId: string }>(`/api/call-flows/${flowId}/test-call`, {
         method: "POST",
-        json: { version, phone, customerName: customerName || null, gender, followUpDetail: followUpDetail || null },
+        json: { version, numberId: selectedId, customerName: customerName || null, gender, followUpDetail: followUpDetail || null },
         notify: false,
       }),
     onSuccess: (r) => {
@@ -865,6 +906,31 @@ function TestCallModal({
       toast.success("Test call started", ["Your phone should ring within a few seconds."]);
     },
   });
+  // "Another AI call run is still in progress": offer to stop that run (same cancel as the AI Call modal).
+  const blockedByRun = start.error instanceof Error && /still in progress/i.test(start.error.message);
+  const stopRunning = useMutation({
+    mutationFn: async () => {
+      const { items } = await api<{ items: Pick<AiCallRun, "id" | "status">[] }>("/api/ai-calls/runs");
+      const running = items.filter((r) => r.status === "RUNNING");
+      for (const r of running) await api(`/api/ai-calls/runs/${r.id}/cancel`, { method: "POST", notify: false });
+      return running.length;
+    },
+    onSuccess: (n) => {
+      start.reset();
+      toast.success(n ? "Running AI call run stopped" : "No AI call run is running now", ["You can place the test call now."]);
+    },
+  });
+  const askStopRunning = async () => {
+    if (
+      await confirm({
+        title: "Stop the AI call run in progress?",
+        body: "Calls still waiting in that run are cancelled. A call already ringing finishes on its own.",
+        confirmText: "Stop run",
+        tone: "danger",
+      })
+    )
+      stopRunning.mutate();
+  };
   const run = useQuery({
     queryKey: ["ai-call-run", runId],
     queryFn: () => api<AiCallRun>(`/api/ai-calls/runs/${runId}`),
@@ -872,14 +938,11 @@ function TestCallModal({
     refetchInterval: (q) => (q.state.data?.status === "RUNNING" ? 3000 : false),
   });
   const log = run.data?.logs[0];
+  const newPhoneError = newPhone ? phoneError(newPhone) : null;
 
   return (
     <Modal open={open} onClose={onClose} title="Test call to my number">
-      {testNumbers.length === 0 ? (
-        <p className="text-sm text-warn">
-          Test calls are off. Add your number to AI_CALL_FLOW_TEST_NUMBERS in the API's .env and restart.
-        </p>
-      ) : runId ? (
+      {runId ? (
         <div className="text-sm">
           {!log ? (
             <Spinner />
@@ -899,44 +962,151 @@ function TestCallModal({
             </button>
           </div>
         </div>
+      ) : numbers.isLoading ? (
+        <Spinner />
+      ) : numbers.error ? (
+        <>
+          <ErrorNote error={numbers.error} />
+          <div className="mt-3 flex justify-end">
+            <button className="btn-ghost" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </>
       ) : (
         <>
-          <label className="label">Version</label>
-          <select className="input mb-3" value={version} onChange={(e) => setVersion(Number(e.target.value))}>
-            {versions.map((v) => (
-              <option key={v.id} value={v.version}>
-                v{v.version} ({v.status.toLowerCase()})
-              </option>
-            ))}
-          </select>
-          <label className="label">Your number</label>
-          <PhoneInput className="mb-1" value={phone} onChange={setPhone} required />
-          <p className="mb-3 text-xs text-slate-550">Allowed: {testNumbers.join(", ")}</p>
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            <input className="input" placeholder="Name to greet" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-            <select className="input" value={gender} onChange={(e) => setGender(e.target.value)}>
-              <option value="male">male</option>
-              <option value="female">female</option>
-              <option value="unknown">unknown</option>
-            </select>
-            <input
-              className="input col-span-2"
-              placeholder="Follow-up detail (optional)"
-              value={followUpDetail}
-              onChange={(e) => setFollowUpDetail(e.target.value)}
-            />
-          </div>
-          <p className="mb-3 text-xs text-slate-550">
-            A real call is placed and counts toward the daily limit. It is refused while another AI call run is in progress.
-          </p>
-          {start.error && <ErrorNote error={start.error} />}
-          <div className="mt-3 flex justify-end gap-2">
-            <button className="btn-ghost" onClick={onClose}>
-              Cancel
-            </button>
-            <button className="btn-danger" disabled={!phone.trim() || start.isPending} onClick={() => start.mutate()}>
-              {start.isPending ? "Calling…" : "Call me now"}
-            </button>
+          {tableMissing && (
+            <p className="mb-3 text-sm text-warn">
+              Saving trial numbers needs a database update: run <code>npm run prisma:deploy</code>. Numbers in
+              AI_CALL_FLOW_TEST_NUMBERS still work.
+            </p>
+          )}
+
+          {items.length > 0 ? (
+            <>
+              <label className="label">Version</label>
+              <select className="input mb-3" value={version} onChange={(e) => setVersion(Number(e.target.value))}>
+                {versions.map((v) => (
+                  <option key={v.id} value={v.version}>
+                    v{v.version} ({v.status.toLowerCase()})
+                  </option>
+                ))}
+              </select>
+              <label className="label">Number to call</label>
+              <select className="input mb-3" value={selectedId} onChange={(e) => setNumberId(e.target.value)}>
+                {items.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.masked}
+                    {n.label ? ` · ${n.label}` : ""}
+                  </option>
+                ))}
+              </select>
+              <div className="mb-3 grid grid-cols-2 gap-2">
+                <input className="input" placeholder="Name to greet" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+                <select className="input" value={gender} onChange={(e) => setGender(e.target.value)}>
+                  <option value="male">male</option>
+                  <option value="female">female</option>
+                  <option value="unknown">unknown</option>
+                </select>
+                <input
+                  className="input col-span-2"
+                  placeholder="Follow-up detail (optional)"
+                  value={followUpDetail}
+                  onChange={(e) => setFollowUpDetail(e.target.value)}
+                />
+              </div>
+              <p className="mb-3 text-xs text-slate-550">
+                A real call is placed and counts toward the daily limit. It is refused while another AI call run is in progress.
+                Up to 3 test calls per hour.
+              </p>
+              {start.error && <ErrorNote error={start.error} />}
+              {blockedByRun && (
+                <div className="mt-2 flex justify-end">
+                  <button className="btn-danger" disabled={stopRunning.isPending} onClick={() => void askStopRunning()}>
+                    {stopRunning.isPending ? "Stopping…" : "Stop running call"}
+                  </button>
+                </div>
+              )}
+              {stopRunning.error && (
+                <div className="mt-2">
+                  <ErrorNote error={stopRunning.error} />
+                </div>
+              )}
+              <div className="mt-3 flex justify-end gap-2">
+                <button className="btn-ghost" onClick={onClose}>
+                  Cancel
+                </button>
+                <button className="btn-danger" disabled={!selectedId || start.isPending} onClick={() => start.mutate()}>
+                  {start.isPending ? "Calling…" : "Call this number"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="mb-3 text-sm text-slate-550">No trial numbers yet. Add your own number below to place a test call.</p>
+          )}
+
+          <div className="mt-4 border-t border-line/70 pt-3">
+            <p className="label">
+              Trial numbers ({savedCount}/{max})
+            </p>
+            {items.length > 0 && (
+              <ul className="mb-3 divide-y divide-line/60 rounded-lg border border-line/70 text-sm">
+                {items.map((n) => (
+                  <li key={n.id} className="flex items-center gap-2 px-3 py-1.5">
+                    <span className="font-mono">{n.masked}</span>
+                    <span className="min-w-0 flex-1 truncate text-slate-550">{n.label ?? ""}</span>
+                    {n.source === "env" ? (
+                      <span className="text-xs text-slate-550" title="Set in AI_CALL_FLOW_TEST_NUMBERS in the API's .env">
+                        from .env
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Remove ${n.masked}`}
+                        title="Remove"
+                        disabled={remove.isPending}
+                        className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => void askRemove(n)}
+                      >
+                        <Icon name="trash" size={16} />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {remove.error && (
+              <div className="mb-2">
+                <ErrorNote error={remove.error} />
+              </div>
+            )}
+            <label className="label">Add trial number</label>
+            <PhoneInput className="mb-2" value={newPhone} onChange={setNewPhone} disabled={tableMissing} />
+            <div className="flex gap-2">
+              <input
+                className="input min-w-0 flex-1"
+                placeholder="Label (optional), e.g. My phone"
+                maxLength={60}
+                value={newLabel}
+                disabled={tableMissing}
+                onChange={(e) => setNewLabel(e.target.value)}
+              />
+              <button
+                className="btn-ghost shrink-0"
+                disabled={tableMissing || !newPhone || !!newPhoneError || savedCount >= max || add.isPending}
+                onClick={() => add.mutate()}
+              >
+                {add.isPending ? "Adding…" : "Add trial number"}
+              </button>
+            </div>
+            {savedCount >= max && !tableMissing && (
+              <p className="mt-1 text-xs text-warn">You can save up to {max} trial numbers. Remove one to add another.</p>
+            )}
+            {add.error && (
+              <div className="mt-2">
+                <ErrorNote error={add.error} />
+              </div>
+            )}
           </div>
         </>
       )}

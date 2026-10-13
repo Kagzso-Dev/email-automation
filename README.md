@@ -30,6 +30,8 @@ npm run dev                          # api :4000, worker, web :5173
 ```
 
 Log in at http://localhost:5173 with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
+Re-running the seed never overwrites an existing password; see [Users and passwords](#users-and-passwords)
+for resetting it and adding more users.
 
 ### Processes
 
@@ -90,6 +92,25 @@ Integration tests against a real MySQL are stubbed for milestone M9 (see design 
 - `GET /api/jobs` — queue state (pending / active / dead counts + recent rows), requires an `ADMIN` JWT;
   `POST /api/jobs/:id/retry` requeues one
 - Structured logs via pino; set `SENTRY_DSN` to enable error tracking
+
+## Users and passwords
+
+`npm run seed` creates the `SEED_ADMIN_EMAIL` admin only if that email doesn't exist yet. It never
+changes an existing user's password unless `SEED_ADMIN_RESET=true` — to recover a forgotten admin
+password, set it in `.env`, run `npm run seed` once, then set it back to `false`. A reset changes the
+password only; the role is kept.
+
+Everything else is done by admins under **Settings**:
+
+- **Users** — list users, add one (email, password, `ADMIN` or `EDITOR` role; a **Generate strong
+  password** button fills a random one), and disable / re-enable accounts. You can't disable
+  yourself or the last active admin. A disabled user can't log in, and an open session ends at its
+  next token refresh; re-enabling restores the old password.
+- **Change password** — change your own password (current password required).
+
+Passwords must be 10–72 bytes (bcrypt reads only the first 72). The API is `/api/users`
+(`GET`, `POST`, `PATCH /:id` with `{ disabled }`, `POST /me/password`), `ADMIN` JWT only; responses
+never include password hashes.
 
 ## Deployment
 
@@ -233,9 +254,17 @@ flag off (or the picker left on *Default flow*), calls go out exactly as before.
   A run pins the published version it started with, so later edits never change queued calls.
 - **Preview** renders the greeting, no-response lines and full AI prompt with sample customer data
   through the voice backend (the same code a real call uses).
-- **Test call to my number** places one real call with the draft or any version, only to numbers
-  listed in `AI_CALL_FLOW_TEST_NUMBERS`. It counts toward the daily cap and is refused while
-  another run is in progress.
+- **Test call to my number** places one real call with the draft or any version, only to a
+  **trial number**. Admins add trial numbers in the popup itself (+91 is preselected; up to 5;
+  shown masked, e.g. `+91 98XXX XXX10`) and remove them with the trash button. The call request
+  carries only the id of a listed number, never a typed-in number. `AI_CALL_FLOW_TEST_NUMBERS`
+  is **optional**: numbers listed there are allowed too, as a fallback. A test call counts toward
+  the daily cap, is refused while another run is in progress or if the number is on the
+  do-not-call list, and is limited to 3 per minute and 3 per hour per admin. Trial numbers need
+  `npm run prisma:deploy` (`0023_ai_call_test_numbers`: one new table, `ai_call_test_numbers`);
+  until then the popup says so and only the env numbers work. Rollback: run
+  `prisma/migrations/0023_ai_call_test_numbers/down.sql`, then
+  `npx prisma migrate resolve --rolled-back 0023_ai_call_test_numbers`.
 - **Fallback:** if a flow sent to the voice backend is missing or invalid, or a published version
   arrives with different content, the call still goes out with the default agent and the call log
   records `flow_fallback` (`missing` / `invalid` / `version_conflict`).

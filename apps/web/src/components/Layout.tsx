@@ -4,6 +4,7 @@ import { useAuth } from "../lib/auth";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { useInboxUnread } from "../lib/whatsappInbox";
 import { useSidebarHiddenItems } from "../lib/sidebar";
+import { useBranding, useDocumentTitle } from "../lib/branding";
 import type { HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
@@ -78,6 +79,9 @@ export function Layout({ children }: { children: ReactNode }) {
   // Unread customer messages on the "WhatsApp Inbox" item (admins only; polls while the tab is
   // visible, and not at all while the item is hidden from the menu).
   const inboxUnread = useInboxUnread(user?.role === "ADMIN" && !hidden.has("whatsapp-inbox")).data?.messages ?? 0;
+  // App name from Settings → Branding ("Dispatch" until an admin changes it).
+  const { appName } = useBranding();
+  useDocumentTitle(appName);
   const groups = NAV_GROUPS.map((g) => ({
     ...g,
     items: g.items.filter(
@@ -141,7 +145,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <Icon name="menu" size={20} />
         </button>
         <span className="flex items-center gap-2 font-mono text-sm font-semibold">
-          <Logo size={28} /> Dispatch
+          <Logo size={28} /> {appName}
         </span>
       </header>
 
@@ -187,7 +191,7 @@ export function Layout({ children }: { children: ReactNode }) {
             )}
           >
             <Logo size={28} />
-            <span className="truncate">Dispatch</span>
+            <span className="truncate">{appName}</span>
           </span>
 
           {/* Desktop collapse toggle */}

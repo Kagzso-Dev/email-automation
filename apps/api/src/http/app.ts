@@ -23,6 +23,7 @@ import { whatsappWebhookRouter } from "./routes/whatsappWebhook.js";
 import { trackRouter } from "./routes/track.js";
 import { unsubscribeRouter } from "./routes/unsubscribe.js";
 import { apiKeysRouter } from "./routes/apiKeys.js";
+import { usersRouter } from "./routes/users.js";
 import { healthRouter } from "./routes/health.js";
 import { statsRouter } from "./routes/stats.js";
 import { jobsRouter } from "./routes/jobs.js";
@@ -82,6 +83,7 @@ export function createApp() {
   app.use("/api/track", trackRouter);
   app.use("/api/unsubscribe", unsubscribeRouter);
   app.use("/api/api-keys", apiKeysRouter);
+  app.use("/api/users", usersRouter); // admin-only user management
   app.use("/api/jobs", jobsRouter);
   app.use("/api/settings", settingsRouter);
   app.use("/api/ai-calls", aiCallsRouter);

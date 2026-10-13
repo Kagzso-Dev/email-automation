@@ -1,12 +1,9 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import bcrypt from "bcryptjs";
 import { buildDatabaseUrl } from "../scripts/db-url.mjs";
+import { ensureAdmin } from "./seedAdmin.js";
 
 const prisma = new PrismaClient({ datasourceUrl: buildDatabaseUrl() });
-
-// bcrypt cost — matches hashPassword() in apps/api/src/domain/auth.service.ts.
-const BCRYPT_COST = 12;
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -46,12 +43,19 @@ async function main() {
   const email = requireEnv("SEED_ADMIN_EMAIL").toLowerCase();
   const password = requireEnv("SEED_ADMIN_PASSWORD");
 
-  const admin = await prisma.user.upsert({
-    where: { email },
-    create: { email, passwordHash: await bcrypt.hash(password, BCRYPT_COST), role: "ADMIN" },
-    update: {}, // idempotent — an existing admin's password is left untouched
+  // Never logs the password. An existing user's password is only replaced
+  // when SEED_ADMIN_RESET=true is set explicitly.
+  const admin = await ensureAdmin(prisma, {
+    email,
+    password,
+    reset: process.env.SEED_ADMIN_RESET === "true",
   });
-  console.log(`✓ admin user: ${admin.email} (${admin.role})`);
+  const note = {
+    created: "created",
+    unchanged: "already exists — password left unchanged (set SEED_ADMIN_RESET=true to reset it)",
+    reset: "already exists — password reset from SEED_ADMIN_PASSWORD",
+  }[admin.action];
+  console.log(`✓ admin user: ${admin.email} (${admin.role}) ${note}`);
 
   // Sample content (demo list, template, contacts, trigger) is only inserted
   // when SEED_SAMPLE_DATA=true. Production instances seed the admin only.

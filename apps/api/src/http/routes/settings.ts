@@ -1,5 +1,13 @@
 import { Router } from "express";
-import { allowedDomainInput, bulkSendSettingsInput, costRatesInput, idParam, sidebarSettingsInput } from "@dispatch/shared";
+import {
+  allowedDomainInput,
+  brandingInput,
+  brandingResetQuery,
+  bulkSendSettingsInput,
+  costRatesInput,
+  idParam,
+  sidebarSettingsInput,
+} from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { env } from "../../env.js";
 import {
@@ -11,6 +19,7 @@ import {
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { conflict, notFound, wrap } from "../errors.js";
 import { getCostRates, setCostRates } from "../../domain/dashboardCosts.js";
+import { getBranding, resetBranding, setBranding } from "../../domain/branding.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(authRequired);
@@ -64,6 +73,34 @@ settingsRouter.put(
   wrap(async (req, res) => {
     const { hiddenItems } = sidebarSettingsInput.parse(req.body);
     res.json({ hiddenItems: await setSidebarHiddenItems(hiddenItems) });
+  }),
+);
+
+/* ---------------------------------------------- branding & labels */
+
+// Display names (app name, sidebar labels). Every signed-in user reads them (the
+// sidebar needs them); only admins can change or reset them.
+settingsRouter.get(
+  "/branding",
+  wrap(async (_req, res) => {
+    res.json(await getBranding());
+  }),
+);
+
+settingsRouter.put(
+  "/branding",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    res.json(await setBranding(brandingInput.parse(req.body), req.user!.id));
+  }),
+);
+
+settingsRouter.delete(
+  "/branding",
+  requireRole("ADMIN"),
+  wrap(async (req, res) => {
+    const { key } = brandingResetQuery.parse(req.query);
+    res.json(await resetBranding(req.user!.id, key));
   }),
 );
 

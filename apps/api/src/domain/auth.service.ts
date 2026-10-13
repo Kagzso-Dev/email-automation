@@ -4,6 +4,7 @@ import type { Role } from "@prisma/client";
 import { env } from "../env.js";
 import { prisma } from "../prisma.js";
 import { unauthorized } from "../http/errors.js";
+import { isDisabledHash } from "./users.service.js";
 
 export interface AccessClaims {
   sub: string;
@@ -44,7 +45,8 @@ export async function refresh(refreshToken: string) {
     throw unauthorized("Invalid refresh token");
   }
   const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-  if (!user) throw unauthorized("Invalid refresh token");
+  // A disabled user's existing session ends at its next refresh.
+  if (!user || isDisabledHash(user.passwordHash)) throw unauthorized("Invalid refresh token");
   const tokens = await issueTokens(user);
   return { ...tokens, user: { id: user.id, email: user.email, role: user.role } };
 }

@@ -12,18 +12,21 @@
 //   POST   /api/call-flows/:id/archive               hide the flow (runs already pinned to it keep it)
 //   DELETE /api/call-flows/:id                       remove an unpublished flow (hidden instead if a run used it)
 //   POST   /api/call-flows/preview                   render a definition with sample customer data
-//   POST   /api/call-flows/:id/test-call             one call to an allow-listed number (AI_CALL_FLOW_TEST_NUMBERS)
+//   GET    /api/call-flows/test-numbers              trial numbers the test call may dial (saved + AI_CALL_FLOW_TEST_NUMBERS), masked
+//   POST   /api/call-flows/test-numbers              save a trial number (max 5)
+//   DELETE /api/call-flows/test-numbers/:numberId    remove a saved trial number
+//   POST   /api/call-flows/:id/test-call             one call to a trial number, picked by id (never a typed-in number)
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import {
+  addTestCallNumberInput,
   CALL_FLOW_BASES,
   callFlowDefinition,
   callFlowVersionParam,
   createCallFlowInput,
   idParam,
   maskPhone,
-  normalizePhoneE164,
   normalizeAiCallGender,
   previewCallFlowInput,
   saveCallFlowDraftInput,
@@ -36,6 +39,7 @@ import { logger } from "../../logger.js";
 import { aiCallsConfig, isAiCallsConfigured, isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { callsCountedTowardDailyCap, loadDoNotCallPhones } from "../../domain/aiCalls.js";
 import { CallFlowError, definitionHash, latestPublished, publishDraft, removeFlow, saveDraft } from "../../domain/callFlows.js";
+import { addTestNumber, listTestNumbers, removeTestNumber, resolveTestNumber, TestNumberError } from "../../domain/callFlowTestNumbers.js";
 import { enqueueAiCallRun } from "../../queue/queues.js";
 import { getBuiltinFlows, previewFlow, VoiceBackendError, type VoiceFlowCatalog } from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -63,6 +67,15 @@ const limiter = (limit: number) =>
 const writeLimiter = limiter(60);
 const previewLimiter = limiter(120);
 const testCallLimiter = limiter(3);
+/** 3 placed test calls per hour per admin. Refused requests (4xx/5xx) don't use up the hour. */
+const testCallHourlyLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 3,
+  standardHeaders: true,
+  skipFailedRequests: true,
+  keyGenerator: (req) => req.user?.id ?? req.ip ?? "anon",
+  message: { error: "You can place 3 test calls per hour — try again later.", code: "rate_limited" },
+});
 
 /** Voice backend problems become 503 (unreachable) or 502 (it rejected us), never a crash. */
 function voiceError(err: unknown): never {
@@ -83,6 +96,14 @@ async function builtins(): Promise<VoiceFlowCatalog> {
   const data = await getBuiltinFlows().catch(voiceError);
   builtinCache = { at: Date.now(), data };
   return data;
+}
+
+function testNumberError(err: unknown): never {
+  if (err instanceof TestNumberError) {
+    const code = err.status === 409 ? "conflict" : err.status === 404 ? "not_found" : err.status === 503 ? "unavailable" : "bad_request";
+    throw new AppError(err.status, err.message, code);
+  }
+  throw err;
 }
 
 const asJson = (d: unknown) => d as Prisma.InputJsonValue;
@@ -162,6 +183,34 @@ callFlowsRouter.post(
   wrap(async (req, res) => {
     const body = previewCallFlowInput.parse(req.body);
     res.json(await previewFlow(body.definition, body.sample).catch(voiceError));
+  }),
+);
+
+callFlowsRouter.get(
+  "/test-numbers",
+  wrap(async (_req, res) => {
+    res.json(await listTestNumbers());
+  }),
+);
+
+callFlowsRouter.post(
+  "/test-numbers",
+  writeLimiter,
+  wrap(async (req, res) => {
+    const body = addTestCallNumberInput.parse(req.body);
+    const { item, phone } = await addTestNumber(body.phone, body.label, req.user!.email).catch(testNumberError);
+    logger.info({ phone: maskPhone(phone), by: req.user!.email }, "call flow trial number added");
+    res.status(201).json(item);
+  }),
+);
+
+callFlowsRouter.delete(
+  "/test-numbers/:numberId",
+  writeLimiter,
+  wrap(async (req, res) => {
+    const { phone } = await removeTestNumber(String(req.params.numberId ?? "")).catch(testNumberError);
+    logger.info({ phone: maskPhone(phone), by: req.user!.email }, "call flow trial number removed");
+    res.json({ ok: true });
   }),
 );
 
@@ -266,6 +315,7 @@ callFlowsRouter.delete(
 
 callFlowsRouter.post(
   "/:id/test-call",
+  testCallHourlyLimiter,
   testCallLimiter,
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
@@ -273,10 +323,8 @@ callFlowsRouter.post(
     if (!isAiCallsConfigured()) {
       throw new AppError(503, "Voice backend is not configured — set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY", "unavailable");
     }
-    const phone = normalizePhoneE164(body.phone, aiCallsConfig.defaultCountryCode);
-    if (!phone || !aiCallsConfig.flowTestNumbers.includes(phone)) {
-      throw badRequest("Test calls can only go to a number listed in AI_CALL_FLOW_TEST_NUMBERS");
-    }
+    const phone = await resolveTestNumber(body.numberId);
+    if (!phone) throw badRequest("Test calls can only go to a saved trial number — pick one from the list");
     await liveFlow(id);
     const version = await prisma.callFlowVersion.findUnique({ where: { flowId_version: { flowId: id, version: body.version } } });
     if (!version) throw notFound("Version");

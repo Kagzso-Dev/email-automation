@@ -818,6 +818,43 @@
   color: rgb(var(--c-ink));
 }
 
+/* Shared show / hide eye inside a regular .input (Settings password fields). */
+.password-field {
+  position: relative;
+}
+.password-field-input {
+  padding-right: 2.75rem;
+}
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.25rem;
+  display: grid;
+  width: 2.125rem;
+  height: 2.125rem;
+  place-items: center;
+  transform: translateY(-50%);
+  border-radius: 8px;
+  color: rgb(var(--c-text-muted));
+  transition:
+    color 150ms var(--ease),
+    background-color 150ms var(--ease);
+}
+.password-toggle:hover,
+.password-toggle:focus-visible {
+  background: rgb(var(--c-tint));
+  color: rgb(var(--c-accent));
+}
+/* Both icons share one cell and cross-fade, so toggling never shifts layout. */
+.password-toggle-icon {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transition: opacity 150ms var(--ease);
+}
+.password-toggle-icon[data-on="true"] {
+  opacity: 1;
+}
+
 /* Sign in: gradient with navy text (≈9:1), cyan glow, lift on hover, pressed state. */
 .login-submit {
   display: inline-flex;

@@ -93,14 +93,20 @@ describe("/api/call-flows", () => {
     expect(draft.status).toBe(400);
   });
 
-  it("test calls only go to allow-listed numbers", async () => {
-    const res = await call("/api/call-flows/f1/test-call", {
+  it("test calls only go to allow-listed numbers, picked by id", async () => {
+    const free = await call("/api/call-flows/f1/test-call", {
       method: "POST",
       role: "ADMIN",
       body: JSON.stringify({ version: 1, phone: "9812345678" }),
     });
+    expect(free.status).toBe(400);
+    const res = await call("/api/call-flows/f1/test-call", {
+      method: "POST",
+      role: "ADMIN",
+      body: JSON.stringify({ version: 1, numberId: "+919812345678" }),
+    });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/AI_CALL_FLOW_TEST_NUMBERS/);
+    expect(((await res.json()) as { error: string }).error).toMatch(/saved trial number/);
   });
 
   it("serves the built-in catalog", async () => {

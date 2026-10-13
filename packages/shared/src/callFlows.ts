@@ -170,12 +170,49 @@ export const previewCallFlowInput = z
 
 export const callFlowVersionParam = z.object({ id: z.string().min(1), version: z.coerce.number().int().min(1) });
 
+/** `numberId` is an id from GET /api/call-flows/test-numbers — never a typed-in number. */
 export const testCallFlowInput = z
   .object({
     version: z.number().int().min(1),
-    phone: z.string().trim().min(1).max(40),
+    numberId: z.string().trim().min(1).max(64),
     customerName: z.string().trim().max(100).optional().nullable(),
     gender: z.string().trim().max(20).optional().nullable(),
     followUpDetail: z.string().trim().max(500).optional().nullable(),
   })
   .strict();
+
+/* ------------------------------------------------------------------ test-call trial numbers */
+
+/** Saved trial numbers per install (AI_CALL_FLOW_TEST_NUMBERS entries don't count). */
+export const MAX_TEST_CALL_NUMBERS = 5;
+
+export const addTestCallNumberInput = z
+  .object({
+    phone: z.string().trim().min(1, "Enter a phone number").max(40),
+    label: z.string().trim().max(60).optional().nullable(),
+  })
+  .strict();
+
+export interface TestCallNumber {
+  /** "db:<id>" for a saved number, "env:<hash>" for an AI_CALL_FLOW_TEST_NUMBERS entry. */
+  id: string;
+  /** Masked for display, e.g. "+91 98XXX XXX10". */
+  masked: string;
+  label: string | null;
+  source: "saved" | "env";
+}
+
+export interface TestCallNumberList {
+  items: TestCallNumber[];
+  max: number;
+  /** True until migration 0023_ai_call_test_numbers is applied: only env numbers work. */
+  tableMissing: boolean;
+}
+
+/** "+919876543210" → "+91 98XXX XXX10"; other E.164 numbers keep their first 3 and last 2 characters. */
+export function maskTestCallNumber(phone: string): string {
+  const m = /^\+91(\d{10})$/.exec(phone);
+  if (m) return `+91 ${m[1]!.slice(0, 2)}XXX XXX${m[1]!.slice(-2)}`;
+  if (phone.length <= 6) return phone.replace(/\d/g, "X");
+  return phone.slice(0, 3) + "X".repeat(phone.length - 5) + phone.slice(-2);
+}

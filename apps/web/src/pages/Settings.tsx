@@ -9,6 +9,8 @@ import { useConfirm } from "../components/confirm";
 import { HIDEABLE_NAV_ITEMS, type HideableNavItem } from "@dispatch/shared";
 import { SIDEBAR_SETTINGS_KEY, useSidebarHiddenItems } from "../lib/sidebar";
 import { CostRatesSection } from "../components/CostRatesSection";
+import { ChangePasswordSection, UsersSection } from "../components/UserAdminSections";
+import { BrandingSection } from "../components/BrandingSection";
 
 interface ApiKey {
   id: string;
@@ -170,7 +172,13 @@ export function SettingsPage() {
 
       <SidebarMenuSection isAdmin={isAdmin} />
 
+      {isAdmin && <BrandingSection />}
+
       <CostRatesSection isAdmin={isAdmin} />
+
+      <UsersSection isAdmin={isAdmin} />
+
+      <ChangePasswordSection isAdmin={isAdmin} />
     </div>
   );
 }
