@@ -25,7 +25,8 @@ cp .env.example .env                 # set DB_HOST/PORT/NAME/USER/PASSWORD + SEE
 npm install
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS dispatch CHARACTER SET utf8mb4;"
 npm run prisma:deploy                # apply migrations
-npm run seed                         # bootstrap admin + sample data (idempotent)
+npm run db:seed:plan                 # show what the seed would create/skip (read-only)
+npm run seed                         # bootstrap admin (idempotent; needs the seed-safety vars below)
 npm run dev                          # api :4000, worker, web :5173
 ```
 
@@ -99,6 +100,11 @@ Integration tests against a real MySQL are stubbed for milestone M9 (see design 
 changes an existing user's password unless `SEED_ADMIN_RESET=true` — to recover a forgotten admin
 password, set it in `.env`, run `npm run seed` once, then set it back to `false`. A reset changes the
 password only; the role is kept.
+
+The seed refuses to run unless `SEED_EXPECTED_DATABASE` equals the database it actually connected to
+(`SELECT DATABASE()`), and it writes only when `ALLOW_DATABASE_SEED=true` is also set. Run
+`npm run db:seed:plan` first: it prints each record as create/skip and writes nothing. Sample data
+(template, list, three contacts, trigger) is added only with `SEED_SAMPLE_DATA=true` — never in production.
 
 Everything else is done by admins under **Settings**:
 

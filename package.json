@@ -21,6 +21,7 @@
     "prisma:deploy": "node scripts/prisma.mjs migrate deploy",
     "prisma:studio": "node scripts/prisma.mjs studio",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:plan": "tsx prisma/seed.ts --dry-run",
     "seed": "npm run db:seed",
     "test": "npm run test --workspace @dispatch/api",
     "typecheck": "npm-run-all typecheck:*",

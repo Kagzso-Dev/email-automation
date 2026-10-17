@@ -14,6 +14,17 @@ export interface SeedAdminDb {
 
 export type SeedAdminResult = { action: "created" | "unchanged" | "reset"; email: string; role: string };
 
+/** Read-only: what ensureAdmin() would do with the same inputs. Never writes. */
+export async function planAdmin(
+  db: { user: Pick<SeedAdminDb["user"], "findUnique"> },
+  opts: { email: string; reset: boolean },
+): Promise<{ action: "create" | "skip" | "reset"; email: string; role: string }> {
+  const email = opts.email.trim().toLowerCase();
+  const existing = await db.user.findUnique({ where: { email } });
+  if (!existing) return { action: "create", email, role: "ADMIN" };
+  return { action: opts.reset ? "reset" : "skip", email: existing.email, role: existing.role };
+}
+
 /**
  * Creates the admin only if no user has that email. An existing user's
  * password is never touched unless `reset` is true (SEED_ADMIN_RESET=true);

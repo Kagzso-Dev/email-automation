@@ -1,9 +1,15 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { buildDatabaseUrl } from "../scripts/db-url.mjs";
-import { ensureAdmin } from "./seedAdmin.js";
+import { ensureAdmin, planAdmin } from "./seedAdmin.js";
+import { checkSeedGuard } from "./seedGuard.js";
 
 const prisma = new PrismaClient({ datasourceUrl: buildDatabaseUrl() });
+
+// --dry-run: connect, check the guard, print the plan, write nothing.
+const dryRun = process.argv.includes("--dry-run");
+
+const SAMPLE_CONTACT_EMAILS = ["ada@example.com", "grace@example.com", "linus@example.com"];
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -17,7 +23,8 @@ function requireEnv(name: string): string {
   return value.trim();
 }
 
-async function verifyConnection() {
+/** Returns the database the connection actually landed on (SELECT DATABASE()). */
+async function verifyConnection(): Promise<string | null> {
   const host = process.env.DB_HOST || "localhost";
   const port = process.env.DB_PORT || "3306";
   const name = process.env.DB_NAME || "dispatch";
@@ -33,14 +40,62 @@ async function verifyConnection() {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   }
+  const [row] = await prisma.$queryRaw<{ db: string | null }[]>`SELECT DATABASE() AS db`;
   // Never logs DB_PASSWORD.
-  console.log(`✓ MySQL connection successful — ${name} @ ${host}:${port}`);
+  console.log(`✓ MySQL connection successful — ${row?.db ?? "(no database)"} @ ${host}:${port}`);
+  return row?.db ?? null;
+}
+
+/** Read-only: one line per sample record saying whether it would be created or skipped. */
+async function planSampleData(): Promise<string[]> {
+  const mark = (exists: unknown) => (exists ? "skip (exists)" : "create");
+  const lines = [
+    `template seed-welcome: ${mark(await prisma.template.findUnique({ where: { id: "seed-welcome" } }))}`,
+    `list seed-list: ${mark(await prisma.list.findUnique({ where: { id: "seed-list" } }))}`,
+  ];
+  for (const e of SAMPLE_CONTACT_EMAILS) {
+    lines.push(`contact ${e}: ${mark(await prisma.contact.findUnique({ where: { email: e } }))} (+ list membership if missing)`);
+  }
+  lines.push(`trigger user.signup: ${mark(await prisma.trigger.findUnique({ where: { eventKey: "user.signup" } }))}`);
+  return lines;
 }
 
 async function main() {
-  await verifyConnection();
+  const connectedDatabase = await verifyConnection();
+
+  const guard = checkSeedGuard({ env: process.env, connectedDatabase, dryRun });
+  if (!guard.ok) {
+    console.error(`\n✗ Seed refused: ${guard.reason}\n  Nothing was written.\n`);
+    process.exit(1);
+  }
 
   const email = requireEnv("SEED_ADMIN_EMAIL").toLowerCase();
+  const reset = process.env.SEED_ADMIN_RESET === "true";
+  const sampleData = process.env.SEED_SAMPLE_DATA === "true";
+
+  // Print the plan before any write, in both modes.
+  const adminPlan = await planAdmin(prisma, { email, reset });
+  console.log(`\nSeed plan for database "${connectedDatabase}":`);
+  console.log(
+    `  admin user ${adminPlan.email}: ` +
+      {
+        create: "create (role ADMIN)",
+        skip: `skip — already exists (${adminPlan.role}); password and role left unchanged`,
+        reset: `RESET PASSWORD — already exists (${adminPlan.role}); role kept (SEED_ADMIN_RESET=true)`,
+      }[adminPlan.action],
+  );
+  if (sampleData) {
+    for (const line of await planSampleData()) console.log(`  sample ${line}`);
+  } else {
+    console.log("  sample data: none (SEED_SAMPLE_DATA is not true)");
+  }
+
+  if (dryRun) {
+    console.log("\n✓ dry run — no changes written");
+    return;
+  }
+  console.log("");
+
   const password = requireEnv("SEED_ADMIN_PASSWORD");
 
   // Never logs the password. An existing user's password is only replaced
@@ -48,7 +103,7 @@ async function main() {
   const admin = await ensureAdmin(prisma, {
     email,
     password,
-    reset: process.env.SEED_ADMIN_RESET === "true",
+    reset,
   });
   const note = {
     created: "created",
@@ -59,7 +114,7 @@ async function main() {
 
   // Sample content (demo list, template, contacts, trigger) is only inserted
   // when SEED_SAMPLE_DATA=true. Production instances seed the admin only.
-  if (process.env.SEED_SAMPLE_DATA !== "true") {
+  if (!sampleData) {
     console.log("✓ seed complete (admin only — set SEED_SAMPLE_DATA=true for demo content)");
     return;
   }
@@ -87,7 +142,7 @@ async function main() {
     update: {},
   });
 
-  for (const [i, e] of ["ada@example.com", "grace@example.com", "linus@example.com"].entries()) {
+  for (const [i, e] of SAMPLE_CONTACT_EMAILS.entries()) {
     const c = await prisma.contact.upsert({
       where: { email: e },
       create: { email: e, firstName: e.split("@")[0], lastName: `Test${i}`, customFields: {} },
