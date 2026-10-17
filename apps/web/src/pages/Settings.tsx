@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Navigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/Layout";
@@ -49,6 +50,10 @@ export function SettingsPage() {
     mutationFn: (id: string) => api(`/api/api-keys/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["api-keys"] }),
   });
+
+  // Admin hid Settings from editors (Settings → Sidebar menu): editors opening the link go to the dashboard.
+  const hiddenForEditors = useSidebarHiddenItems().includes("settings-editors");
+  if (!isAdmin && hiddenForEditors) return <Navigate to="/" replace />;
 
   return (
     <div className="settings-page">
@@ -191,6 +196,7 @@ const SIDEBAR_ITEM_LABELS: Record<HideableNavItem, string> = {
   campaigns: "Campaigns",
   triggers: "Triggers",
   "whatsapp-inbox": "WhatsApp Inbox",
+  "settings-editors": "Settings (for editors — admins always see it)",
 };
 
 function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
@@ -240,7 +246,8 @@ function SidebarMenuSection({ isAdmin }: { isAdmin: boolean }) {
         </p>
 
         <ul className="divide-y divide-line-subtle">
-          {HIDEABLE_NAV_ITEMS.map((item) => {
+          {/* The "Settings (for editors)" switch is admin-only — editors don't see that row. */}
+          {HIDEABLE_NAV_ITEMS.filter((item) => isAdmin || item !== "settings-editors").map((item) => {
             const shown = !hidden.includes(item);
             return (
               <li key={item} className="flex items-center justify-between gap-3 py-3">

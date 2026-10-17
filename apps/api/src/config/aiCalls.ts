@@ -28,7 +28,7 @@ export const aiCallsConfig = {
   enabled: ["true", "1", "yes"].includes((process.env.ENABLE_AI_CALLS ?? "").trim().toLowerCase()),
   voiceBackendUrl: str(process.env.VOICE_BACKEND_URL)?.replace(/\/+$/, ""),
   voiceBackendApiKey: str(process.env.VOICE_BACKEND_API_KEY),
-  /** Optional: a specific agent id in the voice backend. Blank = the agent named VOICE_AGENT_NAME (default Nila). */
+  /** Optional: a specific agent id in the voice backend. Blank = the agent named VOICE_AGENT_NAME (default Nila; the names Radhi and Kayal also still work). */
   voiceAgentId: intIn(process.env.VOICE_AGENT_ID, 0, 0, Number.MAX_SAFE_INTEGER) || undefined,
   voiceAgentName: str(process.env.VOICE_AGENT_NAME) ?? "Nila",
   /** Shared secret the voice backend signs status callbacks with (HMAC-SHA256). */

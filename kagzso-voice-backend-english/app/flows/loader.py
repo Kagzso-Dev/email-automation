@@ -75,7 +75,7 @@ def agent_fields(flow: CallFlow, name: str, version: int, digest: str) -> Dict[s
         "language": flow.language,
         "stt_provider": "sarvam",
         "llm_provider": "gemini",
-        "tts_provider": "cartesia",
+        "tts_provider": "sarvam",
         "voice_id": flow.voice_id or builtin.voice_id,
         "active": True,
     }

@@ -1,5 +1,5 @@
-// Send Queue → "AI Call follow-ups". ADMIN-only; 404 while ENABLE_AI_CALLS is off.
-// Nothing is sent from here until an admin approves; approval hands the
+// Send Queue → "AI Call follow-ups". ADMIN and EDITOR; 404 while ENABLE_AI_CALLS is off.
+// Nothing is sent from here until an admin or editor approves; approval hands the
 // follow-up to the existing WhatsApp batch sender or AI call run.
 //
 //   GET   /api/ai-call-followups               list (status filter, page)
@@ -29,7 +29,7 @@ function featureGate(_req: Request, _res: Response, next: NextFunction) {
   if (!aiCallsConfig.enabled) return next(new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found"));
   next();
 }
-aiCallFollowupsRouter.use(authRequired, featureGate, requireRole("ADMIN"), limiter);
+aiCallFollowupsRouter.use(authRequired, featureGate, requireRole("ADMIN", "EDITOR"), limiter);
 
 function toHttp(err: unknown): never {
   if (err instanceof FollowupError) {

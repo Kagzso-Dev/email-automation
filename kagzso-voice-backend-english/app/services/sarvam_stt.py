@@ -45,8 +45,31 @@ class STTProvider(ABC):
     async def transcribe(self, audio_data: bytes, filename: str = "audio.wav", content_type: str = "audio/wav") -> STTResult:
         """Transcribe a complete audio file (WAV recommended, 16 kHz)."""
 
+    async def prewarm(self) -> None:
+        """Open the connection ahead of the next turn (default: nothing to do)."""
+        return None
+
+    def open_stream(self) -> Optional["STTStream"]:
+        """A streaming session for one utterance, or None if streaming is unavailable."""
+        return None
+
     async def aclose(self) -> None:  # pragma: no cover - default no-op
         return None
+
+
+class STTStream(ABC):
+    """One utterance streamed while the customer speaks; `finish` returns its transcript."""
+
+    @abstractmethod
+    def feed(self, pcm8k: bytes) -> None:
+        """Queue PCM16 8 kHz audio (never blocks the media loop)."""
+
+    @abstractmethod
+    async def finish(self, timeout: float) -> STTResult:
+        """End of speech: flush and return the final transcript (STTError on failure)."""
+
+    @abstractmethod
+    async def aclose(self) -> None: ...
 
 
 def _error_from_response(resp: httpx.Response) -> STTError:
@@ -77,7 +100,22 @@ class SarvamSTT(STTProvider):
         self._client = client or httpx.AsyncClient(
             base_url=self.cfg.SARVAM_BASE_URL,
             timeout=httpx.Timeout(self.cfg.SARVAM_TIMEOUT_SECONDS, connect=5.0),
+            limits=self.cfg.http_limits(),
         )
+
+    async def prewarm(self) -> None:
+        # No API key is sent: any response leaves a warm TLS connection in the pool.
+        try:
+            await self._client.head("/", timeout=3.0)
+        except Exception:
+            pass
+
+    def open_stream(self) -> Optional[STTStream]:
+        if not self.cfg.STT_STREAMING or not self.cfg.SARVAM_API_KEY.get_secret_value():
+            return None
+        from app.services.sarvam_stt_stream import SarvamSTTStream
+
+        return SarvamSTTStream(self.cfg)
 
     async def transcribe(self, audio_data: bytes, filename: str = "audio.wav", content_type: str = "audio/wav") -> STTResult:
         key = self.cfg.SARVAM_API_KEY.get_secret_value()

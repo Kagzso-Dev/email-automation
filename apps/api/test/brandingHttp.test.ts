@@ -64,8 +64,19 @@ describe("/api/settings/branding", () => {
   it("requires sign-in; any signed-in user can read; defaults when nothing is saved", async () => {
     expect((await call("/api/settings/branding")).status).toBe(401);
     const body = await read("EDITOR");
-    expect(body.labels).toMatchObject({ appName: "Dispatch", "section.main": "Main", "nav.sendQueue": "Send Queue" });
+    expect(body.labels).toEqual({ appName: "Dispatch" });
     expect(body.customized).toEqual([]);
+  });
+
+  it("public /api/branding: no sign-in needed (login page), app name only, follows saves", async () => {
+    const before = await call("/api/branding");
+    expect(before.status).toBe(200);
+    expect(await before.json()).toEqual({ labels: { appName: "Dispatch" }, customized: [] });
+    await call("/api/settings/branding", { method: "PUT", role: "ADMIN", json: { labels: { appName: "Kagzso" } } });
+    expect(await (await call("/api/branding")).json()).toEqual({ labels: { appName: "Kagzso" }, customized: ["appName"] });
+    // read-only: writing through the public path is refused and changes nothing
+    expect((await call("/api/branding", { method: "PUT", json: { labels: { appName: "X" } } })).ok).toBe(false);
+    expect(rows.get("appName")?.value).toBe("Kagzso");
   });
 
   it("non-admins get 403 on save and reset, and nothing changes", async () => {
@@ -75,18 +86,17 @@ describe("/api/settings/branding", () => {
     expect(rows.size).toBe(0);
   });
 
-  it("admin saves; every user then sees the new name; the user id is recorded", async () => {
+  it("admin saves; every user (the sidebar) then gets the new name; the user id is recorded", async () => {
     const res = await call("/api/settings/branding", {
       method: "PUT",
       role: "ADMIN",
-      json: { labels: { appName: "  Acme CRM ", "nav.contacts": "People" } },
+      json: { labels: { appName: "  Acme CRM " } },
     });
     expect(res.status).toBe(200);
+    expect(((await res.json()) as { labels: { appName: string } }).labels.appName).toBe("Acme CRM");
     const body = await read("EDITOR");
     expect(body.labels.appName).toBe("Acme CRM");
-    expect(body.labels["nav.contacts"]).toBe("People");
-    expect(body.labels["nav.dashboard"]).toBe("Dashboard");
-    expect(body.customized.sort()).toEqual(["appName", "nav.contacts"]);
+    expect(body.customized).toEqual(["appName"]);
     expect(rows.get("appName")).toEqual({ key: "appName", value: "Acme CRM", updatedBy: "u-ADMIN" });
   });
 
@@ -96,13 +106,13 @@ describe("/api/settings/branding", () => {
     expect(rows.size).toBe(0);
   });
 
-  it("admin resets one key, then all", async () => {
-    await call("/api/settings/branding", { method: "PUT", role: "ADMIN", json: { labels: { appName: "Acme", "nav.settings": "Admin" } } });
-    const one = await call("/api/settings/branding?key=appName", { method: "DELETE", role: "ADMIN" });
-    expect(one.status).toBe(200);
-    expect((await read()).labels).toMatchObject({ appName: "Dispatch", "nav.settings": "Admin" });
+  it("admin resets by key, and resets all", async () => {
+    await call("/api/settings/branding", { method: "PUT", role: "ADMIN", json: { labels: { appName: "Acme" } } });
+    expect((await call("/api/settings/branding?key=appName", { method: "DELETE", role: "ADMIN" })).status).toBe(200);
+    expect((await read()).labels.appName).toBe("Dispatch");
+    await call("/api/settings/branding", { method: "PUT", role: "ADMIN", json: { labels: { appName: "Acme" } } });
     expect((await call("/api/settings/branding", { method: "DELETE", role: "ADMIN" })).status).toBe(200);
-    expect((await read()).customized).toEqual([]);
+    expect(await read()).toEqual({ labels: { appName: "Dispatch" }, customized: [] });
   });
 
   it("rejects HTML, over-length values and unknown keys with 400", async () => {
@@ -110,7 +120,7 @@ describe("/api/settings/branding", () => {
       { appName: "<script>alert(1)</script>" },
       { appName: "<b>Acme</b>" },
       { appName: "a".repeat(25) },
-      { "nav.contacts": "a".repeat(31) },
+      { appName: "Acme", "nav.contacts": "People" },
       { appName: "" },
       { madeUp: "x" },
     ]) {
@@ -126,6 +136,7 @@ describe("/api/settings/branding", () => {
     const res = await call("/api/settings/branding", { role: "EDITOR" });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { labels: Record<string, string> }).labels.appName).toBe("Dispatch");
+    expect((await call("/api/branding")).status).toBe(200);
     const put = await call("/api/settings/branding", { method: "PUT", role: "ADMIN", json: { labels: { appName: "Acme" } } });
     expect(put.status).toBe(503);
     expect(((await put.json()) as { error: string }).error).toMatch(/prisma:deploy/);

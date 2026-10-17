@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/Layout";
 import { EmptyState, ErrorNote, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
@@ -83,6 +84,7 @@ export function TemplatesPage() {
     queryFn: () => api<{ items: Template[] }>("/api/templates"),
   });
   const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
+  const isAdmin = useAuth().user?.role === "ADMIN"; // editors: view only
 
   const selected =
     selectedId === "new"
@@ -94,9 +96,11 @@ export function TemplatesPage() {
       <PageHeader
         title="Templates"
         action={
-          <button className="btn-primary" onClick={() => setSelectedId("new")}>
-            New template
-          </button>
+          isAdmin ? (
+            <button className="btn-primary" onClick={() => setSelectedId("new")}>
+              New template
+            </button>
+          ) : undefined
         }
       />
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
@@ -138,6 +142,7 @@ export function TemplatesPage() {
             key={selectedId}
             initial={selected}
             isNew={selectedId === "new"}
+            readOnly={!isAdmin}
             onClose={() => setSelectedId(null)}
             onSaved={(id) => {
               qc.invalidateQueries({ queryKey: ["templates"] });
@@ -149,7 +154,7 @@ export function TemplatesPage() {
             }}
           />
         ) : (
-          <EmptyState>Select a template or create a new one.</EmptyState>
+          <EmptyState>{isAdmin ? "Select a template or create a new one." : "Select a template to view it."}</EmptyState>
         )}
       </div>
     </div>
@@ -159,12 +164,15 @@ export function TemplatesPage() {
 function TemplateEditor({
   initial,
   isNew,
+  readOnly = false,
   onClose,
   onSaved,
   onDeleted,
 }: {
   initial: Partial<Template>;
   isNew: boolean;
+  /** Editors: fields disabled; Save / Delete / Send test hidden. Preview still works. */
+  readOnly?: boolean;
   onClose: () => void;
   onSaved: (id: string) => void;
   onDeleted: () => void;
@@ -296,7 +304,7 @@ function TemplateEditor({
     <div className="grid gap-4 xl:grid-cols-2">
       <div className="card">
         <div className="mb-3 flex items-center justify-between gap-4">
-          <div className="text-sm font-semibold">{isNew ? "New template" : "Edit template"}</div>
+          <div className="text-sm font-semibold">{isNew ? "New template" : readOnly ? "View template" : "Edit template"}</div>
           <button
             type="button"
             onClick={onClose}
@@ -306,6 +314,7 @@ function TemplateEditor({
             <Icon name="close" size={18} />
           </button>
         </div>
+        <fieldset disabled={readOnly} className="m-0 min-w-0 border-0 p-0">
         <label className="label">Name</label>
         <input
           className="input mb-3"
@@ -655,20 +664,25 @@ function TemplateEditor({
           </div>
         )}
 
+        </fieldset>
+
         {save.error ? <ErrorNote error={save.error} /> : null}
         <div className="mt-2 flex flex-wrap gap-2">
-          <button
-            className="btn-primary"
-            disabled={save.isPending || uploadImage.isPending}
-            onClick={() => save.mutate()}
-          >
-            {uploadImage.isPending ? "Uploading image…" : isNew ? "Create" : "Save"}
-          </button>
+          {!readOnly && (
+            <button
+              className="btn-primary"
+              disabled={save.isPending || uploadImage.isPending}
+              onClick={() => save.mutate()}
+            >
+              {uploadImage.isPending ? "Uploading image…" : isNew ? "Create" : "Save"}
+            </button>
+          )}
           {!isNew && (
             <>
               <button className="btn-ghost" onClick={() => doPreview.mutate()}>
                 Preview
               </button>
+              {!readOnly && (
               <button
                 className="btn-danger"
                 onClick={async () => {
@@ -682,12 +696,13 @@ function TemplateEditor({
               >
                 Delete
               </button>
+              )}
             </>
           )}
         </div>
         {del.error ? <div className="mt-2"><ErrorNote error={del.error} /></div> : null}
 
-        {!isNew && (
+        {!isNew && !readOnly && (
           <div className="mt-4 border-t border-line pt-3">
             <label className="label">Send test to</label>
             <div className="flex flex-col gap-2 sm:flex-row">

@@ -35,7 +35,7 @@ function gate(req: Request): ExportChannel {
   const channel = parsed.data.channel;
   if (channel === "ai-followups") {
     if (!aiCallsConfig.enabled) throw new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found");
-    if (req.user?.role !== "ADMIN") throw forbidden("Requires role: ADMIN");
+    if (req.user?.role !== "ADMIN" && req.user?.role !== "EDITOR") throw forbidden("Requires role: ADMIN or EDITOR");
   }
   return channel;
 }

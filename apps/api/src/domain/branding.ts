@@ -1,4 +1,4 @@
-// Settings → Branding & Labels: display-only names stored in branding_settings.
+// Settings → Branding: the display-only app name, stored in branding_settings.
 //
 // Only keys an admin changed have a row; a value equal to its default deletes the
 // row, so an empty table always means today's text. Reading never fails: a
@@ -89,7 +89,7 @@ export async function setBranding(input: BrandingInput, userId: string): Promise
   } catch (err) {
     rethrow(err);
   }
-  logger.info({ by: userId, keys: entries.map(([k]) => k) }, "branding labels saved");
+  logger.info({ by: userId, keys: entries.map(([k]) => k) }, "branding saved");
   return getBranding();
 }
 
@@ -100,6 +100,6 @@ export async function resetBranding(userId: string, key?: BrandingKey): Promise<
   } catch (err) {
     rethrow(err);
   }
-  logger.info({ by: userId, keys: key ? [key] : "all" }, "branding labels reset");
+  logger.info({ by: userId, keys: key ? [key] : "all" }, "branding reset");
   return getBranding();
 }

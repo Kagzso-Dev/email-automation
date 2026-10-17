@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useToast } from "./toast";
 import { Badge, ErrorNote, Modal, Spinner, type BadgeTone } from "./ui";
+import { useBranding } from "../lib/branding";
 
 /**
  * Meta → Dispatch: templates that exist in Meta (WhatsApp Manager) but aren't
@@ -44,6 +45,7 @@ export function MetaSyncModal({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 function SyncBody({ onClose }: { onClose: () => void }) {
+  const { appName } = useBranding();
   const qc = useQueryClient();
   const toast = useToast();
   const list = useMetaSyncCandidates(true);
@@ -86,7 +88,7 @@ function SyncBody({ onClose }: { onClose: () => void }) {
   return (
     <div>
       <p className="mb-3 text-sm text-slate-550">
-        These templates exist in Meta but not in Dispatch. Importing adds them with the exact Meta name and language;{" "}
+        These templates exist in Meta but not in {appName}. Importing adds them with the exact Meta name and language;{" "}
         <code>{"{{1}}"}</code> is filled with the contact's first name and <code>{"{{2}}"}</code> with the business name.
         Existing templates are not changed.
       </p>

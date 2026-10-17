@@ -216,10 +216,12 @@ export function CallBillsTile({
   costs,
   isLoading,
   error,
+  isAdmin,
 }: {
   costs: DashboardCosts | undefined;
   isLoading: boolean;
   error: unknown;
+  isAdmin: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const c = costs?.calls;
@@ -241,7 +243,7 @@ export function CallBillsTile({
   if (!c.ratesSet || c.total === null) {
     return (
       <CostShell label="Call bills" title={tooltip}>
-        <SetRates isAdmin what="for calls" />
+        <SetRates isAdmin={isAdmin} what="for calls" />
       </CostShell>
     );
   }

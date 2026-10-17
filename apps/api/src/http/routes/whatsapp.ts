@@ -216,6 +216,7 @@ whatsappRouter.get(
 // deleting it (rows, batches and messages are kept). Stored in the settings table.
 whatsappRouter.post(
   "/templates/:id/archive",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     if (!(await prisma.whatsAppTemplate.findUnique({ where: { id }, select: { id: true } }))) throw notFound("WhatsApp template");
@@ -226,6 +227,7 @@ whatsappRouter.post(
 
 whatsappRouter.post(
   "/templates/:id/restore",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     await setTemplateArchived(id, false);
@@ -235,6 +237,7 @@ whatsappRouter.post(
 
 whatsappRouter.post(
   "/templates",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const body = createWhatsAppTemplateInput.parse(req.body);
     res.status(201).json(await prisma.whatsAppTemplate.create({ data: body }));
@@ -263,6 +266,7 @@ whatsappRouter.get(
 
 whatsappRouter.put(
   "/templates/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = updateWhatsAppTemplateInput.parse(req.body);
@@ -272,6 +276,7 @@ whatsappRouter.put(
 
 whatsappRouter.delete(
   "/templates/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const inUse = await prisma.whatsAppTemplate.findUnique({

@@ -79,12 +79,12 @@ statsRouter.get(
   }),
 );
 
-// Same gates as /api/ai-calls: 404 while ENABLE_AI_CALLS is off, admins only.
+// Same gates as /api/ai-calls: 404 while ENABLE_AI_CALLS is off, admins and editors.
 statsRouter.get(
   "/dashboard/calls",
   (_req, _res, next) =>
     aiCallsConfig.enabled ? next() : next(new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found")),
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EDITOR"),
   wrap(async (req, res) => {
     res.json(await callsDashboard(spanOf(req.query.days)));
   }),
@@ -96,7 +96,7 @@ statsRouter.get(
   "/dashboard/costs",
   wrap(async (req, res) => {
     res.json(
-      await dashboardCosts(spanOf(req.query.days), { includeCalls: aiCallsConfig.enabled && req.user?.role === "ADMIN" }),
+      await dashboardCosts(spanOf(req.query.days), { includeCalls: aiCallsConfig.enabled && (req.user?.role === "ADMIN" || req.user?.role === "EDITOR") }),
     );
   }),
 );

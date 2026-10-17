@@ -1,4 +1,4 @@
-"""Development-only provider checks: POST /api/test/{llm,sarvam,cartesia,plivo}
+"""Development-only provider checks: POST /api/test/{llm,sarvam,tts,plivo}
 
 Protected by X-API-Key and disabled (404) when APP_ENV=production. They make
 one real, minimal request to each provider and report success + latency.
@@ -15,7 +15,7 @@ from app.core.security import rate_limit, require_api_key, require_dev_environme
 from app.schemas.calls import TestTextRequest
 from app.services import audio_service as audio
 from app.services.call_service import get_providers
-from app.services.cartesia_tts import TTSError
+from app.services.tts import TTSError
 from app.services.llm_service import DEFAULT_AGENT_PROMPT, LLMError
 from app.services.plivo_service import PlivoError
 from app.services.sarvam_stt import STTError
@@ -46,8 +46,8 @@ async def test_llm(body: TestTextRequest = TestTextRequest(text="Hello?")) -> di
             "latency_ms": int((time.monotonic() - t0) * 1000), "reply": reply}
 
 
-@router.post("/cartesia")
-async def test_cartesia(body: TestTextRequest = TestTextRequest()) -> dict:
+@router.post("/tts")
+async def test_tts(body: TestTextRequest = TestTextRequest()) -> dict:
     tts = get_providers().tts
     t0 = time.monotonic()
     first_byte_ms = None
@@ -58,8 +58,8 @@ async def test_cartesia(body: TestTextRequest = TestTextRequest()) -> dict:
                 first_byte_ms = int((time.monotonic() - t0) * 1000)
             total += len(chunk)
     except TTSError as exc:
-        raise _fail("cartesia", exc) from None
-    return {"provider": "cartesia", "model": settings.CARTESIA_TTS_MODEL, "ok": total > 0,
+        raise _fail("sarvam_tts", exc) from None
+    return {"provider": "sarvam", "model": settings.SARVAM_TTS_MODEL, "speaker": settings.SARVAM_TTS_SPEAKER, "ok": total > 0,
             "first_audio_ms": first_byte_ms, "total_ms": int((time.monotonic() - t0) * 1000),
             "audio_bytes": total, "audio_seconds": round(audio.mulaw_duration_seconds(total), 2),
             "format": "pcm_mulaw 8000Hz (Plivo-ready)"}
@@ -67,14 +67,14 @@ async def test_cartesia(body: TestTextRequest = TestTextRequest()) -> dict:
 
 @router.post("/sarvam")
 async def test_sarvam(body: TestTextRequest = TestTextRequest()) -> dict:
-    """Round trip: Cartesia speaks `text` (if configured) -> telephony audio -> Sarvam STT.
-    Without Cartesia, sends 1 s of silence just to verify authentication."""
+    """Round trip: Sarvam TTS speaks `text` (if configured) -> telephony audio -> Sarvam STT.
+    Without TTS, sends 1 s of silence just to verify authentication."""
     providers = get_providers()
     source = "silence"
-    if settings.cartesia_configured():
+    if settings.tts_configured():
         try:
             mulaw = await providers.tts.synthesize(body.text)
-            source = "cartesia"
+            source = "sarvam_tts"
         except TTSError:
             mulaw = audio.pcm16_to_mulaw(b"\x00\x00" * 8000)
     else:
@@ -85,7 +85,7 @@ async def test_sarvam(body: TestTextRequest = TestTextRequest()) -> dict:
     except STTError as exc:
         raise _fail("sarvam", exc) from None
     return {"provider": "sarvam", "model": settings.SARVAM_STT_MODEL, "ok": True, "audio_source": source,
-            "latency_ms": int((time.monotonic() - t0) * 1000), "expected": body.text if source == "cartesia" else "",
+            "latency_ms": int((time.monotonic() - t0) * 1000), "expected": body.text if source != "silence" else "",
             "result": result}
 
 

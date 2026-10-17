@@ -1,5 +1,5 @@
 // GET /api/dashboard/calls/cost-by-flow?days=7|14|30 — new, read-only.
-// Same guards as /api/dashboard/calls: 404 while ENABLE_AI_CALLS is off, ADMIN only.
+// Same guards as /api/dashboard/calls: 404 while ENABLE_AI_CALLS is off, ADMIN and EDITOR.
 
 import { Router } from "express";
 import { aiCallsConfig } from "../../config/aiCalls.js";
@@ -15,7 +15,7 @@ callCostByFlowRouter.get(
   authRequired,
   (_req, _res, next) =>
     aiCallsConfig.enabled ? next() : next(new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found")),
-  requireRole("ADMIN"),
+  requireRole("ADMIN", "EDITOR"),
   wrap(async (req, res) => {
     const span = parseSpan(req.query.days);
     if (!span) throw badRequest("days must be 7, 14 or 30");

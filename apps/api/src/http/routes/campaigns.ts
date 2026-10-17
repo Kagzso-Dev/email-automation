@@ -24,6 +24,7 @@ campaignsRouter.get(
 
 campaignsRouter.post(
   "/",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const body = createCampaignInput.parse(req.body);
     if (body.cronExpression) assertValidCron(body.cronExpression);
@@ -58,6 +59,7 @@ campaignsRouter.get(
 
 campaignsRouter.put(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = updateCampaignInput.parse(req.body);
@@ -73,6 +75,7 @@ campaignsRouter.put(
 
 campaignsRouter.post(
   "/:id/schedule",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const c = await prisma.campaign.findUnique({ where: { id } });
@@ -91,6 +94,7 @@ campaignsRouter.post(
 
 campaignsRouter.post(
   "/:id/pause",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const c = await prisma.campaign.findUnique({ where: { id } });
@@ -119,6 +123,7 @@ campaignsRouter.post(
 
 campaignsRouter.delete(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const c = await prisma.campaign.findUnique({ where: { id } });

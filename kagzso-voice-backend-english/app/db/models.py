@@ -79,7 +79,7 @@ class Agent(Base):
     language: Mapped[str] = mapped_column(String(16), default="en")
     stt_provider: Mapped[str] = mapped_column(String(32), default="sarvam")
     llm_provider: Mapped[str] = mapped_column(String(32), default="gemini")
-    tts_provider: Mapped[str] = mapped_column(String(32), default="cartesia")
+    tts_provider: Mapped[str] = mapped_column(String(32), default="sarvam")
     voice_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -39,6 +39,7 @@ def test_build_call_variables_keeps_followup_and_dispatch_ids():
 
 def test_build_call_variables_without_followup_matches_previous_shape():
     v = llm.build_call_variables("Arun", None, PHONE, company_name="ABC")
+    assert v.pop("time_greeting") in ("Good morning", "Good afternoon", "Good evening")  # fixed when placed
     assert v == {"customer_name": "Arun", "contact_name": "Arun", "gender": "unknown", "company_name": "ABC",
                  "business_type": None, "phone_number": PHONE}
 

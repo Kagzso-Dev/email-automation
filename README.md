@@ -173,12 +173,14 @@ the voice backend (`POST /api/webhooks/ai-calls`) and a poll of the voice backen
 call is in flight, so a lost callback never stalls a run. Only `ADMIN` users can start calls; only
 one run can be active at a time; phone numbers are masked in logs.
 
-Calls run the voice backend's standard **Nila** flow (`VOICE_AGENT_NAME=Nila`, the default): *"Hi, is
-this Raagul?"* → identity → *"Thank you sir. This is Nila from Kagzso AI and Automation… one minute?"* →
-short intro → the repetitive-work question → *"useful for your business?"* → close (sir / madam
-only from the given gender; do-not-call always wins). Nila needs a `customer_name` — rows without
-one fail with a clear error. Set `VOICE_AGENT_NAME=Follow-up` instead to use the follow-up agent,
-which greets *"Hello Mr. Ragul, this is Nila from Kagzso AI and Automation…"* and opens with
+Calls run the voice backend's standard **Nila** flow (`VOICE_AGENT_NAME=Nila`, the default; the names
+`Radhi` and `Kayal` also still work): *"Hi sir, Good afternoon."* → after a 1-second pause, or as soon as the customer
+says anything, *"Am I speaking with Raagul, sir?"* → *"Thank you, sir. This is Nila from Kexo AI and
+Automation… one minute?"* → short intro → the repetitive-work question → *"useful for your business?"* →
+close (sir / madam from the given gender, otherwise `CALL_DEFAULT_TITLE`; do-not-call always wins). Nila
+needs a `customer_name` — rows without one fail with a clear error. Set `VOICE_AGENT_NAME=Follow-up`
+instead to use the follow-up agent, which greets *"Hello Mr. Ragul, this is Nila from Kagzso AI and
+Automation…"* and opens with
 *"I'm calling regarding: <follow_up_detail>"*.
 
 ### Setup
@@ -431,3 +433,19 @@ follow-ups tab.
   (`logo-512.png`, `logo-128.png`, `logo-64.png`, `favicon.ico`, `favicon-16.png`, `favicon-32.png`,
   `apple-touch-icon.png`). To change the logo, replace those files with the same names and bump the
   `?v=` number in `Logo.tsx` and `apps/web/index.html` so browsers fetch the new ones.
+- **App name (Settings → Branding, admins only):** changes the app name everywhere it is shown on
+  screen, for everyone: sidebar header, mobile top bar, browser tab, login page and the in-app
+  sentences that mention the app. 1–24 characters: letters, numbers, spaces and `. , - _ & ' ( ) ! ?`
+  (HTML is stripped in the form and rejected by the API). The panel has a live preview and an
+  unsaved-changes warning. Each browser remembers the last name it saw, so a refresh shows the new name
+  immediately (no "Dispatch" flash). It is display text only: the email sender name (`EMAIL_FROM`),
+  calendar invites, WhatsApp, call scripts, routes and code keep "Dispatch". API:
+  `GET /api/branding` (public, read-only, app name only, used by the login page),
+  `GET /api/settings/branding` (any signed-in user), and `PUT` with `{ "labels": { "appName": "…" } }`
+  or `DELETE` (optionally `?key=appName`) on `/api/settings/branding` for admins only (403 otherwise).
+  Saves are logged with the admin's user id and the key name. Setup: stop the dev servers with
+  `npm run dev:kill`, then `npm run prisma:deploy` (`0024_branding_settings`: one new table,
+  `branding_settings`) and `npm run prisma:generate`. Until then the app shows "Dispatch" and saving
+  says a database update is needed (never a 500). Rollback: run
+  `prisma/migrations/0024_branding_settings/down.sql`, then
+  `npx prisma migrate resolve --rolled-back 0024_branding_settings`.

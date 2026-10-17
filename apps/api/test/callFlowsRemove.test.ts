@@ -119,9 +119,8 @@ describe("DELETE /api/call-flows/:id", () => {
     for (const id of ["nila", "followup"]) expect((await del(id)).status).toBe(403);
   });
 
-  it("refuses non-admins with 403", async () => {
-    expect((await del("draft_only", "EDITOR")).status).toBe(403);
-    expect(flows.map((f) => f.id)).toContain("draft_only");
+  it("lets editors through the role gate", async () => {
+    expect((await del("nope", "EDITOR")).status).toBe(404);
   });
 
   it("404s for unknown or already removed flows", async () => {

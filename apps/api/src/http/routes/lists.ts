@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { createListInput, idParam, listMembersInput, updateListInput } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
-import { authRequired } from "../middleware/auth.js";
+import { authRequired, requireRole } from "../middleware/auth.js";
 import { badRequest, notFound, wrap } from "../errors.js";
 
 const memberParam = z.object({ id: z.string().min(1), contactId: z.string().min(1) });
@@ -23,6 +23,7 @@ listsRouter.get(
 
 listsRouter.post(
   "/",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const body = createListInput.parse(req.body);
     const list = await prisma.list.create({ data: body });
@@ -48,6 +49,7 @@ listsRouter.get(
 
 listsRouter.put(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = updateListInput.parse(req.body);
@@ -57,6 +59,7 @@ listsRouter.put(
 
 listsRouter.delete(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     await prisma.list.delete({ where: { id } });
@@ -83,6 +86,7 @@ listsRouter.get(
 
 listsRouter.post(
   "/:id/members",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id: listId } = idParam.parse(req.params);
     const body = listMembersInput.parse(req.body);
@@ -117,6 +121,7 @@ listsRouter.post(
 // membership existed. Returns the fresh member count for the caller's UI.
 listsRouter.delete(
   "/:id/members/:contactId",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id: listId, contactId } = memberParam.parse(req.params);
     await prisma.listMembership.deleteMany({ where: { listId, contactId } });

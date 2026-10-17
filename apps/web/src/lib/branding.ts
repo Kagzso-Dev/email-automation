@@ -10,23 +10,48 @@ export interface BrandingView {
   customized: BrandingKey[];
 }
 
+/** Last app name this browser saw, so a refresh shows it at once (no "Dispatch" flash). */
+const APP_NAME_CACHE = "dispatch:app-name";
+
+export function cachedAppName(): string {
+  try {
+    return resolveBranding({ appName: localStorage.getItem(APP_NAME_CACHE) }).appName;
+  } catch {
+    return BRANDING_DEFAULTS.appName;
+  }
+}
+
+export function rememberAppName(appName: string) {
+  try {
+    if (appName === BRANDING_DEFAULTS.appName) localStorage.removeItem(APP_NAME_CACHE);
+    else localStorage.setItem(APP_NAME_CACHE, appName);
+  } catch {
+    /* storage unavailable — non-fatal */
+  }
+}
+
 /**
- * Workspace display names (Settings → Branding & Labels). Loaded once per
- * session; saving writes the new value into this cache so the sidebar, tab
- * title and headings update immediately. While loading, or on any failure, the
- * built-in default text is used — the UI looks exactly as before.
+ * Workspace app name (Settings → Branding), from the public read-only
+ * /api/branding so the login page shows it too. Until the server answers, the
+ * name this browser last saw is used; with nothing remembered (or if the API
+ * fails) it's the default "Dispatch". Saving in Settings writes this cache, so
+ * every place updates immediately.
  */
 export function useBranding(): BrandingLabels {
   const q = useQuery({
     queryKey: BRANDING_SETTINGS_KEY,
-    queryFn: () => api<BrandingView>("/api/settings/branding"),
+    queryFn: async () => {
+      const v = await api<BrandingView>("/api/branding");
+      rememberAppName(resolveBranding(v.labels).appName);
+      return v;
+    },
     staleTime: Infinity,
     retry: 1,
   });
-  return q.isError || !q.data ? { ...BRANDING_DEFAULTS } : resolveBranding(q.data.labels);
+  return q.data ? resolveBranding(q.data.labels) : { appName: cachedAppName() };
 }
 
-/** Browser tab title follows the app name (index.html keeps the default for first paint). */
+/** Browser tab title follows the app name (main.tsx sets it before first paint). */
 export function useDocumentTitle(appName: string) {
   useEffect(() => {
     document.title = appName;

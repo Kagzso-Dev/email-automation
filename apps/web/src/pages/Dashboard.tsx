@@ -70,7 +70,7 @@ export function DashboardPage() {
   const [range, setRange] = useState(14);
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
-  // Same rules as the sidebar: calls are admin-only behind ENABLE_AI_CALLS, Call Flows also
+  // Same rules as the sidebar: calls and Call Flows (admins + editors) behind ENABLE_AI_CALLS; Call Flows also
   // needs the flow editor; a page hidden in Settings → Sidebar menu loses its links here (numbers stay).
   const aiCalls = useAiCallsConfig();
   const callsAllowed = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
@@ -292,7 +292,7 @@ export function DashboardPage() {
             error={callsDash.error}
             showCustomersLink={!hidden.has("ai-call-customers")}
             showFlowsLink={showFlowsLink}
-            costTile={<CallBillsTile costs={costs.data} isLoading={costs.isLoading} error={costs.error} />}
+            costTile={<CallBillsTile costs={costs.data} isLoading={costs.isLoading} error={costs.error} isAdmin={isAdmin} />}
           />
         )}
       </div>

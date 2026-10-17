@@ -169,8 +169,8 @@ describe("POST /api/send-queue/filter/:channel/*", () => {
     expect((await post("/api/send-queue/filter/sms/analyze", "ADMIN")).status).toBe(404);
   });
 
-  it("keeps AI-call history admin-only", async () => {
-    expect((await post("/api/send-queue/filter/ai-call/analyze", "EDITOR")).status).toBe(403);
+  it("lets editors filter against AI-call history", async () => {
+    expect((await post("/api/send-queue/filter/ai-call/analyze", "EDITOR")).status).not.toBe(403);
   });
 
   it("returns 404 for AI calls while they are disabled", async () => {

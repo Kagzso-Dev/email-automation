@@ -23,15 +23,15 @@ def test_ready_reports_without_secrets(client):
     assert body["status"] == "ready" and body["mysql"] == "ok" and body["active_calls"] == 0
     assert "redis" not in body
     assert body["providers"] == {"telephony": "configured", "public_base_url": "configured", "sarvam": "configured",
-                                 "cartesia": "configured", "llm": "configured"}
+                                 "tts": "configured", "llm": "configured"}
     for secret in settings.secret_values():
         assert secret not in r.text
 
 
 def test_ready_flags_missing_provider(client, monkeypatch):
-    monkeypatch.setattr(settings, "CARTESIA_VOICE_ID", "")
+    monkeypatch.setattr(settings, "SARVAM_TTS_SPEAKER", "")
     r = client.get("/ready")
-    assert r.status_code == 503 and r.json()["providers"]["cartesia"] == "missing"
+    assert r.status_code == 503 and r.json()["providers"]["tts"] == "missing"
 
 
 # ------------------------------------------------------------ default agent
@@ -156,10 +156,10 @@ def test_dev_endpoints_protected(client, auth):
     r = client.post("/api/test/llm", json={"text": "Hello?"}, headers=auth)
     assert r.status_code == 200 and r.json()["ok"] and "Priya" in r.json()["reply"]
     assert client.post("/api/test/plivo", headers=auth).json()["ok"] is True
-    r = client.post("/api/test/cartesia", json={"text": "Hello."}, headers=auth)
+    r = client.post("/api/test/tts", json={"text": "Hello."}, headers=auth)
     assert r.json()["audio_bytes"] > 0
     r = client.post("/api/test/sarvam", json={"text": "Hello."}, headers=auth)
-    assert r.json()["audio_source"] == "cartesia" and r.json()["result"]["text"] == "Hello?"
+    assert r.json()["audio_source"] == "sarvam_tts" and r.json()["result"]["text"] == "Hello?"
     for secret in settings.secret_values():
         assert secret not in r.text
 

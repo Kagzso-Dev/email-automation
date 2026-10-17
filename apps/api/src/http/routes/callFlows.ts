@@ -1,4 +1,4 @@
-// Call Flows editor ("Call Flows" page). ADMIN-only, and 404 unless both
+// Call Flows editor ("Call Flows" page). ADMIN and EDITOR, and 404 unless both
 // ENABLE_AI_CALLS and ENABLE_CALL_FLOW_EDITOR are on.
 //
 //   GET    /api/call-flows/builtin                   built-in flows to copy + locked block text (from the voice backend)
@@ -54,7 +54,7 @@ function featureGate(_req: Request, _res: Response, next: NextFunction) {
   }
   next();
 }
-callFlowsRouter.use(featureGate, requireRole("ADMIN"));
+callFlowsRouter.use(featureGate, requireRole("ADMIN", "EDITOR"));
 
 const limiter = (limit: number) =>
   rateLimit({
@@ -67,7 +67,7 @@ const limiter = (limit: number) =>
 const writeLimiter = limiter(60);
 const previewLimiter = limiter(120);
 const testCallLimiter = limiter(3);
-/** 3 placed test calls per hour per admin. Refused requests (4xx/5xx) don't use up the hour. */
+/** 3 placed test calls per hour per user. Refused requests (4xx/5xx) don't use up the hour. */
 const testCallHourlyLimiter = rateLimit({
   windowMs: 60 * 60_000,
   limit: 3,

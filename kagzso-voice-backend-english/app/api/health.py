@@ -37,7 +37,7 @@ async def ready() -> JSONResponse:
         "telephony": c(settings.telephony_configured()),
         "public_base_url": c(settings.PUBLIC_BASE_URL.startswith("https://")),
         "sarvam": c(settings.sarvam_configured()),
-        "cartesia": c(settings.cartesia_configured()),
+        "tts": c(settings.tts_configured()),
         "llm": c(settings.llm_configured()),
     }
     is_ready = mysql_status == "ok" and all(v == "configured" for v in providers.values())
@@ -47,6 +47,7 @@ async def ready() -> JSONResponse:
         "active_calls": get_session_store().active_count(),
         "providers": providers,
         "telephony_provider": settings.telephony_provider,
+        "tts_provider": "sarvam",
         "llm_provider": settings.LLM_PROVIDER,
     }
     return JSONResponse(body, status_code=200 if is_ready else 503)

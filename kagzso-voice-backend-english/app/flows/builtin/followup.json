@@ -3,7 +3,7 @@
   "base": "followup",
   "name": "Customer follow-up",
   "language": "en",
-  "voice_id": "f8f5f1b2-f02d-4d8e-a40d-fd850a487b3d",
+  "voice_id": null,
   "greeting": {
     "text": "Hello {{addressed_name}}, this is Nila from Kagzso AI and Automation. We help businesses automate their daily repetitive work. Could you give me just one minute?"
   },

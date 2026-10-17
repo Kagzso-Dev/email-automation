@@ -1,4 +1,4 @@
-// AI Call Customers (Contacts page → "AI Call Customers" tab). ADMIN-only and
+// AI Call Customers (Contacts page → "AI Call Customers" tab). ADMIN and EDITOR;
 // 404 while ENABLE_AI_CALLS is off, like /api/ai-calls.
 //
 //   GET    /api/ai-call-customers               list (search, gender, stage, page)
@@ -68,7 +68,7 @@ function featureGate(_req: Request, _res: Response, next: NextFunction) {
   if (!aiCallsConfig.enabled) return next(new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found"));
   next();
 }
-aiCallCustomersRouter.use(authRequired, featureGate, requireRole("ADMIN"));
+aiCallCustomersRouter.use(authRequired, featureGate, requireRole("ADMIN", "EDITOR"));
 
 /** Domain errors → HTTP errors. */
 function toHttp(err: unknown): never {

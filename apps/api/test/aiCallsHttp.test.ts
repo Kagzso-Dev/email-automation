@@ -39,7 +39,7 @@ describe("/api/ai-calls", () => {
 
   it("reports the flag and whether the user may start calls", async () => {
     const editor = await (await call("/api/ai-calls/config", { role: "EDITOR" })).json();
-    expect(editor).toMatchObject({ enabled: true, configured: false, canStart: false, maxPerRun: 10 });
+    expect(editor).toMatchObject({ enabled: true, configured: false, canStart: true, maxPerRun: 10 });
     const admin = (await (await call("/api/ai-calls/config", { role: "ADMIN" })).json()) as { canStart: boolean };
     expect(admin.canStart).toBe(true);
   });
@@ -50,9 +50,9 @@ describe("/api/ai-calls", () => {
     expect((await call("/api/call-flows", { role: "ADMIN" })).status).toBe(404);
   });
 
-  it("only admins can start calls", async () => {
-    const res = await call("/api/ai-calls/start", { method: "POST", role: "EDITOR", body: "{}" });
-    expect(res.status).toBe(403);
+  it("editors can start calls too", async () => {
+    const res = await call("/api/ai-calls/start", { method: "POST", role: "EDITOR", body: JSON.stringify({ rows: [], mode: "all" }) });
+    expect(res.status).toBe(400); // past the role gate, stopped by validation
   });
 
   it("validates the body", async () => {

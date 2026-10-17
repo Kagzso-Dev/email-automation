@@ -75,6 +75,7 @@ const phoneParam = (raw: string) => {
 
 whatsappMediaRouter.put(
   "/templates/:id/header-media",
+  requireRole("ADMIN"), // editors: view only
   limiter,
   acceptFile,
   wrap(async (req, res) => {
@@ -91,6 +92,7 @@ whatsappMediaRouter.put(
 
 whatsappMediaRouter.delete(
   "/templates/:id/header-media",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     await removeTemplateHeaderMedia(id, req.user!.email);

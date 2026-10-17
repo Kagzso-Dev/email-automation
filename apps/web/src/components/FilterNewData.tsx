@@ -4,6 +4,7 @@ import { Icon } from "./icons";
 import { useToast } from "./toast";
 import { analyzeAgainstHistory, downloadFiltered, type HistoryAnalysis, type HistoryChannel } from "../lib/historyFilter";
 import { fullNumber as full } from "../lib/numberFormat";
+import { useBranding } from "../lib/branding";
 
 const CHANNEL_TEXT: Record<HistoryChannel, { label: string; field: string; history: string }> = {
   email: { label: "Email", field: "email", history: "email send history (Send Queue batches, campaigns and triggers)" },
@@ -35,6 +36,7 @@ export function FilterNewDataButton({ channel }: { channel: HistoryChannel }) {
 }
 
 function FilterNewDataDialog({ channel, onClose }: { channel: HistoryChannel; onClose: () => void }) {
+  const { appName } = useBranding();
   const t = CHANNEL_TEXT[channel];
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
@@ -76,7 +78,7 @@ function FilterNewDataDialog({ channel, onClose }: { channel: HistoryChannel; on
       <div className="space-y-5 text-sm">
         <p className="leading-[1.6] text-slate-550">
           Upload a .csv or .xlsx file. It's compared only with the {t.history}. Sent, done and still-sending entries count as
-          already used; failed ones stay in the new file so you can retry them. Nothing in Dispatch is changed.
+          already used; failed ones stay in the new file so you can retry them. Nothing in {appName} is changed.
         </p>
 
         <div className="flex flex-wrap items-center gap-3">

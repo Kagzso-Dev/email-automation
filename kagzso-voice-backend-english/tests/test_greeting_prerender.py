@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.services import call_service
-from app.services.cartesia_tts import TTSError
+from app.services.tts import TTSError
 from tests.conftest import silence_mulaw
 from tests.test_nila_flow import _call, _send, _start, _until
 
@@ -44,11 +44,11 @@ def test_greeting_plays_prerendered_audio_without_live_tts(client, auth, fakes, 
     assert not call_service.has_greeting_audio(call_id)  # used once
     with sync_engine.connect() as c:
         said = c.execute(text("select text from transcripts where call_id = :id and speaker = 'agent'"), {"id": call_id}).scalars().all()
-    assert said == ["Hi, is this Ragul?"]
+    assert said == ["Hi sir, Good morning."]
 
 
 def test_prerender_failure_falls_back_to_live_tts(client, auth, fakes, prerender, monkeypatch):
-    async def boom(_text):
+    async def boom(_text, pace=None):
         raise TTSError("timeout", "simulated")
 
     monkeypatch.setattr(fakes.tts, "synthesize", boom)

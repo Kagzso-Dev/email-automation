@@ -7,8 +7,9 @@ import { z } from "zod";
 /**
  * The only menu items an admin may hide. Everything else always shows. New keys
  * are appended: a stored list without them simply shows those items.
+ * "settings-editors" hides Settings from editors only — admins always keep it.
  */
-export const HIDEABLE_NAV_ITEMS = ["insights", "lists", "campaigns", "triggers", "whatsapp-inbox"] as const;
+export const HIDEABLE_NAV_ITEMS = ["insights", "lists", "campaigns", "triggers", "whatsapp-inbox", "settings-editors"] as const;
 export type HideableNavItem = (typeof HIDEABLE_NAV_ITEMS)[number];
 
 /** Setting-table key holding the hidden items as a JSON array, e.g. ["insights","lists"]. */

@@ -3,12 +3,14 @@ the transaction (most helpers commit, since call events must persist even if
 a later step fails)."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    FINAL_CALL_STATUSES,
     Agent,
     Call,
     CallEvent,
@@ -25,8 +27,23 @@ async def get_agent(db: AsyncSession, agent_id: int) -> Optional[Agent]:
     return await db.get(Agent, agent_id)
 
 
-async def get_agent_by_name(db: AsyncSession, name: str) -> Optional[Agent]:
+# The screening agent is Nila; it was briefly renamed Radhi, then Kayal. Any of these names finds
+# it, so a VOICE_AGENT_NAME or agent_name set to one of the interim names keeps working.
+_SCREENING_AGENT_NAMES = ("Nila", "Radhi", "Kayal")
+AGENT_NAME_ALIASES = {name: tuple(n for n in _SCREENING_AGENT_NAMES if n != name) for name in _SCREENING_AGENT_NAMES}
+
+
+async def _agent_named(db: AsyncSession, name: str) -> Optional[Agent]:
     return (await db.execute(select(Agent).where(Agent.name == name).order_by(Agent.id).limit(1))).scalar_one_or_none()
+
+
+async def get_agent_by_name(db: AsyncSession, name: str) -> Optional[Agent]:
+    agent = await _agent_named(db, name)
+    for other in AGENT_NAME_ALIASES.get(name, ()):
+        if agent is not None:
+            break
+        agent = await _agent_named(db, other)
+    return agent
 
 
 async def list_agents(db: AsyncSession) -> Sequence[Agent]:
@@ -50,12 +67,22 @@ async def ensure_default_agent(db: AsyncSession, defaults: Dict[str, Any]) -> Ag
 
 async def upsert_agent_by_name(db: AsyncSession, fields: Dict[str, Any]) -> Agent:
     """Create the named agent, or bring its stored fields in line with `fields`
-    (used for built-in agents whose prompt lives in the repo)."""
-    agent = (await db.execute(select(Agent).where(Agent.name == fields["name"]).order_by(Agent.id).limit(1))).scalar_one_or_none()
+    (used for built-in agents whose prompt lives in the repo). A row still stored under its
+    old name (AGENT_NAME_ALIASES) is updated in place and keeps that name - renaming the row
+    is left to the SQL script, never done here."""
+    agent = await _agent_named(db, fields["name"])
+    keep_name = False
+    for other in AGENT_NAME_ALIASES.get(fields["name"], ()):
+        if agent is not None:
+            break
+        agent = await _agent_named(db, other)
+        keep_name = agent is not None
     if agent is None:
         return await create_agent(db, **fields)
     changed = False
     for k, v in fields.items():
+        if keep_name and k == "name":
+            continue
         if getattr(agent, k) != v:
             setattr(agent, k, v)
             changed = True
@@ -122,6 +149,18 @@ async def next_rotation_voice(db: AsyncSession, voices: List[str]) -> str:
     stmt = select(Call.voice_id).where(Call.voice_id.is_not(None)).order_by(Call.created_at.desc(), Call.id.desc()).limit(1)
     last = (await db.execute(stmt)).scalar_one_or_none()
     return voices[(voices.index(last) + 1) % len(voices)] if last in voices else voices[0]
+
+
+async def free_call_voice(db: AsyncSession, primary: str, voices: List[str], since: datetime) -> str:
+    """`primary` unless a live call (not finished, created after `since`) is using it; then the
+    first rotation voice no live call is using. If every voice is busy, rotate as before."""
+    final = [s.value for s in FINAL_CALL_STATUSES]
+    stmt = select(Call.voice_id).where(Call.voice_id.is_not(None), Call.status.not_in(final), Call.created_at >= since)
+    in_use = set((await db.execute(stmt)).scalars().all())
+    for voice in [primary, *[v for v in voices if v != primary]]:
+        if voice not in in_use:
+            return voice
+    return await next_rotation_voice(db, voices)
 
 
 async def get_call(db: AsyncSession, call_id: str) -> Optional[Call]:

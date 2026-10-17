@@ -13,6 +13,17 @@ from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
+
+def _clamped(name: str, value: float, low: float, high: float) -> float:
+    """Out-of-range values are pulled into range (with a warning) instead of stopping startup."""
+    if low <= value <= high:
+        return value
+    clamped = min(max(value, low), high)
+    import logging
+
+    logging.getLogger("config").warning("%s=%s is outside %s-%s - using %s", name, value, low, high, clamped)
+    return clamped
+
 # Language code mapping: CALL_LANGUAGE (short) -> Sarvam BCP-47 code.
 SARVAM_LANGUAGE_CODES = {
     "en": "en-IN",
@@ -78,20 +89,21 @@ class Settings(BaseSettings):
     SARVAM_BASE_URL: str = "https://api.sarvam.ai"
     SARVAM_TIMEOUT_SECONDS: float = 10.0
 
-    # --- Cartesia TTS ---
-    CARTESIA_API_KEY: SecretStr = SecretStr("")
-    CARTESIA_TTS_MODEL: str = "sonic-3.6"
-    CARTESIA_VOICE_ID: str = ""
-    CARTESIA_VERSION: str = "2026-08-14"
-    CARTESIA_BASE_URL: str = "https://api.cartesia.ai"
-    CARTESIA_WS_URL: str = "wss://api.cartesia.ai/tts/websocket"
-    CARTESIA_LANGUAGE: str = "en"
-    CARTESIA_SPEED: float = 1.0
-    # Comma-separated voice ids: each new call uses the next one in turn (empty = agent's voice)
-    CARTESIA_VOICE_ROTATION: str = ""
+    # --- Sarvam TTS (Bulbul; uses SARVAM_API_KEY and CALL_LANGUAGE) ---
+    SARVAM_TTS_MODEL: str = "bulbul:v3"
+    SARVAM_TTS_SPEAKER: str = "priya"  # lowercase Bulbul v3 speaker id
+    SARVAM_TTS_PACE: float = 1.0  # 0.5-2.0
+    SARVAM_TTS_TEMPERATURE: float = 0.6  # 0.01-1.0
+    SARVAM_TTS_WS_URL: str = "wss://api.sarvam.ai/text-to-speech/ws"
+    # Comma-separated speaker ids: each new call uses the next one in turn (empty = SARVAM_TTS_SPEAKER)
+    SARVAM_TTS_VOICE_ROTATION: str = ""
+    # How the rotation is used: "concurrent" = every call uses SARVAM_TTS_SPEAKER unless another
+    # live call already has it; then the first rotation voice not in use. "round_robin" = each
+    # new call takes the next voice in the list.
+    VOICE_ROTATION_MODE: str = "concurrent"
 
     # --- LLM ---
-    LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | ollama | openai_compatible
+    LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | sarvam | ollama | openai_compatible
     LLM_API_KEY: SecretStr = SecretStr("")
     LLM_MODEL: str = ""
     LLM_BASE_URL: str = ""  # optional override (OpenAI-compatible providers)
@@ -100,9 +112,40 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: float = 8.0
     # Used once per reply if LLM_MODEL hits quota / overload / timeout before speaking.
     LLM_FALLBACK_MODEL: str = ""
+    # After LLM_MODEL hits quota / overload, try LLM_FALLBACK_MODEL first for this long (0 = always try LLM_MODEL first).
+    LLM_PRIMARY_COOLDOWN_SECONDS: float = 120.0
+    # Fail over if LLM_MODEL has not produced any reply text within this time (0 = off).
+    # Only applies when LLM_FALLBACK_MODEL is set; the fallback itself keeps LLM_TIMEOUT_SECONDS.
+    LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS: float = 2.5
     # Gemini thinking depth: minimal | low | medium | high, or empty for the model default.
     # "minimal" roughly halves time-to-first-word on phone calls.
     LLM_THINKING_LEVEL: str = "minimal"
+    # Model for live call replies only (empty = LLM_MODEL). When set, LLM_MODEL becomes its
+    # fallback for replies; outcome classification keeps LLM_MODEL / LLM_FALLBACK_MODEL.
+    LLM_TURN_MODEL: str = ""
+    # Hedged failover (0 = off): if the first model has sent no text after this many seconds,
+    # also start the second model WITHOUT cancelling the first, and speak whichever answers
+    # first. Replaces LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS while on. Costs extra tokens on slow turns.
+    LLM_HEDGE_AFTER_SECONDS: float = 0.0
+    # Start the LLM while the TTS websocket is still connecting (first sentence waits for it).
+    LLM_START_BEFORE_TTS: bool = True
+
+    # --- Provider connections ---
+    # Keep idle HTTPS connections to Sarvam / the LLM open this long between turns
+    # (httpx default is 5 s, so most turns paid a fresh TLS handshake).
+    PROVIDER_KEEPALIVE_SECONDS: float = 60.0
+    # Open the STT / LLM connections when the call connects and when the customer starts
+    # speaking (cheap request, no API key sent), so a turn never waits for a handshake.
+    PROVIDER_PREWARM: bool = True
+
+    # --- Streaming STT (Sarvam websocket) ---
+    # false = one REST request after the customer stops (default). true = audio is streamed
+    # while the customer speaks and only flushed at end of speech; turn-taking is unchanged
+    # (our VAD still decides the end of the turn). Any failure falls back to the REST request.
+    STT_STREAMING: bool = False
+    SARVAM_STT_WS_URL: str = "wss://api.sarvam.ai/speech-to-text/ws"
+    # Wait at most this long for the final transcript after end of speech before using REST.
+    STT_STREAM_FINAL_TIMEOUT_MS: int = 1500
 
     # --- MySQL ---
     MYSQL_HOST: str = "localhost"
@@ -119,6 +162,22 @@ class Settings(BaseSettings):
     # --- Call behaviour ---
     CALL_LANGUAGE: str = "en"
     MAX_CALL_DURATION_SECONDS: int = 180
+    # Time zone for the opening "Good morning / afternoon / evening" ({{time_greeting}}).
+    CALL_GREETING_TIMEZONE: str = "Asia/Kolkata"
+    # {{title_to_use}} when the contact's gender is missing or not male/female (never guessed).
+    CALL_DEFAULT_TITLE: str = "sir"
+    # After a time-of-day opening ("Hi sir, Good morning."), wait this long after it finishes
+    # playing before asking "Am I speaking with ...?". Any reply from the customer asks it at once.
+    GREETING_WAIT_SECONDS: float = 1.0
+    # Silence after that identity question (counted from the end of its audio): repeat it once
+    # after this long, then play the silence re-prompt after this long again; then the normal
+    # SILENCE_REPROMPT_SECONDS flow closes the call.
+    IDENTITY_SILENCE_WAIT_SECONDS: float = 2.0
+    # Time-of-day openings: after answer, listen this long for the customer to speak first;
+    # any words play the greeting at once, silence plays it when the wait ends. 2.0-4.0.
+    FIRST_SPEECH_WAIT_SECONDS: float = 3.0
+    # Speaking speed of that greeting only (Sarvam pace, 0.5-2.0); every other line keeps SARVAM_TTS_PACE.
+    GREETING_TTS_SPEED: float = 0.95
     # Wait this long after the media stream starts for the customer to speak
     # ("Hello?"); if they stay silent, the agent greets first.
     GREETING_DELAY_MS: int = 2500
@@ -127,6 +186,10 @@ class Settings(BaseSettings):
     GREETING_PRERENDER: bool = True
     # Wait before a pre-rendered greeting when the customer hasn't spoken yet.
     GREETING_PRERENDERED_DELAY_MS: int = 300
+    # Also synthesize the fixed lines (couldn't-hear-you, silence re-prompt / closing, identity
+    # re-ask) once when the call connects, so they play without a TTS round-trip. Same voice
+    # and settings; ~4 short extra TTS requests per answered call.
+    PRERENDER_FIXED_LINES: bool = True
     # Silence after the agent finishes speaking: re-prompt once ("Hello, hear panreengala?"),
     # then close politely and hang up if there is still no response.
     SILENCE_REPROMPT_SECONDS: float = 7.0
@@ -135,11 +198,18 @@ class Settings(BaseSettings):
     TEAM_FOLLOWUP_ENABLED: bool = False
     # Plivo answering-machine detection (async); voicemail -> hang up, outcome=voicemail.
     PLIVO_MACHINE_DETECTION: bool = True
+    # Plivo's "machine" verdict sometimes fires on a person saying "Hello? Hello?". Before hanging up,
+    # check what STT heard: a short human reply keeps the call; a voicemail phrase or a long monologue
+    # hangs up at once; with no words yet, wait up to MACHINE_VERIFY_SECONDS, then trust Plivo.
+    MACHINE_DETECTION_VERIFY: bool = True
+    MACHINE_VERIFY_SECONDS: float = 3.0
 
     # --- Voice activity detection / turn taking ---
     VAD_AGGRESSIVENESS: int = 2  # webrtcvad 0-3
     VAD_SPEECH_START_MS: int = 200  # voiced audio needed to declare speech (and barge-in)
-    VAD_SPEECH_END_SILENCE_MS: int = 700  # silence that ends a customer turn
+    # Silence that ends a customer turn. Every ms here is added to every reply. Lower (500-550)
+    # = faster replies but customers who pause mid-sentence ("my number is... 98") get cut off.
+    VAD_SPEECH_END_SILENCE_MS: int = 700
     VAD_MIN_UTTERANCE_MS: int = 250  # shorter utterances are treated as noise
     VAD_MIN_RMS: int = 300  # energy gate on 16-bit PCM to ignore line hiss
     # Barge-in while the agent is talking: echo / noise must not cut the agent off.
@@ -149,10 +219,65 @@ class Settings(BaseSettings):
     # Shorter / quieter speech interrupts only if STT finds real words in it.
     MAX_UTTERANCE_SECONDS: int = 25
 
+    # --- Background noise (each can be switched off) ---
+    # Noise must not change the call: the greeting still plays after a noise burst, and the
+    # silence re-prompt / end-of-call state change only when STT hears real words.
+    NOISE_SAFE_STATE: bool = True
+    # Ignore the agent's own voice coming back (speakerphone echo): a transcript heard over the
+    # agent, or within ECHO_TAIL_MS after it stops, of 3+ words all taken in order from the
+    # agent's line. Short answers ("yes", "okay") are never treated as echo.
+    ECHO_TEXT_FILTER: bool = True
+    ECHO_TAIL_MS: int = 1500
+    # The immediate (no-STT) interruption needs BARGE_IN_MIN_SPEECH_MS of loud speech in one
+    # run (gaps up to BARGE_IN_MAX_GAP_MS), not loud noise added up across the agent's sentence.
+    BARGE_IN_CONSECUTIVE: bool = True
+    BARGE_IN_MAX_GAP_MS: int = 100
+    # Raise the energy gate above the line's own noise: threshold = quiet level of recent
+    # non-speech audio x VAD_FLOOR_MULTIPLIER, never below VAD_MIN_RMS or above VAD_FLOOR_MAX_RMS
+    # (the cap keeps quiet speakers audible). Learned only while the customer is not speaking.
+    VAD_ADAPTIVE_FLOOR: bool = True
+    VAD_FLOOR_MULTIPLIER: float = 2.5
+    VAD_FLOOR_MAX_RMS: int = 1000
+    # Drop transcripts that are only punctuation or "uh" / "um" / "er" / "ah". Never drops
+    # yes / no / okay / hello / hmm / mm.
+    STT_DROP_NOISE_TEXT: bool = True
+
+    # --- Input noise reduction (customer audio only; app/services/noise_suppression.py) ---
+    # High-pass + mild spectral noise suppression + gentle auto-gain + limiter before speech
+    # detection. Any error or slow processing bypasses it for the call (original audio).
+    NOISE_SUPPRESSION_ENABLED: bool = True
+    NOISE_SUPPRESSION_STRENGTH: float = 0.5  # 0 (lightest) - 1; max reduction 6-18 dB
+    # What STT hears: "original" (cleaned audio is used only to detect speech) or "cleaned".
+    NOISE_SUPPRESSION_STT_AUDIO: str = "original"
+    # A caller who resumes within this long after a pause (before the agent answered) is a
+    # slow speaker: wait this long for their silence for the rest of the call. 0 = off.
+    SLOW_SPEAKER_END_SILENCE_MS: int = 1600
+
     @field_validator("PUBLIC_BASE_URL")
     @classmethod
     def _strip_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @field_validator("FIRST_SPEECH_WAIT_SECONDS")
+    @classmethod
+    def _first_speech_range(cls, v: float) -> float:
+        return _clamped("FIRST_SPEECH_WAIT_SECONDS", v, 2.0, 4.0)
+
+    @field_validator("NOISE_SUPPRESSION_STRENGTH")
+    @classmethod
+    def _ns_strength_range(cls, v: float) -> float:
+        return _clamped("NOISE_SUPPRESSION_STRENGTH", v, 0.0, 1.0)
+
+    @field_validator("NOISE_SUPPRESSION_STT_AUDIO")
+    @classmethod
+    def _ns_stt_audio(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        return v if v in ("original", "cleaned") else "original"
+
+    @field_validator("GREETING_TTS_SPEED")
+    @classmethod
+    def _greeting_speed_range(cls, v: float) -> float:
+        return _clamped("GREETING_TTS_SPEED", v, 0.5, 2.0)
 
     # ---------- derived helpers ----------
     @property
@@ -203,7 +328,12 @@ class Settings(BaseSettings):
 
     @property
     def voice_rotation(self) -> list:
-        return [v.strip() for v in self.CARTESIA_VOICE_ROTATION.split(",") if v.strip()]
+        return [v.strip() for v in self.SARVAM_TTS_VOICE_ROTATION.split(",") if v.strip()]
+
+    @property
+    def voice_rotation_mode(self) -> str:
+        mode = (self.VOICE_ROTATION_MODE or "").strip().lower()
+        return mode if mode in ("concurrent", "round_robin") else "concurrent"
 
     @property
     def telephony_provider(self) -> str:
@@ -216,11 +346,20 @@ class Settings(BaseSettings):
     def telephony_from_number(self) -> str:
         return self.TWILIO_FROM_NUMBER if self.telephony_provider == "twilio" else self.PLIVO_FROM_NUMBER
 
+    def http_limits(self):
+        """Connection pool for provider HTTP clients (keeps connections warm between turns)."""
+        import httpx
+
+        return httpx.Limits(keepalive_expiry=max(0.0, self.PROVIDER_KEEPALIVE_SECONDS))
+
     def sarvam_configured(self) -> bool:
         return bool(self.SARVAM_API_KEY.get_secret_value() and self.SARVAM_STT_MODEL)
 
-    def cartesia_configured(self) -> bool:
-        return bool(self.CARTESIA_API_KEY.get_secret_value() and self.CARTESIA_TTS_MODEL and self.CARTESIA_VOICE_ID)
+    def sarvam_tts_configured(self) -> bool:
+        return bool(self.SARVAM_API_KEY.get_secret_value() and self.SARVAM_TTS_MODEL and self.SARVAM_TTS_SPEAKER)
+
+    def tts_configured(self) -> bool:
+        return self.sarvam_tts_configured()
 
     def llm_configured(self) -> bool:
         needs_key = self.LLM_PROVIDER.lower() not in ("ollama",)
@@ -229,7 +368,7 @@ class Settings(BaseSettings):
     def secret_values(self) -> List[str]:
         """All secret values, used by the log redaction filter."""
         vals = [
-            self.PLIVO_AUTH_TOKEN, self.SARVAM_API_KEY, self.CARTESIA_API_KEY, self.LLM_API_KEY,
+            self.PLIVO_AUTH_TOKEN, self.SARVAM_API_KEY, self.LLM_API_KEY,
             self.MYSQL_PASSWORD, self.ADMIN_API_KEY, self.APP_SECRET_KEY, self.TWILIO_AUTH_TOKEN,
             self.STATUS_CALLBACK_SECRET,
         ]
@@ -252,8 +391,8 @@ class Settings(BaseSettings):
             problems.append("Plivo is not fully configured (PLIVO_AUTH_ID / PLIVO_AUTH_TOKEN / PLIVO_FROM_NUMBER)")
         if not self.sarvam_configured():
             problems.append("Sarvam STT is not configured (SARVAM_API_KEY)")
-        if not self.cartesia_configured():
-            problems.append("Cartesia TTS is not configured (CARTESIA_API_KEY / CARTESIA_VOICE_ID)")
+        if not self.sarvam_tts_configured():
+            problems.append("Sarvam TTS is not configured (SARVAM_API_KEY / SARVAM_TTS_SPEAKER)")
         if not self.llm_configured():
             problems.append("LLM is not configured (LLM_PROVIDER / LLM_MODEL / LLM_API_KEY)")
         return problems

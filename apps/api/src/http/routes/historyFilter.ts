@@ -51,14 +51,14 @@ const limiter = rateLimit({
 
 const channelParam = z.object({ channel: z.enum(HISTORY_CHANNELS as [HistoryChannel, ...HistoryChannel[]]) });
 
-/** Channel gate: AI-call history is admin-only and hidden while AI calls are off. */
+/** Channel gate: AI-call history is for admins and editors, hidden while AI calls are off. */
 function gate(req: Request): HistoryChannel {
   const parsed = channelParam.safeParse(req.params);
   if (!parsed.success) throw new AppError(404, "Unknown channel", "not_found");
   const channel = parsed.data.channel;
   if (channel === "ai-call") {
     if (!aiCallsConfig.enabled) throw new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found");
-    if (req.user?.role !== "ADMIN") throw forbidden("Requires role: ADMIN");
+    if (req.user?.role !== "ADMIN" && req.user?.role !== "EDITOR") throw forbidden("Requires role: ADMIN or EDITOR");
   }
   return channel;
 }

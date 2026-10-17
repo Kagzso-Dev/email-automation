@@ -10,6 +10,7 @@ import { WhatsAppMedia } from "../components/WhatsAppMedia";
 import { MetaSyncModal, useMetaSyncCandidates } from "../components/WhatsAppTemplateSync";
 import { CreateInMetaForm } from "../components/WhatsAppTemplateCreate";
 import { useAuth } from "../lib/auth";
+import { useBranding } from "../lib/branding";
 
 interface WTemplate {
   id: string;
@@ -29,6 +30,7 @@ interface WTemplate {
 }
 
 export function WhatsAppTemplatesPage() {
+  const { appName } = useBranding();
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<WTemplate | null>(null);
@@ -88,7 +90,7 @@ export function WhatsAppTemplatesPage() {
       {newInMeta.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-accent-soft px-3 py-2 text-sm">
           <span>
-            {newInMeta.length} template{newInMeta.length === 1 ? "" : "s"} in Meta {newInMeta.length === 1 ? "isn't" : "aren't"} in Dispatch yet:{" "}
+            {newInMeta.length} template{newInMeta.length === 1 ? "" : "s"} in Meta {newInMeta.length === 1 ? "isn't" : "aren't"} in {appName} yet:{" "}
             <span className="font-mono text-xs">{newInMeta.slice(0, 4).map((c) => c.name).join(", ")}{newInMeta.length > 4 ? " …" : ""}</span>
           </span>
           <button className="ml-auto text-xs font-medium text-accent-ink hover:underline" onClick={() => setSyncOpen(true)}>

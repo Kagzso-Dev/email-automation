@@ -845,9 +845,9 @@ model WhatsAppMessagePricing {
   @@map("whatsapp_message_pricing")
 }
 
-// Settings → Branding & Labels: display-only names (app name, sidebar section and
-// menu labels) an admin changed. Only changed keys have a row; no row (or no
-// table) means the built-in default text. updatedBy is the admin's user id.
+// Settings → Branding: display-only app name (sidebar header, browser tab) an
+// admin changed. Key-value so more display names can be added later. Only
+// changed keys have a row; no row (or no table) means the default "Dispatch". updatedBy is the admin's user id.
 // New table only — no existing table is altered.
 model BrandingSetting {
   key       String   @id @db.VarChar(64)

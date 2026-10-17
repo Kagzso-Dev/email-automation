@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import { env } from "../env.js";
 import { logger } from "../logger.js";
 import { uploadsRoot } from "../domain/imageUpload.js";
-import { errorHandler } from "./errors.js";
+import { errorHandler, wrap } from "./errors.js";
+import { getBranding } from "../domain/branding.js";
 import { securityHeaders } from "./securityHeaders.js";
 import { authRouter } from "./routes/auth.js";
 import { contactsRouter } from "./routes/contacts.js";
@@ -85,6 +86,15 @@ export function createApp() {
   app.use("/api/api-keys", apiKeysRouter);
   app.use("/api/users", usersRouter); // admin-only user management
   app.use("/api/jobs", jobsRouter);
+  // Public, read-only: just the display app name (Settings → Branding) so the
+  // login page can show it. Same data as GET /api/settings/branding.
+  app.get(
+    "/api/branding",
+    wrap(async (_req, res) => {
+      const { labels, customized } = await getBranding();
+      res.json({ labels: { appName: labels.appName }, customized });
+    }),
+  );
   app.use("/api/settings", settingsRouter);
   app.use("/api/ai-calls", aiCallsRouter);
   app.use("/api/call-flows", callFlowsRouter);

@@ -75,9 +75,8 @@ describe("GET /api/send-queue/history/:channel/*", () => {
     expect((await get("/api/send-queue/history/ai-call/count", "ADMIN")).status).toBe(404);
   });
 
-  it("keeps AI call follow-ups admin-only", async () => {
-    expect((await get("/api/send-queue/history/ai-followups/export", "EDITOR")).status).toBe(403);
-    expect((await get("/api/send-queue/history/ai-followups/count", "EDITOR")).status).toBe(403);
+  it("lets editors export AI call follow-ups", async () => {
+    expect((await get("/api/send-queue/history/ai-followups/count", "EDITOR")).status).not.toBe(403);
   });
 
   it("returns 404 for follow-ups while AI calls are disabled", async () => {

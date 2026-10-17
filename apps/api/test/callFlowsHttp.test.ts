@@ -54,17 +54,16 @@ const call = (path: string, init: RequestInit & { role?: "ADMIN" | "EDITOR" } = 
   });
 
 describe("/api/call-flows", () => {
-  it("requires sign-in and the ADMIN role", async () => {
+  it("requires sign-in; admins and editors get in", async () => {
     expect((await call("/api/call-flows")).status).toBe(401);
-    expect((await call("/api/call-flows", { role: "EDITOR" })).status).toBe(403);
-    expect((await call("/api/call-flows/preview", { method: "POST", role: "EDITOR", body: "{}" })).status).toBe(403);
+    expect((await call("/api/call-flows/preview", { method: "POST", role: "EDITOR", body: "{}" })).status).not.toBe(403);
   });
 
   it("reports the editor flag and masked test numbers in /api/ai-calls/config", async () => {
     const admin = await (await call("/api/ai-calls/config", { role: "ADMIN" })).json();
     expect(admin).toMatchObject({ flowEditor: true, testCallNumbers: ["+91******3210"] });
     const editor = (await (await call("/api/ai-calls/config", { role: "EDITOR" })).json()) as { testCallNumbers: string[] };
-    expect(editor.testCallNumbers).toEqual([]);
+    expect(editor.testCallNumbers).toEqual(["+91******3210"]);
   });
 
   it("previews through the voice backend with the API key", async () => {

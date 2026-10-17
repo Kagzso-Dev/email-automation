@@ -60,7 +60,7 @@ const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString() : "—")
 
 export function CallFlowsPage() {
   const config = useAiCallsConfig();
-  const enabled = !!config.data?.flowEditor && !!config.data.canStart;
+  const enabled = !!config.data?.flowEditor && !!config.data.canStart; // admins and editors
   const flows = useCallFlows(enabled);
   const catalog = useCallFlowCatalog();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -522,14 +522,14 @@ function CallFlowEditor({
             </select>
           </div>
           <div>
-            <label className="label">Voice (Cartesia voice id)</label>
+            <label className="label">Voice (Sarvam speaker, e.g. kavya)</label>
             <input
               className="input font-mono text-xs"
-              placeholder="Default voice"
+              placeholder="Default voice (kavya)"
               value={form.voice_id ?? ""}
               onChange={(e) => update((f) => void (f.voice_id = e.target.value.trim() || null))}
             />
-            <span className="text-xs text-slate-550">Ignored while CARTESIA_VOICE_ROTATION is set on the server.</span>
+            <span className="text-xs text-slate-550">Ignored while SARVAM_TTS_VOICE_ROTATION is set on the server.</span>
           </div>
           <div>
             <label className="label">Max call duration (seconds)</label>

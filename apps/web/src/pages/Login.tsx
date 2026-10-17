@@ -2,9 +2,13 @@ import { useState } from "react";
 import { useAuth } from "../lib/auth";
 import { Icon } from "../components/icons";
 import { Logo } from "../components/Logo";
+import { useBranding, useDocumentTitle } from "../lib/branding";
 
 export function LoginPage() {
   const { login } = useAuth();
+  // App name from Settings → Branding (public, read-only; "Dispatch" until changed).
+  const { appName } = useBranding();
+  useDocumentTitle(appName);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +34,7 @@ export function LoginPage() {
       <form onSubmit={onSubmit} className="login-card">
         <div className="login-brand">
           <Logo size={40} />
-          Dispatch
+          {appName}
         </div>
         <h1 className="login-title">
           Welcome <span className="text-gradient">back</span>
@@ -98,7 +102,7 @@ export function LoginPage() {
           </button>
         </div>
       </form>
-      <p className="login-footer">© Dispatch · Kagzso</p>
+      <p className="login-footer">© {appName === "Kagzso" ? appName : `${appName} · Kagzso`}</p>
     </div>
   );
 }

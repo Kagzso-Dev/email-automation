@@ -8,7 +8,7 @@ import pytest
 from app.core.config import settings
 from app.core.security import sign_stream_token, verify_stream_token
 from app.services import audio_service as audio
-from app.services.cartesia_tts import CartesiaTTS, TTSError
+from app.services.tts import TTSError
 from app.services.plivo_service import PlivoService
 from app.services.sarvam_stt import SarvamSTT, STTError
 
@@ -63,92 +63,6 @@ async def test_sarvam_timeout_and_invalid_audio():
     assert ei.value.kind == "invalid_audio"
 
 
-# ------------------------------------------------------------ Cartesia REST
-async def test_cartesia_bytes_request_shape():
-    seen = {}
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen["headers"] = dict(req.headers)
-        seen["body"] = json.loads(req.content)
-        seen["path"] = req.url.path
-        return httpx.Response(200, content=b"\xff" * 800)
-
-    tts = CartesiaTTS(settings, client=httpx.AsyncClient(base_url="https://api.cartesia.ai", transport=httpx.MockTransport(handler)))
-    out = await tts.synthesize("Hello")
-    assert out == b"\xff" * 800
-    assert seen["path"] == "/tts/bytes"
-    assert seen["headers"]["authorization"] == "Bearer cartesia-test-key"
-    assert seen["headers"]["cartesia-version"] == "2026-08-14"
-    assert seen["body"]["output_format"] == {"container": "raw", "encoding": "pcm_mulaw", "sample_rate": 8000}
-    assert seen["body"]["voice"] == {"id": "voice-123"}
-    assert seen["body"]["model_id"] == "sonic-3.6"
-
-
-async def test_cartesia_bytes_auth_error():
-    tts = CartesiaTTS(settings, client=httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(lambda r: httpx.Response(401, text="bad"))))
-    with pytest.raises(TTSError) as ei:
-        await tts.synthesize("Hello")
-    assert ei.value.kind == "auth"
-
-
-# ------------------------------------------------------------ Cartesia WebSocket (real client vs local server)
-async def test_cartesia_websocket_stream(monkeypatch):
-    from websockets.asyncio.server import serve
-
-    received = []
-    headers = {}
-
-    async def handler(ws):
-        headers["key"] = ws.request.headers.get("X-API-Key")
-        headers["path"] = ws.request.path
-        async for raw in ws:
-            msg = json.loads(raw)
-            received.append(msg)
-            if msg.get("transcript"):
-                await ws.send(json.dumps({"type": "chunk", "context_id": msg["context_id"], "data": base64.b64encode(b"\x7f" * 400).decode(), "done": False}))
-            if msg.get("continue") is False:
-                await ws.send(json.dumps({"type": "done", "context_id": msg["context_id"], "done": True}))
-
-    async with serve(handler, "127.0.0.1", 0) as server:
-        port = server.sockets[0].getsockname()[1]
-        monkeypatch.setattr(settings, "CARTESIA_WS_URL", f"ws://127.0.0.1:{port}/tts/websocket")
-        tts = CartesiaTTS(settings)
-        stream = await tts.open_stream()
-        await stream.send_text("Hi Arun.")
-        await stream.send_text("Is now a good time?")
-        await stream.end_input()
-        chunks = [c async for c in stream.audio()]
-        await stream.aclose()
-
-    assert chunks == [b"\x7f" * 400, b"\x7f" * 400]
-    assert headers["key"] == "cartesia-test-key"
-    assert "cartesia_version=2026-08-14" in headers["path"]
-    first = received[0]
-    assert first["continue"] is True and first["max_buffer_delay_ms"] == 0
-    assert first["output_format"]["encoding"] == "pcm_mulaw" and first["voice"] == {"id": "voice-123"}
-    assert received[-1]["continue"] is False and received[-1]["transcript"] == ""
-    assert len({m["context_id"] for m in received}) == 1
-
-
-async def test_cartesia_websocket_error_message(monkeypatch):
-    from websockets.asyncio.server import serve
-
-    async def handler(ws):
-        async for raw in ws:
-            msg = json.loads(raw)
-            await ws.send(json.dumps({"type": "error", "context_id": msg["context_id"], "status_code": 400, "title": "Invalid voice", "message": "voice not found"}))
-
-    async with serve(handler, "127.0.0.1", 0) as server:
-        monkeypatch.setattr(settings, "CARTESIA_WS_URL", f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
-        stream = await CartesiaTTS(settings).open_stream()
-        await stream.send_text("Hello.")
-        with pytest.raises(TTSError) as ei:
-            async for _ in stream.audio():
-                pass
-        await stream.aclose()
-    assert ei.value.kind == "invalid_request"
-
-
 # ------------------------------------------------------------ Plivo
 def test_stream_xml_matches_plivo_spec():
     p = PlivoService(settings)
@@ -196,3 +110,124 @@ async def test_plivo_not_configured(monkeypatch):
     with pytest.raises(PlivoError) as ei:
         await PlivoService(settings).make_outbound_call("c", "+919876543210")
     assert ei.value.kind == "not_configured"
+
+
+# ------------------------------------------------------------ Sarvam TTS (Bulbul)
+def _wav(pcm: bytes, rate: int) -> bytes:
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+async def test_sarvam_tts_rest_request_and_mulaw(monkeypatch):
+    from app.services import audio_service as audio
+    from app.services.sarvam_tts import SarvamTTS
+
+    seen = {}
+    pcm = b"\x10\x20" * 800
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["key"] = request.headers.get("api-subscription-key")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"request_id": "r1", "audios": [base64.b64encode(_wav(pcm, 8000)).decode()]})
+
+    monkeypatch.setattr(settings, "CALL_LANGUAGE", "en")
+    tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://api.sarvam.ai", transport=httpx.MockTransport(handler)))
+    out = await tts.synthesize("Hello from Kagzso.")
+    await tts.aclose()
+
+    assert seen["path"] == "/text-to-speech" and seen["key"] == "sarvam-test-key"
+    body = seen["body"]
+    assert body["model"] == "bulbul:v3" and body["speaker"] == "priya" and body["language_code"] == "en-IN"
+    assert body["speech_sample_rate"] == 8000 and body["output_audio_codec"] == "wav"
+    assert body["text"] == "Hello from Kexo."
+    assert out == audio.pcm16_to_mulaw(pcm)
+
+
+async def test_sarvam_tts_resamples_and_maps_errors():
+    from app.services.sarvam_tts import SarvamTTS, wav_to_mulaw
+
+    assert len(wav_to_mulaw(_wav(b"\x00\x00" * 1600, 16000))) in (799, 800, 801)
+    tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(lambda r: httpx.Response(403, text="no"))))
+    with pytest.raises(TTSError) as ei:
+        await tts.synthesize("Hi")
+    assert ei.value.kind == "auth"
+
+
+def test_sarvam_tts_ignores_non_bulbul_voice_ids():
+    from app.services.sarvam_tts import SarvamTTS
+
+    assert SarvamTTS(settings, voice_id="9cebb910-d4b7-4a4a-85a4-12c79137724c").voice_id == "priya"
+    assert SarvamTTS(settings, voice_id="ritu").voice_id == "ritu"
+
+
+async def test_sarvam_tts_websocket_stream(monkeypatch):
+    from websockets.asyncio.server import serve
+
+    from app.services import audio_service as audio
+    from app.services.sarvam_tts import SarvamTTS
+
+    received = []
+    headers = {}
+    pcm = b"\x10\x20" * 200
+
+    async def handler(ws):
+        headers["key"] = ws.request.headers.get("Api-Subscription-Key")
+        headers["path"] = ws.request.path
+        async for raw in ws:
+            msg = json.loads(raw)
+            received.append(msg)
+            if msg["type"] == "text":
+                # odd-length chunks: a sample split across messages must survive
+                await ws.send(json.dumps({"type": "audio", "data": {"audio": base64.b64encode(pcm[:201]).decode()}}))
+                await ws.send(json.dumps({"type": "audio", "data": {"audio": base64.b64encode(pcm[201:]).decode()}}))
+                await ws.send(json.dumps({"type": "event", "data": {"event_type": "final"}}))  # before flush: ignored
+            if msg["type"] == "flush":
+                await ws.send(json.dumps({"type": "event", "data": {"event_type": "final"}}))
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        monkeypatch.setattr(settings, "SARVAM_TTS_WS_URL", f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/text-to-speech/ws")
+        stream = await SarvamTTS(settings).open_stream()
+        await stream.send_text("Hi Arun.")
+        await stream.send_text("Is now a good time?")
+        await stream.end_input()
+        chunks = [c async for c in stream.audio()]
+        await stream.aclose()
+
+    assert b"".join(chunks) == audio.pcm16_to_mulaw(pcm) * 2
+    assert headers["key"] == "sarvam-test-key"
+    assert "model=bulbul%3Av3" in headers["path"] and "send_completion_event=true" in headers["path"]
+    config = received[0]
+    assert config["type"] == "config"
+    assert config["data"]["output_audio_codec"] == "linear16" and config["data"]["speech_sample_rate"] == "8000"
+    assert config["data"]["speaker"] == "priya" and config["data"]["language_code"] == "en-IN"
+    assert [m["type"] for m in received[1:]] == ["text", "text", "flush"]
+
+
+async def test_sarvam_tts_websocket_error(monkeypatch):
+    from websockets.asyncio.server import serve
+
+    from app.services.sarvam_tts import SarvamTTS
+
+    async def handler(ws):
+        async for raw in ws:
+            if json.loads(raw)["type"] == "text":
+                await ws.send(json.dumps({"type": "error", "data": {"message": "bad speaker", "code": 422}}))
+
+    async with serve(handler, "127.0.0.1", 0) as server:
+        monkeypatch.setattr(settings, "SARVAM_TTS_WS_URL", f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}")
+        stream = await SarvamTTS(settings).open_stream()
+        await stream.send_text("Hello.")
+        with pytest.raises(TTSError) as ei:
+            async for _ in stream.audio():
+                pass
+        await stream.aclose()
+    assert ei.value.kind == "invalid_request"

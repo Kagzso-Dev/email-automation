@@ -2,7 +2,7 @@ import { Router } from "express";
 import { createTriggerInput, idParam, updateTriggerInput } from "@dispatch/shared";
 import { prisma } from "../../prisma.js";
 import { env } from "../../env.js";
-import { authRequired } from "../middleware/auth.js";
+import { authRequired, requireRole } from "../middleware/auth.js";
 import { badRequest, notFound, wrap } from "../errors.js";
 
 export const triggersRouter = Router();
@@ -34,6 +34,7 @@ triggersRouter.get(
 
 triggersRouter.post(
   "/",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const body = createTriggerInput.parse(req.body);
     const tpl = await prisma.template.findUnique({ where: { id: body.templateId } });
@@ -55,6 +56,7 @@ triggersRouter.get(
 
 triggersRouter.put(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = updateTriggerInput.parse(req.body);
@@ -65,6 +67,7 @@ triggersRouter.put(
 
 triggersRouter.delete(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     await prisma.emailLog.updateMany({ where: { triggerId: id }, data: { triggerId: null } });

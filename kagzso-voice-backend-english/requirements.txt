@@ -21,6 +21,7 @@ twilio==9.11.2
 
 # Audio
 webrtcvad-wheels==2.0.14.post1   # prebuilt wheels (no C++ compiler needed on Windows)
+numpy==2.2.6                     # input noise suppression (app/services/noise_suppression.py)
 phonenumbers==9.0.40
 
 # Dev / tests

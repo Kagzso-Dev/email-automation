@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -113,6 +115,37 @@ async def test_openai_compatible_stream_parsing():
     assert "max_completion_tokens" in seen["body"]
 
 
+@pytest.mark.parametrize("level,effort", [("minimal", None), ("", None), ("off", None), ("low", "low"), ("high", "high")])
+async def test_sarvam_request_turns_reasoning_off_and_skips_reasoning_deltas(monkeypatch, level, effort):
+    monkeypatch.setattr(settings, "LLM_THINKING_LEVEL", level)
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "")
+    seen = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen["url"] = str(req.url)
+        seen["headers"] = req.headers
+        seen["body"] = json.loads(req.content)
+        sse = (
+            'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'
+            'data: {"choices":[{"delta":{"reasoning":"Let me think..."}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"Thank you sir."}}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(200, text=sse)
+
+    p = _provider(llm.SarvamProvider, handler)
+    assert await p.generate_response("You are X.", [], "Yes", {}) == "Thank you sir."
+    assert seen["url"] == "https://api.sarvam.ai/v1/chat/completions"
+    assert seen["headers"]["api-subscription-key"] == "llm-test-key"
+    assert seen["headers"]["authorization"] == "Bearer llm-test-key"
+    assert "reasoning_effort" in seen["body"] and seen["body"]["reasoning_effort"] == effort
+    assert "max_tokens" in seen["body"]
+
+
+def test_sarvam_is_a_registered_provider():
+    assert isinstance(llm.create_llm_provider(settings, name="sarvam"), llm.SarvamProvider)
+
+
 @pytest.mark.parametrize("status,kind", [(401, "auth"), (403, "auth"), (429, "rate_limit"), (400, "invalid_request"), (500, "provider")])
 async def test_llm_error_mapping(status, kind):
     p = _provider(llm.GeminiProvider, lambda req: httpx.Response(status, json={"error": {"message": "nope"}}))
@@ -143,6 +176,140 @@ async def test_gemini_fails_over_to_fallback_model(monkeypatch, status, fails_ov
         assert hits == ["test-model"]
 
 
+def _failing_primary(hits, primary_status=503, primary_delay=0.0, backup_delay=0.0):
+    async def handler(req: httpx.Request) -> httpx.Response:
+        model = req.url.path.rsplit("/", 1)[1].split(":")[0]
+        hits.append(model)
+        if model == "test-model":
+            await asyncio.sleep(primary_delay)
+            if primary_status != 200:
+                return httpx.Response(primary_status, json={"error": {"message": "overloaded"}})
+            return httpx.Response(200, text='data: {"candidates":[{"content":{"parts":[{"text":"Primary reply."}]}}]}\n\n')
+        await asyncio.sleep(backup_delay)
+        return httpx.Response(200, text='data: {"candidates":[{"content":{"parts":[{"text":"Backup reply."}]}}]}\n\n')
+    return handler
+
+
+async def test_circuit_breaker_skips_failing_primary_during_cooldown(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_COOLDOWN_SECONDS", 120.0)
+    hits = []
+    p = _provider(llm.GeminiProvider, _failing_primary(hits))
+    assert await p.generate_response("x", [], "hi", {}) == "Backup reply."
+    assert await p.generate_response("x", [], "again", {}) == "Backup reply."
+    assert hits == ["test-model", "backup-model", "backup-model"]  # 2nd turn skips the primary
+
+    p._primary_skip_until = 0.0  # cooldown over: the primary is tried again
+    assert await p.generate_response("x", [], "third", {}) == "Backup reply."
+    assert hits[3:] == ["test-model", "backup-model"]
+
+
+async def test_circuit_breaker_off_tries_primary_every_turn(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_COOLDOWN_SECONDS", 0.0)
+    hits = []
+    p = _provider(llm.GeminiProvider, _failing_primary(hits))
+    await p.generate_response("x", [], "hi", {})
+    await p.generate_response("x", [], "again", {})
+    assert hits == ["test-model", "backup-model", "test-model", "backup-model"]
+
+
+async def test_circuit_breaker_not_opened_by_non_retryable_error(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    hits = []
+    p = _provider(llm.GeminiProvider, _failing_primary(hits, primary_status=401))
+    with pytest.raises(llm.LLMError):
+        await p.generate_response("x", [], "hi", {})
+    assert p._primary_skip_until == 0.0
+    assert hits == ["test-model"]
+
+
+async def test_slow_primary_fails_over_on_first_token_timeout(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS", 0.05)
+    hits = []
+    p = _provider(llm.GeminiProvider, _failing_primary(hits, primary_status=200, primary_delay=1.0))
+    assert await p.generate_response("x", [], "hi", {}) == "Backup reply."
+    assert hits == ["test-model", "backup-model"]
+    assert p._primary_skip_until == 0.0  # slow is not broken: the next turn tries the primary again
+
+
+async def test_failing_backup_during_cooldown_falls_back_to_primary(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    hits = []
+
+    async def handler(req: httpx.Request) -> httpx.Response:
+        model = req.url.path.rsplit("/", 1)[1].split(":")[0]
+        hits.append(model)
+        if model == "backup-model":
+            return httpx.Response(400, json={"error": {"message": "thinking level not supported"}})
+        return httpx.Response(200, text='data: {"candidates":[{"content":{"parts":[{"text":"Primary reply."}]}}]}\n\n')
+
+    p = _provider(llm.GeminiProvider, handler)
+    p._primary_skip_until = time.monotonic() + 60  # primary cooling down
+    assert await p.generate_response("x", [], "hi", {}) == "Primary reply."
+    assert hits == ["backup-model", "test-model"]
+
+
+async def test_first_token_timeout_never_applies_to_last_model(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS", 0.05)
+    hits = []
+    p = _provider(llm.GeminiProvider, _failing_primary(hits, backup_delay=0.2))
+    assert await p.generate_response("x", [], "hi", {}) == "Backup reply."  # slow backup still answers
+
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "")  # no fallback: no first-token timeout at all
+    hits.clear()
+    p2 = _provider(llm.GeminiProvider, _failing_primary(hits, primary_status=200, primary_delay=0.2))
+    assert await p2.generate_response("x", [], "hi", {}) == "Primary reply."
+
+
+async def test_fast_primary_is_used_and_breaker_stays_closed(monkeypatch):
+    monkeypatch.setattr(settings, "LLM_FALLBACK_MODEL", "backup-model")
+    hits = []
+    p = _provider(llm.GeminiProvider, _failing_primary(hits, primary_status=200))
+    assert await p.generate_response("x", [], "hi", {}) == "Primary reply."
+    assert hits == ["test-model"] and p._primary_skip_until == 0.0
+
+
 def test_unknown_provider_rejected():
     with pytest.raises(llm.LLMError):
         llm.create_llm_provider(settings, name="nope")
+
+
+# ------------------------------------------------------------ outcome classification retry
+class _FlakyClassifier(llm.LLMProvider):
+    def __init__(self, errors):
+        super().__init__(settings)
+        self.errors = list(errors)
+        self.calls = 0
+
+    async def _stream(self, system_text, messages, model=None):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        yield '{"outcome": "interested", "reached": true, "summary": "ok"}'
+
+
+async def test_outcome_classification_retries_once_on_transient_error(monkeypatch):
+    from app.services import call_service
+    monkeypatch.setattr(call_service, "OUTCOME_RETRY_DELAY_SECONDS", 0)
+    p = _FlakyClassifier([llm.LLMError("provider", "Gemini error (503)")])
+    raw = await call_service.classify_outcome(p, "Customer: yes")
+    assert llm.parse_outcome(raw)[0] == "interested" and p.calls == 2
+
+
+async def test_outcome_classification_gives_up_after_one_retry(monkeypatch):
+    from app.services import call_service
+    monkeypatch.setattr(call_service, "OUTCOME_RETRY_DELAY_SECONDS", 0)
+    p = _FlakyClassifier([llm.LLMError("provider", "x"), llm.LLMError("provider", "x"), llm.LLMError("provider", "x")])
+    assert await call_service.classify_outcome(p, "Customer: yes") is None
+    assert p.calls == 2
+
+
+async def test_outcome_classification_does_not_retry_auth_error(monkeypatch):
+    from app.services import call_service
+    monkeypatch.setattr(call_service, "OUTCOME_RETRY_DELAY_SECONDS", 0)
+    p = _FlakyClassifier([llm.LLMError("auth", "x")])
+    assert await call_service.classify_outcome(p, "Customer: yes") is None
+    assert p.calls == 1

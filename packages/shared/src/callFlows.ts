@@ -20,6 +20,8 @@ export const CALL_FLOW_VARIABLES = [
   "follow_up_detail",
   "company_name",
   "business_type",
+  "title_to_use",
+  "time_greeting",
 ] as const;
 
 export const CALL_FLOW_GROUPS = ["greeting", "main_script", "questions", "objections", "closing", "tone", "rules"] as const;

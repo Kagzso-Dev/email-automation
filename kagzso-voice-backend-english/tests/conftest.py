@@ -28,13 +28,12 @@ os.environ.update({
     "TWILIO_VALIDATE_SIGNATURE": "false",
     "TELEPHONY_PROVIDER": "plivo",
     "SARVAM_API_KEY": "sarvam-test-key",
-    "CARTESIA_API_KEY": "cartesia-test-key",
-    "CARTESIA_VOICE_ID": "voice-123",
     "LLM_PROVIDER": "gemini",
     "LLM_API_KEY": "llm-test-key",
     "LLM_MODEL": "test-model",
     "GREETING_DELAY_MS": "60000",
     "GREETING_PRERENDER": "false",
+    "PRERENDER_FIXED_LINES": "false",
     "VAD_MIN_RMS": "0",
     "LOG_LEVEL": "INFO",
 })
@@ -48,12 +47,14 @@ from app.db import models  # noqa: E402,F401
 from app.db.database import Base  # noqa: E402
 from app.services import audio_service as audio  # noqa: E402
 from app.services import call_service  # noqa: E402
-from app.services.cartesia_tts import TTSProvider, TTSStream  # noqa: E402
+from app.services.tts import TTSProvider, TTSStream  # noqa: E402
 from app.services.llm_service import LLMProvider, OUTCOME_SYSTEM  # noqa: E402
 from app.services.plivo_service import OutboundCallResult, PlivoError, PlivoService  # noqa: E402
 from app.services.twilio_service import TwilioService  # noqa: E402
 from app.services.sarvam_stt import STTProvider, STTResult  # noqa: E402
 from app.services.session_store import SessionStore, set_session_store  # noqa: E402
+from app.services import llm_service  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 REAL_WEBRTC_CLASSIFIER = audio.make_webrtc_classifier  # tests patch the module attribute
 
@@ -97,6 +98,10 @@ class FakeTTSStream(TTSStream):
         self.queue: asyncio.Queue = asyncio.Queue()
         self.texts: List[str] = []
         self.cancelled = False
+        self.pace = None  # None = the configured speed
+
+    async def set_pace(self, pace):
+        self.pace = pace
 
     async def send_text(self, text):
         self.texts.append(text)
@@ -130,12 +135,15 @@ class FakeTTS(TTSProvider):
         self.chunks_per_sentence = 2
         self.delay = 0.0
         self.streams: List[FakeTTSStream] = []
+        self.synthesized: List[tuple] = []  # (text, pace)
 
-    async def synthesize(self, text):
+    async def synthesize(self, text, pace=None):
+        self.synthesized.append((text, pace))
         return self.chunk * 3
 
-    async def open_stream(self):
+    async def open_stream(self, pace=None):
         s = FakeTTSStream(self)
+        s.pace = pace
         self.streams.append(s)
         return s
 
@@ -217,6 +225,18 @@ def sync_engine():
     eng = create_engine(f"sqlite:///{_DB.as_posix()}")
     yield eng
     eng.dispose()
+
+
+REAL_TIME_GREETING = llm_service.time_greeting_for
+GREETING_CLOCK = datetime(2026, 1, 5, 3, 30, tzinfo=timezone.utc)  # 09:00 IST -> "Good morning"
+
+
+@pytest.fixture(autouse=True)
+def fixed_greeting_clock(monkeypatch):
+    """{{time_greeting}} uses the current time; pin it so greetings in tests don't depend on
+    when they run. Tests that pass `now` explicitly get the real calculation."""
+    monkeypatch.setattr(llm_service, "time_greeting_for",
+                        lambda now=None, tz_name=None: REAL_TIME_GREETING(now or GREETING_CLOCK, tz_name))
 
 
 @pytest.fixture(autouse=True)

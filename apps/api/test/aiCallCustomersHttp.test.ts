@@ -52,9 +52,9 @@ describe("AI Call Customers / follow-ups access", () => {
     expect((await call(path, { method, body: method === "GET" ? undefined : "{}" })).status).toBe(401);
   });
 
-  it.each(ENDPOINTS)("%s %s is blocked for non-admins", async (method, path) => {
-    const res = await call(path, { method, role: "EDITOR", body: method === "GET" ? undefined : "{}" });
-    expect(res.status).toBe(403);
+  it("lets editors through the role gate", async () => {
+    const res = await call("/api/ai-call-customers/delete", { method: "POST", role: "EDITOR", body: JSON.stringify({ ids: [] }) });
+    expect(res.status).toBe(400);
   });
 
   it("validates input before touching the database", async () => {

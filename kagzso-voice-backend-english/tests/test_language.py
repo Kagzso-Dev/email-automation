@@ -25,7 +25,7 @@ def test_tamil_fallback_and_sarvam_code():
 
 
 def test_brand_pronounced_kexo():
-    from app.services.cartesia_tts import apply_pronunciations
+    from app.services.tts import apply_pronunciations
 
     for variant in ("காக்ஸோ", "கேக்சோ", "காக்ஸ்ஸோ", "காக்ஜ்ஸோ", "Kagzso", "KAGZSO", "kagso"):
         assert apply_pronunciations(f"நான் {variant}-ல இருந்து பேசுறேன்.", "ta") == "நான் கெக்ஸோ-ல இருந்து பேசுறேன்."
@@ -41,16 +41,16 @@ async def test_tts_requests_use_kexo(monkeypatch):
     import httpx
 
     from app.core.config import settings
-    from app.services.cartesia_tts import CartesiaTTS
+    from app.services.sarvam_tts import SarvamTTS
 
     seen = {}
 
     def handler(req):
-        seen["t"] = json.loads(req.content)["transcript"]
-        return httpx.Response(200, content=b"\xff")
+        seen["t"] = json.loads(req.content)["text"]
+        return httpx.Response(200, json={"audios": []})
 
-    monkeypatch.setattr(settings, "CARTESIA_LANGUAGE", "ta")
-    tts = CartesiaTTS(settings, client=httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(settings, "CALL_LANGUAGE", "ta")
+    tts = SarvamTTS(settings, client=httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler)))
     await tts.synthesize("காக்ஸோ நிறுவனம்")
     assert seen["t"] == "கெக்ஸோ நிறுவனம்"
 

@@ -13,6 +13,7 @@ import { formatBytes, uploadWithProgress } from "../lib/whatsappMedia";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { ErrorNote } from "./ui";
+import { useBranding } from "../lib/branding";
 
 /**
  * Dispatch → Meta: build a template and submit it for Meta's review. It is
@@ -39,6 +40,7 @@ const HEADER_HINT: Record<string, string> = {
 };
 
 export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
+  const { appName } = useBranding();
   const qc = useQueryClient();
   const toast = useToast();
   const confirm = useConfirm();
@@ -140,7 +142,7 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label className="label">Name in Dispatch</label>
+            <label className="label">Name in {appName}</label>
             <input className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Company Intro" required />
           </div>
           <div>

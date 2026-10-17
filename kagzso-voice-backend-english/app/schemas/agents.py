@@ -16,7 +16,7 @@ class AgentCreate(BaseModel):
     language: str = Field("en", max_length=16)
     stt_provider: str = Field("sarvam", max_length=32)
     llm_provider: str = Field("gemini", max_length=32)
-    tts_provider: str = Field("cartesia", max_length=32)
+    tts_provider: str = Field("sarvam", max_length=32)
     voice_id: Optional[str] = Field(None, max_length=100)
     active: bool = True
 

@@ -7,24 +7,28 @@ Providers implement `_stream(system_text, messages)`; the public interface is
 
 Implemented providers
   * gemini            - Google Gemini REST API (streamGenerateContent?alt=sse, header x-goog-api-key)
-  * openai / groq / ollama / openai_compatible
+  * openai / groq / sarvam / ollama / openai_compatible
                       - OpenAI Chat Completions wire format (stream=true SSE)
 Adding another provider = subclass LLMProvider and register it in PROVIDERS.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import AsyncIterator, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import httpx
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import get_logger
 from app.flows.loader import BUILTIN_FLOWS
 from app.flows.schema import render_blocks
-from app.services.cartesia_tts import brand_spoken
+from app.services.tts import brand_spoken
 
 log = get_logger("llm")
 
@@ -62,7 +66,7 @@ DEFAULT_AGENT = {
     "language": default_settings.CALL_LANGUAGE,
     "stt_provider": "sarvam",
     "llm_provider": "gemini",
-    "tts_provider": "cartesia",
+    "tts_provider": "sarvam",
     "voice_id": None,
     "active": True,
 }
@@ -77,8 +81,8 @@ def _builtin_agent(name: str, description: str, base: str) -> dict:
         "language": flow.language,
         "stt_provider": "sarvam",
         "llm_provider": "gemini",
-        "tts_provider": "cartesia",
-        "voice_id": flow.voice_id,  # Cartesia Indian-English female "Kiara"
+        "tts_provider": "sarvam",
+        "voice_id": flow.voice_id,  # Bulbul speaker; None = SARVAM_TTS_SPEAKER
         "active": True,
     }
 
@@ -86,6 +90,7 @@ def _builtin_agent(name: str, description: str, base: str) -> dict:
 # Built-in agents whose prompt lives in the repo (app/flows/builtin/*.json); synced
 # into MySQL at startup. The first_message is spoken verbatim (no LLM) so the strict
 # greeting rule (name once, sir / madam / no title from the provided gender) always holds.
+# Agent "Nila" (briefly renamed Radhi, then Kayal; those names still find it).
 NILA_AGENT = _builtin_agent(
     "Nila",
     "Kagzso AI and Automation - outbound screening (identity, permission) + 1-minute English conversation",
@@ -127,12 +132,14 @@ SAFETY_RULES = f"""
 # Safe variable substitution
 # --------------------------------------------------------------------------
 ALLOWED_VARIABLES = ("contact_name", "customer_name", "name", "gender", "title", "company_name", "business_type",
-                     "phone_number", "honorific", "addressed_name", "follow_up_detail")
+                     "phone_number", "honorific", "addressed_name", "follow_up_detail", "title_to_use",
+                     "time_greeting")
 _VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
 _UNSAFE_CHARS = re.compile(r"[\x00-\x1f\x7f{}<>\[\]`#*|\\]")
 _FALLBACKS = {"contact_name": "the customer", "customer_name": "the customer", "name": "the customer",
               "company_name": "their company", "phone_number": "their number", "business_type": "their business",
-              "gender": "", "title": "", "honorific": "", "addressed_name": "the customer", "follow_up_detail": "(none)"}
+              "gender": "", "title": "", "honorific": "", "addressed_name": "the customer", "follow_up_detail": "(none)",
+              "title_to_use": "", "time_greeting": ""}
 FOLLOW_UP_MAX_LEN = 300
 
 
@@ -149,6 +156,41 @@ def sanitize_variable(value: Optional[str], max_len: int = 80) -> str:
 def title_for(gender: Optional[str]) -> str:
     """sir / madam only from an explicit gender field; anything else -> no title."""
     return {"male": "sir", "female": "madam"}.get((gender or "").strip().lower(), "")
+
+
+def title_to_use_for(gender: Optional[str]) -> str:
+    """sir / madam from an explicit gender field; anything else -> CALL_DEFAULT_TITLE.
+    Never guessed from the name or the voice."""
+    return title_for(gender) or sanitize_variable(default_settings.CALL_DEFAULT_TITLE, 20)
+
+
+# Zones usable without the tzdata package (Windows has no system zone database).
+_FIXED_ZONES = {"Asia/Kolkata": timedelta(hours=5, minutes=30), "Asia/Calcutta": timedelta(hours=5, minutes=30),
+                "UTC": timedelta(0), "Etc/UTC": timedelta(0)}
+
+
+def _greeting_zone(name: str) -> tzinfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        if name in _FIXED_ZONES:
+            return timezone(_FIXED_ZONES[name], name)
+        log.warning("CALL_GREETING_TIMEZONE %r not found - using Asia/Kolkata", name)
+        return timezone(_FIXED_ZONES["Asia/Kolkata"], "Asia/Kolkata")
+
+
+def time_greeting_for(now: Optional[datetime] = None, tz_name: Optional[str] = None) -> str:
+    """"Good morning" 05:00-11:59, "Good afternoon" 12:00-16:59, "Good evening" 17:00-04:59,
+    in CALL_GREETING_TIMEZONE. Computed in code, never by the LLM. A naive `now` is UTC."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    hour = now.astimezone(_greeting_zone(tz_name or default_settings.CALL_GREETING_TIMEZONE)).hour
+    if 5 <= hour < 12:
+        return "Good morning"
+    if 12 <= hour < 17:
+        return "Good afternoon"
+    return "Good evening"
 
 
 _INITIAL_RE = re.compile(r"^[A-Za-z]\.?$")
@@ -177,6 +219,8 @@ def safe_variables(variables: Mapping[str, Optional[str]]) -> Dict[str, str]:
     honorific = honorific_for(gender) if safe_name else ""
     out.update(customer_name=safe_name, contact_name=safe_name, name=safe_name,
                gender=gender, title=title_for(gender), honorific=honorific,
+               title_to_use=title_to_use_for(gender),
+               time_greeting=sanitize_variable(variables.get("time_greeting"), 20) or time_greeting_for(),
                addressed_name=f"{honorific} {safe_name}".strip(),
                follow_up_detail=sanitize_variable(variables.get("follow_up_detail"), FOLLOW_UP_MAX_LEN))
     return out
@@ -191,6 +235,7 @@ def build_call_variables(
     business_type: Optional[str] = None,
     run_id: Optional[str] = None,
     log_id: Optional[str] = None,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Optional[str]]:
     """Per-call variables stored on the call row and rendered into the agent prompt.
     Only an explicitly provided gender is used (never inferred). run_id / log_id are
@@ -202,6 +247,8 @@ def build_call_variables(
         "company_name": company_name,
         "business_type": business_type,
         "phone_number": phone_number,
+        # Fixed when the call is placed: the greeting is pre-rendered while the phone rings.
+        "time_greeting": time_greeting_for(now),
     }
     if follow_up_detail:
         variables["follow_up_detail"] = sanitize_variable(follow_up_detail, FOLLOW_UP_MAX_LEN)
@@ -257,6 +304,10 @@ def language_instruction(language: Optional[str]) -> str:
     )
 
 
+def _uses_title_to_use(template: str) -> bool:
+    return any(m.group(1) == "title_to_use" for m in _VAR_RE.finditer(template))
+
+
 def build_system_prompt(
     agent_prompt: str, variables: Mapping[str, Optional[str]], language: Optional[str] = None
 ) -> str:
@@ -266,7 +317,9 @@ def build_system_prompt(
         "customer_name": safe["customer_name"] or None,
         "contact_name": safe["customer_name"] or None,
         "gender": safe["gender"],
-        "title_to_use": safe["title"],
+        # Scripts that use {{title_to_use}} (Nila) get the default title for an unknown gender;
+        # every other agent keeps an empty title_to_use (no sir / madam) as before.
+        "title_to_use": safe["title_to_use"] if _uses_title_to_use(agent_prompt) else safe["title"],
         "company_name": safe["company_name"] or None,
         "business_type": safe["business_type"] or None,
         "phone_number": safe["phone_number"] or None,
@@ -385,36 +438,220 @@ async def _iter_sse_data(resp: httpx.Response) -> AsyncIterator[str]:
             yield line[5:].strip()
 
 
+_STREAM_END = object()
+
+
+async def _with_first_token_timeout(stream: AsyncIterator[str], timeout: float) -> AsyncIterator[str]:
+    """Pass `stream` through, raising LLMError("timeout") if the first delta takes longer
+    than `timeout`. The stream runs in its own task so the HTTP response is opened and
+    closed in one task; later deltas are not time-limited here."""
+    queue: "asyncio.Queue[object]" = asyncio.Queue()
+
+    async def pump() -> None:
+        try:
+            async for delta in stream:
+                queue.put_nowait(delta)
+        except Exception as exc:
+            queue.put_nowait(exc)
+        else:
+            queue.put_nowait(_STREAM_END)
+
+    task = asyncio.create_task(pump())
+    try:
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout)
+        except asyncio.TimeoutError:
+            raise LLMError("timeout", f"no reply text within {timeout:g}s") from None
+        while item is not _STREAM_END:
+            if isinstance(item, Exception):
+                raise item
+            yield item  # type: ignore[misc]
+            item = await queue.get()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 class LLMProvider(ABC):
     name = "base"
 
     def __init__(self, cfg: Optional[Settings] = None, client: Optional[httpx.AsyncClient] = None):
         self.cfg = cfg or default_settings
         self.model = self.cfg.LLM_MODEL
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(self.cfg.LLM_TIMEOUT_SECONDS, connect=5.0))
+        self._primary_skip_until = 0.0  # monotonic time until which LLM_MODEL is skipped
+        self._skip_until: Dict[str, float] = {}  # same, for LLM_TURN_MODEL
+        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(self.cfg.LLM_TIMEOUT_SECONDS, connect=5.0),
+                                                   limits=self.cfg.http_limits())
 
     @abstractmethod
     def _stream(self, system_text: str, messages: List[Message], model: Optional[str] = None) -> AsyncIterator[str]:
         """Yield text deltas (model defaults to LLM_MODEL)."""
 
     RETRYABLE = ("rate_limit", "provider", "timeout")
+    # Errors that mean LLM_MODEL is unavailable (quota / overload), not just slow on one reply.
+    COOLDOWN_KINDS = ("rate_limit", "provider")
 
-    async def _stream_with_failover(self, system_text: str, messages: List[Message]) -> AsyncIterator[str]:
-        """Use LLM_MODEL; if it fails with quota / overload / timeout before producing any
-        text, retry once on LLM_FALLBACK_MODEL (a separate model has its own quota)."""
-        fallback = self.cfg.LLM_FALLBACK_MODEL
-        models = [self.model] + ([fallback] if fallback and fallback != self.model else [])
+    def _chain(self, turn: bool) -> Tuple[str, str]:
+        """(primary, fallback): live replies use LLM_TURN_MODEL backed by LLM_MODEL when it is
+        set; everything else (and replies without it) uses LLM_MODEL backed by LLM_FALLBACK_MODEL."""
+        turn_model = self.cfg.LLM_TURN_MODEL.strip()
+        if turn and turn_model and turn_model != self.model:
+            return turn_model, self.model
+        return self.model, self.cfg.LLM_FALLBACK_MODEL
+
+    def _cooling_until(self, model: str) -> float:
+        return self._primary_skip_until if model == self.model else self._skip_until.get(model, 0.0)
+
+    def _cool_down(self, model: str, until: float) -> None:
+        if model == self.model:
+            self._primary_skip_until = until
+        else:
+            self._skip_until[model] = until
+
+    def _models(self, primary: Optional[str] = None, fallback: Optional[str] = None) -> List[str]:
+        """Primary then fallback; the fallback first while the primary is cooling down, with the
+        primary kept as the second try so a failing fallback never leaves a turn with no model."""
+        if primary is None:
+            primary, fallback = self._chain(turn=False)
+        if not fallback or fallback == primary:
+            return [primary]
+        left = self._cooling_until(primary) - time.monotonic()
+        if left > 0:
+            log.info("LLM %s cooling down (%.0fs left) - using %s first", primary, left, fallback)
+            return [fallback, primary]
+        return [primary, fallback]
+
+    def _note_failure(self, model: str, chain_primary: str, exc: LLMError) -> bool:
+        """Put the fallback first for LLM_PRIMARY_COOLDOWN_SECONDS after a quota / overload error."""
+        cooldown = self.cfg.LLM_PRIMARY_COOLDOWN_SECONDS
+        cooling = model == chain_primary and cooldown > 0 and exc.kind in self.COOLDOWN_KINDS
+        if cooling:
+            self._cool_down(model, time.monotonic() + cooldown)
+        return cooling
+
+    async def _stream_with_failover(self, system_text: str, messages: List[Message],
+                                    turn: bool = False) -> AsyncIterator[str]:
+        """Use the primary model; if it fails with quota / overload / timeout (or sends no text within
+        LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS) before producing any text, retry once on the
+        fallback (a separate model has its own quota). Quota / overload errors also put the
+        fallback first for LLM_PRIMARY_COOLDOWN_SECONDS so later turns don't pay for the failure
+        again; a merely slow reply does not. With LLM_HEDGE_AFTER_SECONDS the fallback is started
+        alongside a slow primary instead of replacing it."""
+        chain_primary, chain_fallback = self._chain(turn)
+        models = self._models(chain_primary, chain_fallback)
+        hedge = self.cfg.LLM_HEDGE_AFTER_SECONDS
+        if hedge > 0 and len(models) == 2:
+            async for delta in self._stream_hedged(system_text, messages, models, chain_primary, hedge):
+                yield delta
+            return
         for i, model in enumerate(models):
             produced = False
+            started = time.monotonic()
+            last = i == len(models) - 1
+            primary = model == chain_primary
+            stream = self._stream(system_text, messages, model)
+            first_token_timeout = self.cfg.LLM_PRIMARY_FIRST_TOKEN_TIMEOUT_SECONDS
+            if primary and not last and first_token_timeout > 0:
+                stream = _with_first_token_timeout(stream, first_token_timeout)
             try:
-                async for delta in self._stream(system_text, messages, model):
+                async for delta in stream:
                     produced = True
                     yield delta
                 return
             except LLMError as exc:
-                if produced or i == len(models) - 1 or exc.kind not in self.RETRYABLE:
+                # The fallback failing during a cooldown also falls through to LLM_MODEL on a
+                # rejected request (e.g. a setting that model doesn't accept).
+                retry_kinds = self.RETRYABLE if primary else self.RETRYABLE + ("invalid_request",)
+                if produced or last or exc.kind not in retry_kinds:
                     raise
-                log.warning("LLM %s failed (%s) - failing over to %s", model, exc.kind, models[i + 1])
+                cooldown = self.cfg.LLM_PRIMARY_COOLDOWN_SECONDS
+                cooling = self._note_failure(model, chain_primary, exc)
+                log.warning("LLM %s failed (%s) after %dms: %s - failing over to %s%s",
+                            model, exc.kind, int((time.monotonic() - started) * 1000), str(exc)[:200],
+                            models[i + 1], f" for the next {cooldown:g}s" if cooling else "")
+
+    async def _stream_hedged(self, system_text: str, messages: List[Message], models: List[str],
+                             chain_primary: str, hedge: float) -> AsyncIterator[str]:
+        """Start models[0]; if it has sent no text after `hedge` seconds (or fails first with a
+        retryable error), start models[1] too. The first model to send text is spoken and the
+        other is cancelled; a model that fails while the other is still running is ignored."""
+        queue: "asyncio.Queue[Tuple[int, object]]" = asyncio.Queue()
+        tasks: Dict[int, asyncio.Task] = {}
+        failed: Dict[int, Exception] = {}
+        started = time.monotonic()
+
+        def start(i: int) -> None:
+            async def pump() -> None:
+                try:
+                    async for delta in self._stream(system_text, messages, models[i]):
+                        queue.put_nowait((i, delta))
+                except Exception as exc:
+                    queue.put_nowait((i, exc))
+                else:
+                    queue.put_nowait((i, _STREAM_END))
+            tasks[i] = asyncio.create_task(pump())
+
+        start(0)
+        winner: Optional[int] = None
+        try:
+            while True:
+                if winner is None and 1 not in tasks:
+                    try:
+                        i, item = await asyncio.wait_for(queue.get(), max(0.0, hedge - (time.monotonic() - started)))
+                    except asyncio.TimeoutError:
+                        log.info("LLM %s sent no text within %gs - also starting %s", models[0], hedge, models[1])
+                        start(1)
+                        continue
+                else:
+                    i, item = await queue.get()
+                if winner is not None and i != winner:
+                    continue
+                if isinstance(item, Exception):
+                    if winner is not None:
+                        raise item
+                    failed[i] = item
+                    if isinstance(item, LLMError):
+                        self._note_failure(models[i], chain_primary, item)
+                    other = 1 - i
+                    if other in failed:
+                        raise item
+                    if other in tasks:
+                        log.warning("LLM %s failed (%s) - waiting for %s", models[i], type(item).__name__, models[other])
+                        continue
+                    retry_kinds = self.RETRYABLE if models[i] == chain_primary else self.RETRYABLE + ("invalid_request",)
+                    if not isinstance(item, LLMError) or item.kind not in retry_kinds:
+                        raise item
+                    log.warning("LLM %s failed (%s) after %dms: %s - failing over to %s", models[i], item.kind,
+                                int((time.monotonic() - started) * 1000), str(item)[:200], models[other])
+                    start(other)
+                    continue
+                if item is _STREAM_END:
+                    return
+                if winner is None:
+                    winner = i
+                    if i == 1:
+                        log.info("LLM %s answered first (hedged)", models[1])
+                    for j, t in tasks.items():
+                        if j != i:
+                            t.cancel()
+                yield item  # type: ignore[misc]
+        finally:
+            for t in tasks.values():
+                t.cancel()
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+    def _base_url(self) -> str:
+        return ""
+
+    async def prewarm(self) -> None:
+        """Open the HTTPS connection before it is needed (no API key is sent)."""
+        url = self._base_url()
+        if not url:
+            return
+        try:
+            await self._client.head(url, timeout=3.0)
+        except Exception:
+            pass
 
     @staticmethod
     def _messages(history: Iterable[Message], user_message: Optional[str]) -> List[Message]:
@@ -435,7 +672,8 @@ class LLMProvider(ABC):
         variables: Mapping[str, Optional[str]],
     ) -> AsyncIterator[str]:
         system_text = build_system_prompt(system_prompt, variables)
-        async for delta in self._stream_with_failover(system_text, self._messages(conversation_history, user_message)):
+        messages = self._messages(conversation_history, user_message)
+        async for delta in self._stream_with_failover(system_text, messages, turn=True):
             yield delta
 
     async def generate_response(
@@ -460,6 +698,9 @@ class LLMProvider(ABC):
 class GeminiProvider(LLMProvider):
     name = "gemini"
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+
+    def _base_url(self) -> str:
+        return (self.cfg.LLM_BASE_URL or self.BASE_URL).rstrip("/")
 
     async def _stream(self, system_text: str, messages: List[Message], model: Optional[str] = None) -> AsyncIterator[str]:
         model = model or self.model
@@ -509,6 +750,15 @@ class OpenAICompatibleProvider(LLMProvider):
     TOKEN_PARAM = "max_tokens"
     REQUIRES_KEY = True
 
+    def _headers(self, key: str) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
+    def _base_url(self) -> str:
+        return (self.cfg.LLM_BASE_URL or self.DEFAULT_BASE_URL).rstrip("/")
+
+    def _extra_body(self) -> dict:
+        return {}
+
     async def _stream(self, system_text: str, messages: List[Message], model: Optional[str] = None) -> AsyncIterator[str]:
         model = model or self.model
         key = self.cfg.LLM_API_KEY.get_secret_value()
@@ -521,8 +771,9 @@ class OpenAICompatibleProvider(LLMProvider):
             "stream": True,
             "temperature": self.cfg.LLM_TEMPERATURE,
             self.TOKEN_PARAM: self.cfg.LLM_MAX_OUTPUT_TOKENS,
+            **self._extra_body(),
         }
-        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        headers = self._headers(key)
         try:
             async with self._client.stream("POST", f"{base}/chat/completions", headers=headers, json=body) as resp:
                 if resp.status_code != 200:
@@ -559,10 +810,28 @@ class OllamaProvider(OpenAICompatibleProvider):
     REQUIRES_KEY = False
 
 
+class SarvamProvider(OpenAICompatibleProvider):
+    """Sarvam chat completions (OpenAI format, sarvam-105b / sarvam-105b-conversations)."""
+
+    name = "sarvam"
+    DEFAULT_BASE_URL = "https://api.sarvam.ai/v1"
+    # LLM_THINKING_LEVEL -> reasoning_effort. Sarvam reasons by default, which can use the whole
+    # token budget before any reply text; null turns it off (fastest for phone calls).
+    _REASONING_OFF = ("", "none", "off", "minimal")
+
+    def _headers(self, key: str) -> Dict[str, str]:
+        return {**super()._headers(key), "api-subscription-key": key} if key else {}
+
+    def _extra_body(self) -> dict:
+        level = self.cfg.LLM_THINKING_LEVEL.strip().lower()
+        return {"reasoning_effort": None if level in self._REASONING_OFF else level}
+
+
 PROVIDERS = {
     "gemini": GeminiProvider,
     "openai": OpenAIProvider,
     "groq": GroqProvider,
+    "sarvam": SarvamProvider,
     "ollama": OllamaProvider,
     "openai_compatible": OpenAICompatibleProvider,
 }

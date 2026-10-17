@@ -4,15 +4,15 @@ Pipeline per customer turn (all async, nothing blocks the WebSocket loop):
 
     Plivo media (mu-law 8k) -> VAD endpointer -> [utterance]
         -> Sarvam STT -> LLM (streamed) -> sentence chunker
-        -> Cartesia TTS (streamed, mu-law 8k) -> Plivo playAudio
+        -> Sarvam TTS (streamed, mu-law 8k) -> Plivo playAudio
 
 Barge-in: when the VAD detects customer speech while the agent is generating
 or playing audio, the in-flight turn is cancelled (LLM + TTS), Plivo's queued
 audio is cleared with `clearAudio`, and the new utterance is processed.
 
 Latency markers (per turn):
-    T1 customer utterance received (end of speech)   T2 STT completed
-    T3 LLM started   T4 LLM completed   T5 TTS started   T6 first TTS audio
+    T0 customer stopped speaking   T1 end of speech detected (after the VAD silence)
+    T2 STT completed   T3 LLM started   T4 LLM completed   T5 TTS started   T6 first TTS audio
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Set, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +34,9 @@ from app.flows.loader import FlowError, resolve_flow_agent
 from app.schemas.calls import OutboundCallRequest
 from app.services import audio_service as audio
 from app.services import status_callback
-from app.services.cartesia_tts import CartesiaTTS, TTSError, TTSProvider, create_tts_provider
+from app.services.noise_suppression import InputCleaner
+from app.services.sarvam_tts import SarvamTTS
+from app.services.tts import TTSError, TTSProvider, create_tts_provider
 from app.services.llm_service import (
     OUTCOME_SYSTEM,
     LLMError,
@@ -51,10 +53,16 @@ from app.services.llm_service import (
 )
 from app.services.plivo_service import PlivoError, PlivoService, get_plivo_service
 from app.services.twilio_service import TwilioService, get_twilio_service
-from app.services.sarvam_stt import STTError, STTProvider, create_stt_provider
+from app.services.sarvam_stt import STTError, STTProvider, STTStream, create_stt_provider
 from app.services.session_store import SessionStore, get_session_store
 
 log = get_logger("voice.pipeline")
+
+# Noise reduction: lowest speech level while listening (about -55 dBFS, measured before the
+# auto-gain; the adaptive floor raises it on noisy lines), and how often the per-chunk timing is
+# logged (every 5 s).
+QUIET_VOICE_MIN_RMS = 60
+NOISE_LOG_EVERY_FRAMES = 250
 
 GREETING_INSTRUCTION = (
     "(The customer has picked up the phone but has not said anything yet. "
@@ -91,11 +99,126 @@ def is_filler(text: str) -> bool:
 # just checking the line. The identity question is asked once more before moving on.
 _GREETING_ONLY_WORDS = {"hello", "helo", "hallo", "halo", "hi", "hey", "hmm", "hm"}
 IDENTITY_REASK = "Sorry, am I speaking with {name}?"
+# Openings like "Hi {{title_to_use}}, {{time_greeting}}." don't ask for the customer: the system
+# asks this GREETING_WAIT_SECONDS after the opening, or at once when the customer says anything
+# (then IDENTITY_REASK at most once).
+IDENTITY_QUESTION = "Am I speaking with {name}, {title}?"
+
+# Said to the opening, these still go to the script instead of the identity question:
+# do-not-call (always highest priority) and "are you a bot / a real person?" (honest AI answer).
+_DO_NOT_CALL_RE = re.compile(
+    r"\b(stop|quit)\s+(calling|ringing|call(ing)?\s+me)"
+    r"|\b(don'?t|do\s+not|never|no\s+more)\s+(call|calls|calling|contact|phone|ring)"
+    r"|\bremove\s+(my|this)\s+(number|name|contact)"
+    r"|\b(take|delete)\s+(me|my\s+number)\s+off|\bunsubscribe\b|\bdo\s+not\s+disturb\b"
+    r"|\b(call|phone)\s+(panna(dh|th)?ee?nga|pannadhinga|panna\s+vendam|pannatheenga)"
+    r"|\b(call|phone)\s+mat\s+(karo|karna|kariye|kijiye)",
+    re.IGNORECASE,
+)
+_AI_QUESTION_RE = re.compile(
+    r"\b(bot|robot|robo|a\.?i\.?|artificial|machine|computer|recording|recorded|automated|human"
+    r"|real\s+person|actual\s+person)\b",
+    re.IGNORECASE,
+)
+
+
+def identity_silence_action(now: float, last_activity: float, playback_until: float, wait: float,
+                            repeats: int, reprompts: int) -> Optional[str]:
+    """Silence after the identity question, counted from the end of the agent's audio
+    (max of the last activity / playback ack and the estimated playback end):
+    "repeat" the question once, then "reprompt" (the silence line) once, else None
+    (keep waiting, or hand over to the normal silence flow)."""
+    if now - max(last_activity, playback_until) < wait:
+        return None
+    if repeats == 0:
+        return "repeat"
+    if reprompts == 0:
+        return "reprompt"
+    return None
+
+
+def first_speech_greeting_due(now: float, started: float, wait: float, hold_max: float,
+                              in_speech: bool, transcribing: bool) -> Optional[str]:
+    """When the first-speech wait (started = stream start) should give way to the greeting:
+    None (keep waiting), "silence" (the wait ended quietly) or "hold_limit" (the customer is
+    still talking FIRST_SPEECH_HOLD_MAX_SECONDS after the wait - greet anyway). While their
+    words are being transcribed, that turn plays the greeting instead."""
+    if now < started + wait or transcribing:
+        return None
+    if in_speech:
+        return "hold_limit" if now >= started + wait + hold_max else None
+    return "silence"
+
+
+# What an answering machine / carrier announcement says (English + common Hindi / Tamil wording).
+_VOICEMAIL_RE = re.compile(
+    r"leave (a |your )?(message|msg)|after the (tone|beep)|at the (tone|beep)|voice ?mail|mail ?box"
+    r"|not available|unavailable|can(no|')?t take your call|record your message|is busy right now"
+    r"|switched off|not reachable|out of (coverage|service)|number you have (dialled|dialed|called)"
+    r"|the subscriber|please try (again )?later|vyast hai|uplabdh nahi|band hai|thodi der baad"
+    r"|தொடர்பு கொள்ள முடியாது|அணைக்கப்பட்டுள்ளது",
+    re.IGNORECASE,
+)
+MACHINE_LONG_WORDS = 12  # one utterance this long right after answering is a recorded greeting
+MACHINE_LONG_SPEECH_MS = 6000  # or this long without a pause
+
+
+def machine_evidence(texts: List[str], speaking_ms: int = 0) -> Optional[str]:
+    """What the customer audio says about Plivo's "machine" verdict: "machine", "human" or None."""
+    if any(_VOICEMAIL_RE.search(t) for t in texts):
+        return "machine"
+    if any(len(_words(t)) > MACHINE_LONG_WORDS for t in texts) or speaking_ms > MACHINE_LONG_SPEECH_MS:
+        return "machine"
+    return "human" if any(_words(t) for t in texts) else None
+
+
+def needs_script_at_opening(text: str) -> bool:
+    """A reply to the opening that the script must answer itself: do-not-call or an AI question."""
+    text = text.replace("\u2019", "'")
+    return bool(_DO_NOT_CALL_RE.search(text) or _AI_QUESTION_RE.search(text))
 
 
 def is_greeting_only(text: str) -> bool:
     words = "".join(c if c.isalnum() or c.isspace() else " " for c in text.lower()).split()
     return 0 < len(words) <= 3 and all(w in _GREETING_ONLY_WORDS for w in words)
+
+
+def _words(text: str) -> List[str]:
+    return "".join(c if c.isalnum() or c.isspace() else " " for c in text.lower()).split()
+
+
+# Sounds STT writes for breathing / line noise. "hmm", "mm", "yes", "okay" etc. are NOT here:
+# they can be the customer's answer.
+_NOISE_ONLY_WORDS = {"uh", "uhh", "um", "umm", "er", "erm", "ah", "eh"}
+
+
+def is_noise_text(text: str) -> bool:
+    """Only punctuation or non-word sounds - nothing a customer would answer with."""
+    return all(w in _NOISE_ONLY_WORDS for w in _words(text))
+
+
+ECHO_MIN_WORDS = 3
+
+
+def is_echo(text: str, agent_text: str) -> bool:
+    """The transcript is the agent's own line coming back: 3+ words, every one taken in order
+    from `agent_text` and close together. A reply with any word of its own ("yes", "no",
+    a name) is never echo, and neither is anything shorter than 3 words."""
+    words, ref = _words(text), _words(agent_text)
+    if len(words) < ECHO_MIN_WORDS or not ref:
+        return False
+    max_span = 2 * len(words) + 2
+    for start, first in enumerate(ref):
+        if first != words[0]:
+            continue
+        j, i = 1, start + 1
+        while j < len(words) and i < len(ref) and i - start < max_span:
+            if ref[i] == words[j]:
+                j += 1
+            i += 1
+        if j == len(words):
+            return True
+    return False
 
 
 def _lang(language: Optional[str]) -> str:
@@ -117,9 +240,22 @@ def silence_closing(language: Optional[str] = None) -> str:
 _NAME_ALIAS_RE = re.compile(r"\{\{\s*name\s*\}\}")
 
 
+_TIME_GREETING_RE = re.compile(r"\{\{\s*time_greeting\s*\}\}")
+
+
 def greeting_needs_name(first_message: str) -> bool:
-    """The opening line speaks the customer's name, so a call without one is refused."""
-    return "customer_name" in first_message or bool(_NAME_ALIAS_RE.search(first_message))
+    """The opening line, or the identity question right after it, speaks the customer's
+    name, so a call without one is refused."""
+    return ("customer_name" in first_message or bool(_NAME_ALIAS_RE.search(first_message))
+            or identity_after_greeting(first_message))
+
+
+def identity_after_greeting(first_message: Optional[str]) -> bool:
+    """The opening is a time-of-day greeting that doesn't name the customer, so the
+    identity question (IDENTITY_QUESTION) follows the customer's first reply."""
+    first = first_message or ""
+    return (bool(_TIME_GREETING_RE.search(first)) and "customer_name" not in first
+            and not _NAME_ALIAS_RE.search(first))
 
 
 def _ms(a: Optional[float], b: Optional[float]) -> Optional[int]:
@@ -147,8 +283,9 @@ class Providers:
         return self.plivo
 
     def tts_for_voice(self, voice_id: Optional[str]) -> TTSProvider:
-        if voice_id and isinstance(self.tts, CartesiaTTS) and voice_id != self.tts.voice_id:
-            return CartesiaTTS(self.tts.cfg, voice_id=voice_id, client=self.tts._client)
+        if voice_id and isinstance(self.tts, SarvamTTS):
+            voiced = SarvamTTS(self.tts.cfg, voice_id=voice_id, client=self.tts._client)
+            return voiced if voiced.voice_id != self.tts.voice_id else self.tts
         return self.tts
 
     async def aclose(self) -> None:
@@ -170,7 +307,7 @@ def get_providers() -> Providers:
         _providers = Providers(
             stt=create_stt_provider("sarvam"),
             llm=create_llm_provider(),
-            tts=create_tts_provider("cartesia"),
+            tts=create_tts_provider("sarvam"),
             plivo=get_plivo_service(),
             twilio=get_twilio_service(),
         )
@@ -211,23 +348,26 @@ async def transition(
 # The fixed first sentence is synthesized while the phone is still ringing and
 # played the moment the call is answered. Without this, the customer hears
 # silence for the greeting delay plus a full TTS round-trip, and often hangs up.
-_GREETING_AUDIO: Dict[str, Tuple[str, bytes]] = {}
+_GREETING_AUDIO: Dict[str, Tuple[str, Optional[float], bytes]] = {}  # call_id -> (text, pace, audio)
 _PRERENDER_TASKS: Set[asyncio.Task] = set()
 
 
-async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str]) -> None:
+async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], pace: Optional[float] = None) -> None:
+    tts = get_providers().tts_for_voice(voice_id)
     try:
-        mulaw = await asyncio.wait_for(get_providers().tts_for_voice(voice_id).synthesize(text), timeout=15)
+        mulaw = await asyncio.wait_for(tts.synthesize(text) if pace is None else tts.synthesize(text, pace=pace),
+                                       timeout=15)
     except Exception as exc:  # live TTS still works; never fail the call over this
         log.warning("Greeting pre-render failed (%s) - it will be streamed live", type(exc).__name__)
         return
     if mulaw:
-        _GREETING_AUDIO[call_id] = (text, mulaw)
+        _GREETING_AUDIO[call_id] = (text, pace, mulaw)
         log.info("Greeting pre-rendered (%.1fs of audio)", audio.mulaw_duration_seconds(len(mulaw)))
 
 
-def schedule_greeting_prerender(call_id: str, text: str, voice_id: Optional[str]) -> None:
-    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id))
+def schedule_greeting_prerender(call_id: str, text: str, voice_id: Optional[str],
+                                pace: Optional[float] = None) -> None:
+    task = asyncio.get_running_loop().create_task(prerender_greeting(call_id, text, voice_id, pace))
     _PRERENDER_TASKS.add(task)
     task.add_done_callback(_PRERENDER_TASKS.discard)
 
@@ -236,10 +376,15 @@ def has_greeting_audio(call_id: str) -> bool:
     return call_id in _GREETING_AUDIO
 
 
-def take_greeting_audio(call_id: str, text: str) -> Optional[bytes]:
-    """The pre-rendered greeting, if it matches the text about to be spoken (used once)."""
+def take_greeting_audio(call_id: str, text: str, pace: Optional[float] = None) -> Optional[bytes]:
+    """The pre-rendered greeting, if it matches the text and speed about to be spoken (used once)."""
     entry = _GREETING_AUDIO.pop(call_id, None)
-    return entry[1] if entry and entry[0] == text else None
+    return entry[2] if entry and entry[0] == text and entry[1] == pace else None
+
+
+def greeting_pace(first_message: Optional[str], cfg: Settings = default_settings) -> Optional[float]:
+    """GREETING_TTS_SPEED for a time-of-day opening's greeting; None (configured speed) otherwise."""
+    return cfg.GREETING_TTS_SPEED if identity_after_greeting(first_message) else None
 
 
 class CallError(Exception):
@@ -312,7 +457,14 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     variables.update(flow_vars)
     rotation = cfg.voice_rotation
     async with _VOICE_ROTATION_LOCK:  # pick + insert together so concurrent calls get different voices
-        voice_id = await repo.next_rotation_voice(db, rotation) if rotation else None
+        if not rotation:
+            voice_id = None
+        elif cfg.voice_rotation_mode == "concurrent":
+            # Ignore calls stuck in a live status (e.g. a missed hangup webhook) after the max duration.
+            since = utcnow() - timedelta(seconds=cfg.MAX_CALL_DURATION_SECONDS + 300)
+            voice_id = await repo.free_call_voice(db, cfg.SARVAM_TTS_SPEAKER, rotation, since)
+        else:
+            voice_id = await repo.next_rotation_voice(db, rotation)
         call = await repo.create_call(
             db,
             voice_id=voice_id,
@@ -347,7 +499,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         if cfg.GREETING_PRERENDER and agent.first_message:
             greeting = render_first_message(agent.first_message, variables)
             if greeting:
-                schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id)
+                schedule_greeting_prerender(call.id, greeting, call.voice_id or agent.voice_id,
+                                            greeting_pace(agent.first_message, cfg))
     return call
 
 
@@ -430,16 +583,32 @@ async def handle_machine_detection(db: AsyncSession, call_id: Optional[str], par
         await repo.add_event(db, call.id, "plivo:machine_detection", {"machine": is_machine})
         if not is_machine:
             return
-        log.info("Voicemail / answering machine detected - hanging up without the sales pitch")
-        await repo.update_call(db, call, outcome=CallOutcome.voicemail.value)
-        session = ACTIVE_SESSIONS.get(call.id)
-        if session is not None:
-            session.end_call_requested = True
-            if session._turn_task and not session._turn_task.done():
-                session._turn_task.cancel()
         uuid = params.get("CallUUID") or call.provider_call_id
-        if uuid:
-            await get_providers().telephony(call.telephony_provider).hangup(uuid)
+        session = ACTIVE_SESSIONS.get(call.id)
+        if session is not None and default_settings.MACHINE_DETECTION_VERIFY:
+            verdict = session.machine_evidence()
+            if verdict == "human":
+                log.info("Plivo said answering machine, but the customer already answered like a person - call continues")
+                await repo.add_event(db, call.id, "machine_detection_overruled", {"reason": "customer_words"})
+                return
+            if verdict is None:
+                log.info("Plivo said answering machine - checking what the customer says before hanging up")
+                await repo.add_event(db, call.id, "machine_detection_verifying", None)
+                session.verify_machine(uuid, call.telephony_provider)
+                return
+        await hang_up_as_voicemail(db, call, uuid)
+
+
+async def hang_up_as_voicemail(db: AsyncSession, call: Call, uuid: Optional[str]) -> None:
+    log.info("Voicemail / answering machine detected - hanging up without the sales pitch")
+    await repo.update_call(db, call, outcome=CallOutcome.voicemail.value)
+    session = ACTIVE_SESSIONS.get(call.id)
+    if session is not None:
+        session.end_call_requested = True
+        if session._turn_task and not session._turn_task.done():
+            session._turn_task.cancel()
+    if uuid:
+        await get_providers().telephony(call.telephony_provider).hangup(uuid)
 
 
 OUTCOME_FOR_STATUS = {
@@ -503,6 +672,7 @@ class CallContextData:
     # Call-flow silence lines (already rendered); None = the built-in lines.
     silence_reprompt: Optional[str] = None
     silence_closing: Optional[str] = None
+    answered_at: Optional[datetime] = None  # UTC, from the answer webhook (timing log only)
 
 
 @dataclass
@@ -514,6 +684,8 @@ class TurnMetrics:
     t4: Optional[float] = None
     t5: Optional[float] = None
     t6: Optional[float] = None
+    t0: Optional[float] = None  # customer actually stopped speaking (t1 minus the VAD silence)
+    tts_wait: float = 0.0  # time the first sentence waited for the TTS connection
 
     def as_row(self) -> Dict[str, Optional[int]]:
         return {
@@ -523,6 +695,20 @@ class TurnMetrics:
             "tts_first_byte_ms": _ms(self.t5, self.t6),
             "total_response_ms": _ms(self.t1, self.t6),
         }
+
+    def log_line(self, turn: int) -> str:
+        """Per-turn timing for logs (no transcript text, numbers or secrets)."""
+        parts = {
+            "eos_wait": _ms(self.t0, self.t1),
+            "stt": _ms(self.t1, self.t2),
+            "tts_wait": int(self.tts_wait * 1000) if self.t3 is not None else None,
+            "llm_first_token": _ms(self.t3, self.t3_first_token),
+            "first_token_to_audio": _ms(self.t3_first_token, self.t6),
+            "tts_first_audio": _ms(self.t5, self.t6),
+            "total": _ms(self.t1, self.t6),
+            "reply_delay": _ms(self.t0 if self.t0 is not None else self.t1, self.t6),
+        }
+        return f"Turn {turn} timing (ms): " + " ".join(f"{k}={v}" for k, v in parts.items())
 
 
 @dataclass
@@ -557,12 +743,33 @@ class CallSession:
         self.providers = providers or get_providers()
         self.tts = self.providers.tts_for_voice(ctx.voice_id)
         self.store = store or get_session_store()
+        # Input noise reduction: speech is detected on cleaned audio with an adaptive floor and a
+        # low minimum (no fixed loudness gate), so quiet voices are heard; anything that started
+        # as speech is kept as an utterance (when unsure, STT decides).
+        self.cleaner = InputCleaner(cfg.NOISE_SUPPRESSION_STRENGTH) if cfg.NOISE_SUPPRESSION_ENABLED else None
+        self._ns_logged_frames = 0
+        if self.cleaner is not None:
+            self._quiet_min_rms = min(cfg.VAD_MIN_RMS, QUIET_VOICE_MIN_RMS)
+            noise_gate = audio.NoiseFloorGate(self._quiet_min_rms, cfg.VAD_FLOOR_MULTIPLIER, cfg.VAD_FLOOR_MAX_RMS)
+            min_utterance_ms = min(cfg.VAD_MIN_UTTERANCE_MS, cfg.VAD_SPEECH_START_MS)
+            vad_min_rms = 0  # the adaptive gate does the energy check
+        else:
+            noise_gate = (audio.NoiseFloorGate(cfg.VAD_MIN_RMS, cfg.VAD_FLOOR_MULTIPLIER, cfg.VAD_FLOOR_MAX_RMS)
+                          if cfg.VAD_ADAPTIVE_FLOOR else None)
+            min_utterance_ms = cfg.VAD_MIN_UTTERANCE_MS
+            vad_min_rms = cfg.VAD_MIN_RMS
+        self._noise_gate = noise_gate
+        self._last_speech_end: Optional[float] = None
+        self._slow_speaker = False
         self.endpointer = audio.SpeechEndpointer(
-            classifier or audio.make_webrtc_classifier(cfg.VAD_AGGRESSIVENESS, cfg.VAD_MIN_RMS),
+            classifier or audio.make_webrtc_classifier(cfg.VAD_AGGRESSIVENESS, vad_min_rms),
             start_ms=cfg.VAD_SPEECH_START_MS,
             end_silence_ms=cfg.VAD_SPEECH_END_SILENCE_MS,
-            min_utterance_ms=cfg.VAD_MIN_UTTERANCE_MS,
+            min_utterance_ms=min_utterance_ms,
             max_utterance_ms=cfg.MAX_UTTERANCE_SECONDS * 1000,
+            noise_gate=noise_gate,
+            loud_rms=cfg.BARGE_IN_MIN_RMS,
+            max_gap_ms=cfg.BARGE_IN_MAX_GAP_MS,
         )
         self.history: List[Dict[str, str]] = []
         self.state = CallStatus.connected.value
@@ -583,12 +790,33 @@ class CallSession:
         self._customer_spoke = False
         self._greeted = not ctx.first_message  # agents without a fixed greeting skip this step
         self._identity_reasked = False
+        self._identity_asked = False  # IDENTITY_QUESTION spoken (time-of-day openings only)
+        self._identity_silence_repeats = 0  # IDENTITY_QUESTION repeated because of silence (max 1)
+        self._identity_silence_over = False  # the customer spoke after the identity question
+        self._silence_turn: Optional[int] = None  # turn index of a silence-triggered repeat / re-prompt
+        # Time-of-day openings: listen FIRST_SPEECH_WAIT_SECONDS before greeting; the first words only
+        # trigger the greeting (spoken at GREETING_TTS_SPEED).
+        self._first_speech_mode = identity_after_greeting(ctx.first_message)
+        self._opening_taken = False  # the greeting (or the script, for do-not-call / AI) took the opening
+        self._greeting_trigger: Optional[str] = None  # speech | silence | hold_limit (timing log)
+        self._stream_started: Optional[float] = None
+        # "Yes" heard while the identity question was still playing: (text, confidence, t1), answered after playback.
+        self._held_reply: Optional[tuple] = None
+        self._fallback_streak = 0  # fallback lines in a row; the second one closes the call
+        self._customer_texts: List[str] = []  # every recognised customer utterance (machine check)
         self._agent_spoke = False
         self._last_activity = time.monotonic()
         self._silence_prompts = 0
         self._silence_task: Optional[asyncio.Task] = None
         self.end_call_requested = False
         self._closed = False
+        self._agent_audio_end = 0.0  # when the agent's audio last stopped (echo tail)
+        self._speaking_turn: Optional[_TurnState] = None  # the line the agent is / was last saying
+        self._speech_near_agent = False  # current utterance started over / right after the agent
+        self._stt_stream: Optional[STTStream] = None  # streaming STT for the utterance in progress
+        self._line_audio: Dict[str, bytes] = {}  # pre-rendered fixed lines (PRERENDER_FIXED_LINES)
+        self._bg_tasks: Set[asyncio.Task] = set()
+        self._last_prewarm = 0.0
         self._db_queue: "asyncio.Queue[Callable[[AsyncSession], Awaitable[None]]]" = asyncio.Queue()
         self._db_worker: Optional[asyncio.Task] = None
 
@@ -597,21 +825,36 @@ class CallSession:
         ACTIVE_SESSIONS[self.call_id] = self
         self._db_worker = asyncio.create_task(self._run_db_worker())
         await self._set_state(CallStatus.listening.value)
-        self._greeting_task = asyncio.create_task(self._greet_if_silent())
+        self._stream_started = time.monotonic()
+        self._greeting_task = asyncio.create_task(
+            self._greet_after_first_wait() if self._first_speech_mode else self._greet_if_silent())
         self._silence_task = asyncio.create_task(self._watch_silence())
+        if identity_after_greeting(self.ctx.first_message):
+            self._spawn(self._ask_identity_after_pause())
+        self._prewarm()
+        if self.cfg.PRERENDER_FIXED_LINES:
+            self._spawn(self._prerender_fixed_lines())
 
     async def close(self, reason: str = "stream_stopped") -> None:
         if self._closed:
             return
         self._closed = True
         ACTIVE_SESSIONS.pop(self.call_id, None)
-        for task in (self._greeting_task, self._silence_task, self._turn_task, self._hangup_task, self._barge_check_task):
+        if self.cleaner is not None and self.cleaner.frames:
+            frames, avg, peak = self.cleaner.stats()
+            log.info("Noise suppression for this call: %d chunks, %.2f ms avg / %.2f ms max per 20 ms chunk%s",
+                     frames, avg, peak, " (bypassed)" if self.cleaner.bypassed else "")
+        for task in (self._greeting_task, self._silence_task, self._turn_task, self._hangup_task, self._barge_check_task,
+                     *self._bg_tasks):
             if task and not task.done():
                 task.cancel()
                 try:
                     await task
                 except BaseException:
                     pass
+        stt_stream = self._take_stt_stream()
+        if stt_stream is not None:
+            await stt_stream.aclose()
         try:
             await asyncio.wait_for(self._db_queue.join(), timeout=10)
         except asyncio.TimeoutError:
@@ -642,6 +885,68 @@ class CallSession:
                 finally:
                     self._db_queue.task_done()
 
+    def _spawn(self, coro: Awaitable[None]) -> None:
+        """Background work owned by the session (cancelled on close)."""
+        task = asyncio.ensure_future(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    # ------------------------------------------------------------------ latency helpers
+    PREWARM_EVERY_SECONDS = 20.0
+
+    def _prewarm(self) -> None:
+        """Open the STT / LLM connections before a turn needs them (PROVIDER_PREWARM)."""
+        now = time.monotonic()
+        if not self.cfg.PROVIDER_PREWARM or now - self._last_prewarm < self.PREWARM_EVERY_SECONDS:
+            return
+        self._last_prewarm = now
+        self._spawn(self.providers.stt.prewarm())
+        self._spawn(self.providers.llm.prewarm())
+
+    def _open_stt_stream(self) -> None:
+        self._drop_stt_stream()
+        stream = self.providers.stt.open_stream()
+        if stream is None:
+            return
+        stream.feed(self.endpointer.utterance_so_far())
+        self.endpointer.frame_sink = stream.feed
+        self._stt_stream = stream
+
+    def _take_stt_stream(self) -> Optional[STTStream]:
+        stream, self._stt_stream = self._stt_stream, None
+        self.endpointer.frame_sink = None
+        return stream
+
+    def _drop_stt_stream(self, stream: Optional[STTStream] = None) -> None:
+        stream = stream or self._take_stt_stream()
+        if stream is not None:
+            self._spawn(stream.aclose())
+
+    def _fixed_lines(self) -> List[str]:
+        lang = self.cfg.CALL_LANGUAGE
+        lines = [fallback_reply(lang), self.ctx.silence_reprompt or silence_reprompt(lang),
+                 self.ctx.silence_closing or silence_closing(lang)]
+        first = (self.ctx.first_message or "").strip()
+        if "customer_name" in first and first.endswith("?") and self.identity_reask_text():
+            lines.append(self.identity_reask_text())
+        if identity_after_greeting(first) and self.identity_question_text():
+            lines += [self.identity_question_text(), self.identity_reask_text()]
+        return list(dict.fromkeys(line for line in lines if line))
+
+    async def _prerender_fixed_lines(self) -> None:
+        with call_context(self.call_id):
+            for line in self._fixed_lines():
+                try:
+                    mulaw = await asyncio.wait_for(self.tts.synthesize(line), timeout=15)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # live TTS still works for that line
+                    log.warning("Fixed line pre-render failed (%s) - it will be streamed live", type(exc).__name__)
+                    continue
+                if mulaw:
+                    self._line_audio[line] = mulaw
+            log.info("Fixed lines pre-rendered: %d", len(self._line_audio))
+
     def _event(self, event_type: str, payload: Optional[dict] = None) -> None:
         self._persist(lambda db: repo.add_event(db, self.call_id, event_type, payload))
 
@@ -661,47 +966,141 @@ class CallSession:
         if self._closed:
             return
         pcm = audio.mulaw_to_pcm16(mulaw)
-        for ev in self.endpointer.process(pcm):
+        if self.cleaner is not None:
+            pcm, raw = self._clean(pcm)
+        else:
+            raw = None
+        for ev in self.endpointer.process(pcm, raw):
             if ev.event == audio.VadEvent.SPEECH_START:
-                self._customer_spoke = True
-                self._last_activity = time.monotonic()
-                self._silence_prompts = 0
-                if self._hangup_task is None:
-                    self.end_call_requested = False  # customer is talking again; keep the call open
-                if self._greeting_task and not self._greeting_task.done():
+                self._note_resume()
+                if not self.cfg.NOISE_SAFE_STATE:  # otherwise done once STT hears words
+                    self._customer_spoke = True
+                    self._last_activity = time.monotonic()
+                    self._silence_prompts = 0
+                    self._identity_silence_over = self._identity_asked
+                    if self._hangup_task is None:
+                        self.end_call_requested = False  # customer is talking again; keep the call open
+                if self._greeting_task and not self._greeting_task.done() and not self._first_speech_mode:
                     self._greeting_task.cancel()
+                self._speech_near_agent = self.ai_busy or self._agent_recently_spoke()
                 if self.ai_busy:
                     # Don't cut the agent off yet: echo, line noise or "hmm" also look like speech.
                     self._barge_candidate, self._barge_loud_ms = True, 0
+                else:
+                    self._open_stt_stream()
+                self._prewarm()
                 log.debug("Customer speech started")
             elif ev.event == audio.VadEvent.SPEECH_END:
                 candidate, self._barge_candidate = self._barge_candidate, False
+                stt_stream = self._take_stt_stream()
                 if not ev.audio:
+                    self._drop_stt_stream(stt_stream)
+                    self._after_noise()
                     continue
+                t0 = time.monotonic() - ev.silence_ms / 1000
+                self._last_speech_end = t0
                 log.info("Customer audio received (%dms)", ev.duration_ms)
                 if candidate or self.ai_busy:
-                    self._check_barge_in(ev.audio)  # interrupt only if STT hears real words
+                    self._drop_stt_stream(stt_stream)
+                    self._check_barge_in(ev.audio, t0)  # interrupt only if STT hears real words
                 else:
-                    self._start_turn(audio_pcm=ev.audio)
+                    self._start_turn(audio_pcm=ev.audio, stt_stream=stt_stream, t0=t0,
+                                     near_agent=self._speech_near_agent)
         if self._barge_candidate and self.endpointer.in_speech:
-            await self._confirm_loud_barge_in(pcm)
+            await self._confirm_loud_barge_in(pcm if raw is None else raw)  # barge-in rules use the original audio
+
+    def _clean(self, pcm: bytes) -> Tuple[bytes, Optional[bytes]]:
+        """Noise reduction before speech detection. While the agent is speaking (or its echo
+        may still arrive) the gain is held at 1x and today's stricter minimum applies, so the
+        cleaner can never make the agent hear itself. Returns (detection audio, STT audio)."""
+        assert self.cleaner is not None
+        agent_audio = self.ai_busy or self._agent_recently_spoke()
+        self.cleaner.frozen = agent_audio
+        if self._noise_gate is not None:
+            self._noise_gate.set_min_rms(self.cfg.VAD_MIN_RMS if agent_audio else self._quiet_min_rms)
+        clean, raw = self.cleaner.feed(pcm)
+        if self._noise_gate is not None:
+            self._noise_gate.scale = 1.0 if self.cleaner.bypassed else max(self.cleaner.gain, 1e-3)
+        frames, avg, peak = self.cleaner.stats()
+        if frames - self._ns_logged_frames >= NOISE_LOG_EVERY_FRAMES:
+            self._ns_logged_frames = frames
+            log.info("Noise suppression: %d chunks, %.2f ms avg / %.2f ms max per 20 ms chunk%s",
+                     frames, avg, peak, " (bypassed)" if self.cleaner.bypassed else "")
+        return clean, (None if self.cfg.NOISE_SUPPRESSION_STT_AUDIO == "cleaned" else raw)
+
+    def machine_evidence(self) -> Optional[str]:
+        speaking_ms = len(self.endpointer.utterance_so_far()) * 1000 // (audio.TELEPHONY_SAMPLE_RATE * audio.SAMPLE_WIDTH)
+        return machine_evidence(self._customer_texts, speaking_ms)
+
+    def verify_machine(self, uuid: Optional[str], telephony_provider: str) -> None:
+        self._spawn(self._verify_machine(uuid, telephony_provider))
+
+    async def _verify_machine(self, uuid: Optional[str], telephony_provider: str) -> None:
+        """Plivo said "machine" before any words were heard: wait up to MACHINE_VERIFY_SECONDS for
+        them (longer only while the customer is still talking or being transcribed). A person's
+        reply keeps the call; a voicemail phrase, a monologue or no words at all hang up as before."""
+        with call_context(self.call_id):
+            start = time.monotonic()
+            verdict: Optional[str] = None
+            while not self._closed:
+                await asyncio.sleep(0.1)
+                verdict = self.machine_evidence()
+                if verdict is not None:
+                    break
+                waited = time.monotonic() - start
+                busy = self.endpointer.in_speech or (self._turn_task is not None and not self._turn_task.done())
+                if waited >= self.cfg.MACHINE_VERIFY_SECONDS and not (busy and waited < self.cfg.MACHINE_VERIFY_SECONDS + 4):
+                    break
+            if self._closed:
+                return
+            if verdict == "human":
+                log.info("Customer answered like a person - Plivo's answering-machine verdict ignored, call continues")
+                self._event("machine_detection_overruled", {"reason": "customer_words"})
+                return
+            self._event("machine_detection_confirmed", {"reason": verdict or "no_words"})
+            async with session_factory()() as db:
+                call = await repo.get_call(db, self.call_id)
+                if call is not None:
+                    await hang_up_as_voicemail(db, call, uuid or self.ctx.provider_call_id)
+
+    def _note_resume(self) -> None:
+        """A caller who starts again within SLOW_SPEAKER_END_SILENCE_MS of their last words, before
+        the agent has said anything, paused mid-sentence: give them that much end-of-speech
+        silence for the rest of the call (other callers keep today's reply speed)."""
+        wait_ms = self.cfg.SLOW_SPEAKER_END_SILENCE_MS
+        if self._slow_speaker or wait_ms <= 0 or self._last_speech_end is None:
+            return
+        if self._playback_started > self._last_speech_end:
+            return  # the agent spoke in between: this is a reply, not a continuation
+        if (time.monotonic() - self._last_speech_end) * 1000 > wait_ms:
+            return
+        frames = max(1, wait_ms // audio.FRAME_MS)
+        if frames > self.endpointer.end_frames:
+            self._slow_speaker = True
+            self.endpointer.end_frames = frames
+            log.info("Caller paused mid-sentence - waiting %d ms of silence before replying from now on", wait_ms)
+            self._event("slow_speaker", {"end_silence_ms": wait_ms})
 
     async def _confirm_loud_barge_in(self, pcm: bytes) -> None:
         """Sustained loud speech after the echo window is a real interruption: stop at once."""
-        if audio.rms(pcm) >= self.cfg.BARGE_IN_MIN_RMS:
-            self._barge_loud_ms += len(pcm) * 1000 // (audio.TELEPHONY_SAMPLE_RATE * audio.SAMPLE_WIDTH)
+        if self.cfg.BARGE_IN_CONSECUTIVE:
+            loud_ms = self.endpointer.loud_run_ms  # one unbroken run of loud speech frames
+        else:
+            if audio.rms(pcm) >= self.cfg.BARGE_IN_MIN_RMS:
+                self._barge_loud_ms += len(pcm) * 1000 // (audio.TELEPHONY_SAMPLE_RATE * audio.SAMPLE_WIDTH)
+            loud_ms = self._barge_loud_ms
         playing_ms = (time.monotonic() - self._playback_started) * 1000 if self._playback_started else 0
         in_grace = time.monotonic() < self._playback_until and playing_ms < self.cfg.BARGE_IN_GRACE_MS
-        if self._barge_loud_ms >= self.cfg.BARGE_IN_MIN_SPEECH_MS and not in_grace:
+        if loud_ms >= self.cfg.BARGE_IN_MIN_SPEECH_MS and not in_grace:
             self._barge_candidate = False
             await self.barge_in()
 
-    def _check_barge_in(self, audio_pcm: bytes) -> None:
+    def _check_barge_in(self, audio_pcm: bytes, t0: Optional[float] = None) -> None:
         if self._barge_check_task and not self._barge_check_task.done():
             self._barge_check_task.cancel()
-        self._barge_check_task = asyncio.create_task(self._run_barge_check(audio_pcm, time.monotonic()))
+        self._barge_check_task = asyncio.create_task(self._run_barge_check(audio_pcm, time.monotonic(), t0))
 
-    async def _run_barge_check(self, audio_pcm: bytes, t1: float) -> None:
+    async def _run_barge_check(self, audio_pcm: bytes, t1: float, t0: Optional[float] = None) -> None:
         with call_context(self.call_id):
             try:
                 result = await self.providers.stt.transcribe(audio.telephony_pcm_to_stt_wav(audio_pcm))
@@ -712,13 +1111,73 @@ class CallSession:
                 log.info("Noise while agent was talking - ignored, agent keeps talking")
                 self._event("barge_in_ignored", {"turn": self.turn_index})
                 return
+            if self.cfg.STT_DROP_NOISE_TEXT and is_noise_text(result["text"]):
+                log.info("Only non-word sounds while agent was talking - ignored, agent keeps talking")
+                self._event("barge_in_ignored", {"turn": self.turn_index, "reason": "noise_text"})
+                return
+            if self.cfg.ECHO_TEXT_FILTER and self._is_agent_echo(result["text"]):
+                log.info("Agent's own voice came back (echo) - ignored, agent keeps talking")
+                self._event("echo_ignored", {"turn": self.turn_index})
+                return
+            if self.ai_busy and self._silence_line_playing():
+                # A silence-triggered repeat / re-prompt never plays on top of the customer.
+                log.info("Customer spoke over a silence line - stopping it")
+                await self.barge_in()
+                self._start_turn(transcript=(result["text"], result.get("confidence"), t1), t0=t0)
+                return
+            # Over a time-of-day opening or its identity question any words are held (never
+            # discarded, never talked over) - except do-not-call / AI questions, which interrupt.
+            held_ok = is_filler(result["text"]) or (identity_after_greeting(self.ctx.first_message)
+                                                     and not needs_script_at_opening(result["text"]))
+            if self.ai_busy and held_ok and self._identity_question_playing():
+                # "Yes" said over "Hi, is this <name>?" is the answer, not a backchannel: keep it
+                # and answer once the question has finished playing.
+                log.info("Customer answered %r while the identity question was playing - answering after playback",
+                         result["text"])
+                self._held_reply = (result["text"], result.get("confidence"), t1)
+                return
             if self.ai_busy and is_filler(result["text"]):
+                self._customer_texts.append(result["text"])  # a "Hmm" / "Yes" is still a person
                 log.info("Customer said %r while agent busy - not an interruption, agent continues", result["text"])
                 self._event("barge_in_ignored", {"turn": self.turn_index, "text": result["text"][:60]})
                 return
             if self.ai_busy:
                 await self.barge_in()
-            self._start_turn(transcript=(result["text"], result.get("confidence"), t1))
+            self._start_turn(transcript=(result["text"], result.get("confidence"), t1), t0=t0)
+
+    # ------------------------------------------------------------------ noise / echo
+    def _agent_recently_spoke(self) -> bool:
+        return (time.monotonic() - self._agent_audio_end) * 1000 < self.cfg.ECHO_TAIL_MS
+
+    def _is_agent_echo(self, text: str) -> bool:
+        if self._answering_opening():
+            return False
+        lines = []
+        if self._speaking_turn is not None:
+            lines.append(" ".join(self._speaking_turn.spoken))
+        last = self.history[-1] if self.history else None
+        if last and last["role"] == "assistant":
+            lines.append(last["content"])
+        return any(is_echo(text, line) for line in lines)
+
+    def _confirm_customer_speech(self) -> None:
+        """STT heard real words: now the customer counts as having spoken (NOISE_SAFE_STATE)."""
+        if not self.cfg.NOISE_SAFE_STATE:
+            return
+        self._customer_spoke = True
+        self._last_activity = time.monotonic()
+        self._silence_prompts = 0
+        self._identity_silence_over = self._identity_asked  # cancels the identity-silence timers
+        if self._hangup_task is None:
+            self.end_call_requested = False  # customer is talking again; keep the call open
+
+    def _after_noise(self) -> None:
+        """What looked like speech was only noise: make sure the greeting still plays."""
+        if (not self.cfg.NOISE_SAFE_STATE or self._closed or self._agent_spoke or self._customer_spoke
+                or (self._greeting_task is not None and not self._greeting_task.done())):
+            return
+        log.info("That was only noise - the greeting will still play")
+        self._greeting_task = asyncio.create_task(self._greet_if_silent(self.cfg.GREETING_PRERENDERED_DELAY_MS))
 
     async def barge_in(self) -> None:
         log.info("Barge-in: customer interrupted, stopping playback")
@@ -733,6 +1192,7 @@ class CallSession:
             await self.sender.clear()
             self._audio_since_clear = False
         self._playback_until = 0.0
+        self._agent_audio_end = time.monotonic()
         self._checkpoint = None
         self._playback_done.set()
         self._event("barge_in", {"turn": self.turn_index})
@@ -743,14 +1203,19 @@ class CallSession:
         if name and name == self._checkpoint:
             self._checkpoint = None
             self._playback_until = 0.0
+            self._agent_audio_end = time.monotonic()
             self._audio_since_clear = False
             self._playback_done.set()
             self._last_activity = time.monotonic()
             if not (self._turn_task and not self._turn_task.done()):
                 await self._set_state(CallStatus.listening.value)
+                if self._held_reply and not self.endpointer.in_speech:
+                    held, self._held_reply = self._held_reply, None
+                    self._start_turn(transcript=held)
 
     async def on_cleared(self) -> None:
         self._playback_until = 0.0
+        self._agent_audio_end = time.monotonic()
         self._playback_done.set()
 
     # ------------------------------------------------------------------ turns
@@ -761,21 +1226,95 @@ class CallSession:
         name = safe_variables(self.ctx.variables)["customer_name"]
         return IDENTITY_REASK.format(name=name) if name else None
 
-    def _should_reask_identity(self, text: str) -> bool:
-        """Only once, only for an opening line that asks for the customer by name
-        ("Hi, is this {{customer_name}}?"), and only when the reply right after it
-        is nothing but a greeting."""
-        first = (self.ctx.first_message or "").strip()
-        if self._identity_reasked or "customer_name" not in first or not first.endswith("?"):
-            return False
-        last = self.history[-1] if self.history else None
-        just_greeted = bool(last and last["role"] == "assistant" and last["content"].startswith(self.greeting_text()))
-        return just_greeted and is_greeting_only(text) and self.identity_reask_text() is not None
+    def identity_question_text(self) -> Optional[str]:
+        safe = safe_variables(self.ctx.variables)
+        if not safe["customer_name"]:
+            return None
+        return render_first_message(IDENTITY_QUESTION.format(name=safe["customer_name"], title=safe["title_to_use"]), {})
 
-    async def _greet_if_silent(self) -> None:
-        delay_ms = self.cfg.GREETING_DELAY_MS
-        if has_greeting_audio(self.call_id):  # ready to play instantly - don't leave dead air
-            delay_ms = min(delay_ms, self.cfg.GREETING_PRERENDERED_DELAY_MS)
+    def _last_assistant_line(self) -> Optional[str]:
+        last = self.history[-1] if self.history else None
+        return last["content"] if last and last["role"] == "assistant" else None
+
+    def _at_opening(self) -> bool:
+        """Time-of-day opening spoken, identity question not asked yet."""
+        if self._identity_asked or not identity_after_greeting(self.ctx.first_message):
+            return False
+        last = self._last_assistant_line()
+        return bool(last and last.startswith(self.greeting_text()))
+
+    def _should_ask_identity(self, text: str) -> bool:
+        """Anything the customer says to the time-of-day opening (any word, any language) is
+        only the signal to ask IDENTITY_QUESTION now - never an identity confirmation.
+        Do-not-call and AI questions go to the script instead."""
+        return (self._at_opening() and not needs_script_at_opening(text)
+                and self.identity_question_text() is not None)
+
+    async def _ask_identity_after_pause(self) -> None:
+        """Ask IDENTITY_QUESTION GREETING_WAIT_SECONDS after the opening finished playing, unless
+        the customer is speaking (their reply asks it at once) or the script took over."""
+        with call_context(self.call_id):
+            while not self._closed and not self._identity_asked:
+                await asyncio.sleep(0.05)
+                last = self._last_assistant_line()
+                if last is None:
+                    continue  # opening not spoken yet
+                if not last.startswith(self.greeting_text()):
+                    return  # the script answered something else (do-not-call, AI question)
+                if (self.ai_busy or self.endpointer.in_speech or self._held_reply is not None
+                        or not self._playback_done.is_set() or self.end_call_requested):
+                    continue
+                if time.monotonic() - self._agent_audio_end < self.cfg.GREETING_WAIT_SECONDS:
+                    continue
+                question = self.identity_question_text()
+                if question is None:
+                    return
+                log.info("Pause after the opening - asking the identity question")
+                self._identity_asked = True
+                self._event("identity_question", {"after": "pause"})
+                self._start_turn(scripted=question)
+                return
+
+    def _should_reask_identity(self, text: str) -> bool:
+        """Only once, only right after the identity question - the opening line
+        ("Hi, is this {{customer_name}}?") or IDENTITY_QUESTION after a time-of-day
+        opening - and only when the reply is nothing but a greeting."""
+        if self._identity_reasked or self.identity_reask_text() is None or not is_greeting_only(text):
+            return False
+        last = self._last_assistant_line()
+        if not last:
+            return False
+        if identity_after_greeting(self.ctx.first_message):
+            return self._identity_asked and last == self.identity_question_text()
+        first = (self.ctx.first_message or "").strip()
+        return "customer_name" in first and first.endswith("?") and last.startswith(self.greeting_text())
+
+    def _identity_question_playing(self) -> bool:
+        """The agent's last line is the opening or an identity question (greeting, identity
+        question, re-ask) and no other reply is being prepared, i.e. it is busy only because
+        that line is playing. A "Yes" / "Hello" said over it is the answer, not filler."""
+        first = (self.ctx.first_message or "").strip()
+        new_opening = identity_after_greeting(first)
+        if not new_opening and ("customer_name" not in first or not first.endswith("?")):
+            return False
+        if self._turn_task is not None and not self._turn_task.done():
+            return False
+        content = self._last_assistant_line()
+        if not content:
+            return False
+        return (content.startswith(self.greeting_text()) or content == self.identity_reask_text()
+                or (new_opening and content == self.identity_question_text()))
+
+    def _answering_opening(self) -> bool:
+        """Words right after the time-of-day opening ("Good afternoon sir") may repeat the
+        opening's words but are the customer's answer, not echo."""
+        return self._at_opening()
+
+    async def _greet_if_silent(self, delay_ms: Optional[int] = None) -> None:
+        if delay_ms is None:
+            delay_ms = self.cfg.GREETING_DELAY_MS
+            if has_greeting_audio(self.call_id):  # ready to play instantly - don't leave dead air
+                delay_ms = min(delay_ms, self.cfg.GREETING_PRERENDERED_DELAY_MS)
         await asyncio.sleep(delay_ms / 1000)
         if not self._customer_spoke and not self.ai_busy and not self.endpointer.in_speech:
             log.info("Customer silent after answer - agent greets first")
@@ -783,6 +1322,53 @@ class CallSession:
                 self._start_turn(scripted=self.greeting_text())
             else:
                 self._start_turn(injected=GREETING_INSTRUCTION)
+
+    FIRST_SPEECH_HOLD_MAX_SECONDS = 2.0  # wait at most this long for the customer to stop before greeting
+
+    def greeting_pace(self) -> Optional[float]:
+        return self.cfg.GREETING_TTS_SPEED if self._first_speech_mode else None
+
+    async def _greet_after_first_wait(self) -> None:
+        """Time-of-day opening: stay silent FIRST_SPEECH_WAIT_SECONDS after the stream starts. The
+        customer's first words start the greeting at once (see _run_turn); otherwise greet when the
+        wait ends - but never on top of the customer: while they are speaking, wait (at most
+        FIRST_SPEECH_HOLD_MAX_SECONDS) for them to stop."""
+        with call_context(self.call_id):
+            start = self._stream_started or time.monotonic()
+            while not self._closed:
+                await asyncio.sleep(0.05)
+                if self._greeted or self._opening_taken:
+                    return
+                due = first_speech_greeting_due(
+                    time.monotonic(), start, self.cfg.FIRST_SPEECH_WAIT_SECONDS, self.FIRST_SPEECH_HOLD_MAX_SECONDS,
+                    self.endpointer.in_speech, self._turn_task is not None and not self._turn_task.done())
+                if due is None:
+                    continue
+                self._opening_taken = True
+                self._greeting_trigger = due
+                log.info("No words in the first %.1fs - greeting", self.cfg.FIRST_SPEECH_WAIT_SECONDS)
+                self._start_turn(scripted=self.greeting_text())
+                return
+
+    def _log_greeting_start(self) -> None:
+        now = time.monotonic()
+        since_stream = now - self._stream_started if self._stream_started else None
+        since_answer = None
+        if self.ctx.answered_at is not None:
+            answered = self.ctx.answered_at
+            if answered.tzinfo is not None:
+                answered = answered.astimezone(timezone.utc).replace(tzinfo=None)
+            since_answer = (utcnow() - answered).total_seconds()
+        log.info("Greeting started %s after answer, %s after stream start (trigger=%s, speed=%s)",
+                 f"{since_answer:.2f}s" if since_answer is not None else "?",
+                 f"{since_stream:.2f}s" if since_stream is not None else "?",
+                 self._greeting_trigger or "speech", self.greeting_pace() or "default")
+        self._event("greeting_started", {
+            "ms_after_answer": int(since_answer * 1000) if since_answer is not None else None,
+            "ms_after_stream_start": int(since_stream * 1000) if since_stream is not None else None,
+            "trigger": self._greeting_trigger or "speech",
+            "speed": self.greeting_pace(),
+        })
 
     async def _watch_silence(self) -> None:
         """After the agent has spoken, wait SILENCE_REPROMPT_SECONDS for the customer;
@@ -793,7 +1379,16 @@ class CallSession:
                 if (not self._agent_spoke or self.ai_busy or self.endpointer.in_speech
                         or self.end_call_requested or self._closed):
                     continue
-                idle = time.monotonic() - max(self._last_activity, self._playback_until)
+                if self._held_reply is not None:
+                    # Words held while a line played, and the line's audio has ended without a
+                    # playback ack: answer them now instead of asking "can you hear me?".
+                    held, self._held_reply = self._held_reply, None
+                    self._start_turn(transcript=held)
+                    continue
+                if self._identity_silence_active():
+                    self._identity_silence_step()
+                    continue
+                idle =time.monotonic() - max(self._last_activity, self._playback_until)
                 if idle < self.cfg.SILENCE_REPROMPT_SECONDS:
                     continue
                 if self._silence_prompts == 0:
@@ -808,22 +1403,79 @@ class CallSession:
                     self._start_turn(scripted=self.ctx.silence_closing or silence_closing(self.cfg.CALL_LANGUAGE))
                 self._last_activity = time.monotonic()
 
+    def _identity_silence_active(self) -> bool:
+        """The system's identity question (time-of-day opening) was the last line, the customer
+        has not spoken since, and the repeat / re-prompt have not both been used."""
+        if (not identity_after_greeting(self.ctx.first_message) or not self._identity_asked
+                or self._identity_silence_over or self._silence_prompts > 0):
+            return False
+        last = self._last_assistant_line()
+        return last is not None and last == self.identity_question_text()
+
+    def _identity_silence_step(self) -> None:
+        action = identity_silence_action(time.monotonic(), self._last_activity, self._playback_until,
+                                         self.cfg.IDENTITY_SILENCE_WAIT_SECONDS,
+                                         self._identity_silence_repeats, self._silence_prompts)
+        if action == "repeat":
+            self._identity_silence_repeats = 1
+            log.info("Customer silent after the identity question - asking it once more")
+            self._event("identity_silence_repeat")
+            line = self.identity_question_text()
+        elif action == "reprompt":
+            self._silence_prompts = 1  # the normal silence flow closes the call next
+            log.info("Still silent after the repeated identity question - re-prompting")
+            self._event("silence_reprompt")
+            line = self.ctx.silence_reprompt or silence_reprompt(self.cfg.CALL_LANGUAGE)
+        else:
+            return
+        self._start_turn(scripted=line)
+        self._silence_turn = self.turn_index
+        self._last_activity = time.monotonic()
+
+    def _silence_line_playing(self) -> bool:
+        return self._silence_turn is not None and self._silence_turn == self.turn_index
+
     def _start_turn(self, audio_pcm: Optional[bytes] = None, injected: Optional[str] = None,
-                    scripted: Optional[str] = None, transcript: Optional[tuple] = None) -> None:
-        """transcript = (text, confidence, t1) when STT already ran (confirmed barge-in)."""
+                    scripted: Optional[str] = None, transcript: Optional[tuple] = None,
+                    stt_stream: Optional[STTStream] = None, t0: Optional[float] = None,
+                    near_agent: bool = False) -> None:
+        """transcript = (text, confidence, t1) when STT already ran (confirmed barge-in).
+        near_agent = the speech started over / just after the agent's audio (echo check).
+        stt_stream = the streamed STT session for audio_pcm (STT_STREAMING), if any."""
         if self._turn_task and not self._turn_task.done():
             self._turn_task.cancel()
+        if self._held_reply and (audio_pcm is not None or transcript is not None):
+            # The customer spoke again before the held answer was used: answer both together.
+            (held, conf, _), self._held_reply = self._held_reply, None
+            self._persist(lambda db, t=held, c=conf: repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
+            self._pending_user_text = f"{self._pending_user_text} {held}".strip()
         self.turn_index += 1
         self._last_activity = time.monotonic()
         t1 = transcript[2] if transcript else time.monotonic()
         self._turn_task = asyncio.create_task(
-            self._run_turn(self.turn_index, audio_pcm, injected, t1, scripted, transcript)
+            self._run_turn(self.turn_index, audio_pcm, injected, t1, scripted, transcript, stt_stream, t0, near_agent)
         )
 
+    async def _transcribe(self, audio_pcm: bytes, stt_stream: Optional[STTStream]) -> dict:
+        """Streamed transcript when available, else (or on any problem) the REST request."""
+        if stt_stream is not None:
+            try:
+                result = await stt_stream.finish(self.cfg.STT_STREAM_FINAL_TIMEOUT_MS / 1000)
+                if result["text"]:
+                    return result
+                log.info("Streamed STT returned no text - checking with the REST request")
+            except STTError as exc:
+                log.warning("Streamed STT failed (%s) - using the REST request", exc.kind)
+            finally:
+                await stt_stream.aclose()
+        return await self.providers.stt.transcribe(audio.telephony_pcm_to_stt_wav(audio_pcm))
+
     async def _run_turn(self, turn: int, audio_pcm: Optional[bytes], injected: Optional[str], t1: float,
-                        scripted: Optional[str] = None, transcript: Optional[tuple] = None) -> None:
+                        scripted: Optional[str] = None, transcript: Optional[tuple] = None,
+                        stt_stream: Optional[STTStream] = None, t0: Optional[float] = None,
+                        near_agent: bool = False) -> None:
         with call_context(self.call_id):
-            m = TurnMetrics(t1=t1)
+            m = TurnMetrics(t1=t1, t0=t0)
             await self._set_state(CallStatus.processing.value)
             stream = None
             st = _TurnState(user_text=injected, record_user=False, scripted=scripted)
@@ -832,7 +1484,7 @@ class CallSession:
             # Open the TTS stream early to hide the handshake behind STT - unless the
             # pre-rendered greeting is about to play and no TTS is needed at all.
             tts_connect: Optional[asyncio.Task] = None
-            if not (st.is_greeting and has_greeting_audio(self.call_id)):
+            if not (st.is_greeting and has_greeting_audio(self.call_id)) and scripted not in self._line_audio:
                 tts_connect = asyncio.create_task(self.tts.open_stream())
             try:
                 # ---------------- STT ----------------
@@ -840,47 +1492,88 @@ class CallSession:
                     result = {"text": transcript[0], "confidence": transcript[1]}
                     m.t2 = time.monotonic()
                 elif audio_pcm is not None:
-                    result = await self.providers.stt.transcribe(audio.telephony_pcm_to_stt_wav(audio_pcm))
+                    result = await self._transcribe(audio_pcm, stt_stream)
+                    stt_stream = None
                     m.t2 = time.monotonic()
                     log.info("STT completed: %dms", _ms(m.t1, m.t2))
                 if transcript is not None or audio_pcm is not None:
                     text = result["text"]
                     if not text:
                         log.info("STT returned no speech - ignoring")
+                        self._after_noise()
                         return
+                    if self.cfg.STT_DROP_NOISE_TEXT and is_noise_text(text):
+                        log.info("STT heard only non-word sounds - ignoring")
+                        self._event("noise_ignored", {"turn": turn})
+                        self._after_noise()
+                        return
+                    if self.cfg.ECHO_TEXT_FILTER and near_agent and self._is_agent_echo(text):
+                        log.info("Agent's own voice came back (echo) - ignoring")
+                        self._event("echo_ignored", {"turn": turn})
+                        self._after_noise()
+                        return
+                    self._confirm_customer_speech()
+                    self._customer_texts.append(text)
                     log.info("Customer said: %s", text[:200])
                     self._persist(lambda db, t=text, c=result.get("confidence"): repo.add_transcript(db, self.call_id, "customer", t, confidence=c))
                     st.user_text = f"{self._pending_user_text} {text}".strip()
                     st.record_user = True
                     self._pending_user_text = st.user_text  # cleared once a reply is delivered
-                    if not self._greeted:
+                    if not self._greeted and self._first_speech_mode and needs_script_at_opening(text):
+                        # Do-not-call / "are you a bot?" before the greeting: the script answers it
+                        # (safety rules keep priority) and the greeting is skipped.
+                        log.info("First words need the script - greeting skipped")
+                        self._opening_taken = self._greeted = True
+                        self._event("greeting_skipped", {"reason": "script"})
+                    elif not self._greeted:
                         # Customer spoke first ("Hello?"): answer with the fixed greeting.
                         st.scripted, st.is_greeting = self.greeting_text(), True
+                        if self._first_speech_mode:
+                            # Those words only start the greeting: not answered, not carried on.
+                            self._opening_taken = True
+                            self._greeting_trigger = "speech"
+                            st.record_user = False
+                            self._pending_user_text = ""
+                    elif self._should_ask_identity(text):
+                        st.scripted = self.identity_question_text()
+                        self._identity_asked = True
                     elif self._should_reask_identity(text):
                         st.scripted = self.identity_reask_text()
                         self._identity_reasked = True
 
                 # ---------------- LLM -> TTS (streamed) ----------------
-                cached = take_greeting_audio(self.call_id, st.scripted) if st.is_greeting and st.scripted else None
-                if cached:
-                    log.info("Playing pre-rendered greeting")
+                cached = (take_greeting_audio(self.call_id, st.scripted, self.greeting_pace())
+                          if st.is_greeting and st.scripted else None)
+                line_audio = self._line_audio.get(st.scripted) if st.scripted is not None and not cached else None
+                if cached or line_audio:
+                    log.info("Playing pre-rendered %s", "greeting" if cached else "line")
                     m.t5 = m.t6 = time.monotonic()
                     st.spoken.append(clean_spoken_text(st.scripted))
-                    await self._play(cached, st)
+                    await self._play(cached or line_audio, st)
                 else:
                     if tts_connect is None:
                         tts_connect = asyncio.create_task(self.tts.open_stream())
-                    stream = await tts_connect
-                    await self._speak_streaming(st, m, stream)
+                    if st.scripted is not None or not self.cfg.LLM_START_BEFORE_TTS:
+                        stream = await tts_connect
+                        if st.is_greeting and self.greeting_pace() is not None:
+                            await stream.set_pace(self.greeting_pace())  # the greeting only
+                    # Otherwise the LLM starts now; its first sentence waits for the connection.
+                    await self._speak_streaming(st, m, tts_connect)
+                    stream = tts_connect.result()
                 if st.scripted is None:
                     m.t4 = m.t4 or time.monotonic()
                     log.info("LLM completed: %dms", _ms(m.t3, m.t4) or 0)
                 self._commit_turn(st, interrupted=False)
                 if m.t6:
                     log.info("Total response latency: %dms", _ms(m.t1, m.t6))
-                self._persist(lambda db, row=m.as_row(): repo.add_latency_metric(db, self.call_id, turn, **row))
+                row = m.as_row()
+                log.info(m.log_line(turn))
+                self._persist(lambda db, row=row: repo.add_latency_metric(db, self.call_id, turn, **row))
                 await self._after_reply()
             except asyncio.CancelledError:
+                if stream is None and tts_connect is not None and tts_connect.done() \
+                        and not tts_connect.cancelled() and tts_connect.exception() is None:
+                    stream = tts_connect.result()
                 if stream is not None:
                     await stream.cancel()
                 if st.audio_started:
@@ -893,11 +1586,13 @@ class CallSession:
                 if stage == "tts" and not st.audio_started and not self._closed:
                     await self._recover_tts_failure(st, m, turn)
                 elif stage != "tts" and not st.audio_started:
-                    await self._speak_fallback()
+                    await self._speak_fallback(st, f"{stage}_{exc.kind}")
             except Exception as exc:  # never kill the call on an unexpected bug
                 log.exception("Unexpected pipeline error: %s", type(exc).__name__)
                 self._event("pipeline_error", {"stage": "unknown", "kind": type(exc).__name__, "turn": turn})
             finally:
+                if stt_stream is not None:  # STT never reached (turn cancelled / scripted)
+                    await stt_stream.aclose()
                 if stream is None and tts_connect is not None:
                     tts_connect.cancel()
                     try:
@@ -913,7 +1608,12 @@ class CallSession:
     def ai_busy_after_turn(self) -> bool:
         return time.monotonic() < self._playback_until
 
-    async def _speak_streaming(self, st: _TurnState, m: TurnMetrics, stream) -> None:
+    async def _speak_streaming(self, st: _TurnState, m: TurnMetrics, connect: "asyncio.Task") -> None:
+        """`connect` is the TTS open_stream task; the LLM may already be running while it connects."""
+
+        async def tts_stream():
+            return await connect
+
         async def produce() -> None:
             chunker = SentenceChunker()
             m.t3 = time.monotonic()
@@ -926,7 +1626,12 @@ class CallSession:
                 if not sentence:
                     return
                 if m.t5 is None:
+                    waited = time.monotonic()
+                    stream = await tts_stream()
+                    m.tts_wait = time.monotonic() - waited
                     m.t5 = time.monotonic()
+                else:
+                    stream = await tts_stream()
                 st.spoken.append(sentence)
                 await stream.send_text(sentence)
 
@@ -940,6 +1645,7 @@ class CallSession:
                 ):
                     if m.t3_first_token is None:
                         m.t3_first_token = time.monotonic()
+                        log.info("LLM first token: %dms", _ms(m.t3, m.t3_first_token) or 0)
                     for sentence in chunker.feed(delta):
                         await push(sentence)
                 for sentence in chunker.flush():
@@ -947,10 +1653,16 @@ class CallSession:
                 m.t4 = time.monotonic()
             if not st.spoken:
                 log.warning("LLM returned no speakable text - using fallback")
-                await push(fallback_reply(self.cfg.CALL_LANGUAGE))
-            await stream.end_input()
+                text, close = self._next_fallback_line("llm_empty")
+                if close:
+                    self.end_call_requested = True
+                await push(text)
+            elif st.scripted is None:
+                self._fallback_streak = 0  # a real reply got through
+            await (await tts_stream()).end_input()
 
         async def consume() -> None:
+            stream = await tts_stream()
             async for chunk in stream.audio():
                 if m.t6 is None:
                     m.t6 = time.monotonic()
@@ -977,9 +1689,11 @@ class CallSession:
         self._agent_spoke = True
         if st is not None and not st.audio_started:
             st.audio_started = True
+            self._speaking_turn = st
             self._playback_started = time.monotonic()
             if st.is_greeting:
                 self._greeted = True
+                self._log_greeting_start()
             await self._set_state(CallStatus.speaking.value)
         for piece in audio.chunk_bytes(mulaw, self.SEND_CHUNK_BYTES):
             await self.sender.send_audio(piece)
@@ -987,6 +1701,7 @@ class CallSession:
             self._playback_done.clear()
             now = time.monotonic()
             self._playback_until = max(self._playback_until, now) + audio.mulaw_duration_seconds(len(piece))
+            self._agent_audio_end = self._playback_until  # estimate; the checkpoint gives the real end
 
     def _commit_turn(self, st: _TurnState, interrupted: bool) -> None:
         reply = " ".join(st.spoken).strip()
@@ -1013,7 +1728,7 @@ class CallSession:
             self._hangup_task = asyncio.create_task(self._hangup_after_playback())
 
     async def _recover_tts_failure(self, st: _TurnState, m: TurnMetrics, turn: int) -> None:
-        """The live TTS stream failed before any audio played (e.g. Cartesia timed out).
+        """The live TTS stream failed before any audio played (e.g. Sarvam TTS timed out).
         Say the same reply through one-shot synthesis instead of leaving the customer in
         silence; if the reply was cut off mid-generation, generate it again first."""
         try:
@@ -1032,7 +1747,9 @@ class CallSession:
                 text = clean_spoken_text(raw)
             if not text:
                 raise ValueError("no reply text")
-            mulaw = await asyncio.wait_for(self.tts.synthesize(text), timeout=10)
+            pace = self.greeting_pace() if st.is_greeting else None
+            mulaw = await asyncio.wait_for(
+                self.tts.synthesize(text) if pace is None else self.tts.synthesize(text, pace=pace), timeout=10)
             st.spoken = [text]
             await self._play(mulaw, st)
             self._commit_turn(st, interrupted=False)
@@ -1043,12 +1760,32 @@ class CallSession:
             raise
         except Exception as exc:
             log.error("TTS recovery failed (%s) - using fallback line", type(exc).__name__)
-            await self._speak_fallback()
+            await self._speak_fallback(st, "tts_recovery_failed")
 
-    async def _speak_fallback(self) -> None:
+    def _next_fallback_line(self, reason: str) -> Tuple[str, bool]:
+        """The "couldn't hear you" line once; a second one in a row closes the call politely
+        instead (script "UNCLEAR AUDIO": only one clarification attempt). Returns (text, close)."""
+        self._fallback_streak += 1
+        close = self._fallback_streak > 1
+        log.warning("Fallback line spoken (reason=%s, in a row=%d)%s", reason, self._fallback_streak,
+                    " - closing the call" if close else "")
+        self._event("fallback_line", {"turn": self.turn_index, "reason": reason, "close": close})
+        if close:
+            return self.ctx.silence_closing or silence_closing(self.cfg.CALL_LANGUAGE), True
+        return fallback_reply(self.cfg.CALL_LANGUAGE), False
+
+    async def _speak_fallback(self, st: _TurnState, reason: str) -> None:
+        text, close = self._next_fallback_line(reason)
         try:
-            pcm = await self.tts.synthesize(fallback_reply(self.cfg.CALL_LANGUAGE))
-            await self._play(pcm)
+            pcm = self._line_audio.get(text) or await self.tts.synthesize(text)
+            st.is_greeting = False
+            st.spoken = [text]
+            await self._play(pcm, st)
+            # Recorded like any reply, so the LLM knows it already asked once and the
+            # customer's words are kept in history instead of piling up unanswered.
+            self._commit_turn(st, interrupted=False)
+            if close:
+                self.end_call_requested = True
             await self._after_reply()
         except Exception as exc:
             log.error("Fallback speech failed: %s", type(exc).__name__)
@@ -1070,6 +1807,28 @@ class CallSession:
 # ===========================================================================
 # Finalisation
 # ===========================================================================
+OUTCOME_TIMEOUT_SECONDS = 15.0
+OUTCOME_RETRY_DELAY_SECONDS = 2.0
+
+
+async def classify_outcome(llm: LLMProvider, transcript: str) -> Optional[str]:
+    """Raw classifier reply, or None. Runs after the call has ended (detached teardown),
+    so the one retry on a transient failure never delays the live conversation."""
+    for attempt in range(2):
+        try:
+            return await asyncio.wait_for(llm.complete_raw(OUTCOME_SYSTEM, transcript), timeout=OUTCOME_TIMEOUT_SECONDS)
+        except Exception as exc:
+            kind = exc.kind if isinstance(exc, LLMError) else "timeout" if isinstance(exc, asyncio.TimeoutError) else "unknown"
+            retryable = kind in LLMProvider.RETRYABLE
+            if attempt == 0 and retryable:
+                log.warning("Outcome classification failed (%s: %s) - retrying once", type(exc).__name__, kind)
+                await asyncio.sleep(OUTCOME_RETRY_DELAY_SECONDS)
+                continue
+            log.warning("Outcome classification failed: %s (%s)", type(exc).__name__, kind)
+            return None
+    return None
+
+
 async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> None:
     """Classify the outcome and close out the call record. Idempotent."""
     with call_context(call_id):
@@ -1081,13 +1840,12 @@ async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> 
             outcome, summary, reached = None, None, None
             if any(t.speaker == "customer" for t in transcripts):
                 text = "\n".join(f"{'Customer' if t.speaker == 'customer' else 'Agent'}: {t.text}" for t in transcripts)
-                try:
-                    raw = await asyncio.wait_for(llm.complete_raw(OUTCOME_SYSTEM, text[:12000]), timeout=15)
+                raw = await classify_outcome(llm, text[:12000])
+                if raw is None:
+                    outcome = CallOutcome.unknown.value
+                else:
                     outcome, summary = parse_outcome(raw)
                     reached = parse_reached(raw)
-                except Exception as exc:
-                    log.warning("Outcome classification failed: %s", type(exc).__name__)
-                    outcome = CallOutcome.unknown.value
             await db.refresh(call)  # pick up outcomes set meanwhile (e.g. voicemail webhook)
             fields: Dict[str, Any] = {}
             if call.outcome in LOCKED_OUTCOMES:
@@ -1136,4 +1894,5 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
             telephony_provider=call.telephony_provider or "plivo",
             silence_reprompt=flow_lines.get("reprompt"),
             silence_closing=flow_lines.get("closing"),
+            answered_at=call.answered_at,
         )

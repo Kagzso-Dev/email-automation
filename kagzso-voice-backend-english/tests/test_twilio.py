@@ -169,7 +169,7 @@ def _until(ws, event, limit=400):
 
 
 def test_full_twilio_call(client, auth, fakes, sync_engine, twilio_mode):
-    fakes.stt.replies = ["Hello?", "Yes, speaking", "இப்போ busy"]
+    fakes.stt.replies = ["Hello?", "Are you a robot?", "இப்போ busy"]
     fakes.tts.chunks_per_sentence = 20
     call_id = _outbound(client, auth)["call_id"]
     xml = client.post(f"/api/webhooks/twilio/voice?call_id={call_id}", data={"CallSid": "CA9", "CallStatus": "in-progress"}).text
@@ -183,7 +183,7 @@ def test_full_twilio_call(client, auth, fakes, sync_engine, twilio_mode):
         assert media and set(media[0]) == {"event", "streamSid", "media"} and media[0]["streamSid"] == "MZ1"
         assert set(media[0]["media"]) == {"payload"}  # Twilio accepts only the payload here
         assert msgs[-1] == {"event": "mark", "streamSid": "MZ1", "mark": {"name": "turn-1"}}
-        assert fakes.tts.streams[0].texts == ["Hi, is this Ragul?"]
+        assert fakes.tts.streams[0].texts == ["Hi sir, Good morning."]
 
         _send(ws, tone_mulaw(400) + silence_mulaw(900))  # customer talks over the agent -> clear
         msgs = _until(ws, "mark")
@@ -213,7 +213,7 @@ def test_full_twilio_call(client, auth, fakes, sync_engine, twilio_mode):
         customer = [r[0] for r in c.execute(text("select text from transcripts where speaker='customer' order by id"))]
     assert call == ("completed", 31, "MZ1", "CA9")
     assert "twilio:call_fired" in events and "barge_in" in events and "agent_hangup" in events
-    assert customer == ["Hello?", "Yes, speaking", "இப்போ busy"]
+    assert customer == ["Hello?", "Are you a robot?", "இப்போ busy"]
 
 
 def test_twilio_ws_rejects_bad_token(client, auth, twilio_mode):

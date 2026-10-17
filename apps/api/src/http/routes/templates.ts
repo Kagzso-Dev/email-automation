@@ -19,7 +19,7 @@ import {
   ImageUploadError,
   storeTemplateImage,
 } from "../../domain/imageUpload.js";
-import { authRequired } from "../middleware/auth.js";
+import { authRequired, requireRole } from "../middleware/auth.js";
 import { badRequest, conflict, notFound, wrap } from "../errors.js";
 
 export const templatesRouter = Router();
@@ -76,6 +76,7 @@ const acceptImage = (req: Request, res: Response, next: NextFunction) =>
 
 templatesRouter.post(
   "/uploads/image",
+  requireRole("ADMIN"), // editors: view only
   acceptImage,
   wrap(async (req, res) => {
     if (!req.file) throw badRequest("File required (multipart field 'file')");
@@ -103,6 +104,7 @@ templatesRouter.get(
 
 templatesRouter.post(
   "/",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const parsed = deriveHtmlBody(createTemplateInput.parse(req.body));
     // superRefine guarantees bodyText or htmlBody; deriveHtmlBody fills htmlBody
@@ -133,6 +135,7 @@ templatesRouter.get(
 
 templatesRouter.put(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const body = deriveHtmlBody(updateTemplateInput.parse(req.body));
@@ -147,6 +150,7 @@ templatesRouter.put(
 
 templatesRouter.delete(
   "/:id",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const inUse = await prisma.template.findUnique({
@@ -195,6 +199,7 @@ templatesRouter.post(
 
 templatesRouter.post(
   "/:id/send-test",
+  requireRole("ADMIN"), // editors: view only
   wrap(async (req, res) => {
     const { id } = idParam.parse(req.params);
     const { to, variables } = sendTestInput.parse(req.body);

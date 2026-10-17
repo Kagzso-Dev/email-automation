@@ -6,7 +6,11 @@ import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
 import { ToastProvider } from "./components/toast";
 import { App } from "./App";
+import { cachedAppName } from "./lib/branding";
 import "./index.css";
+
+// Tab title = the remembered app name from the first frame (Settings → Branding).
+document.title = cachedAppName();
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 10_000 } },

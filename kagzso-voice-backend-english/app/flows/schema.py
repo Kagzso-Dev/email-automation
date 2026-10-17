@@ -24,7 +24,7 @@ LOCKED_BLOCKS: Dict[str, str] = json.loads((BUILTIN_DIR / "locked_blocks.json").
 FLOW_BASES = ("nila", "followup")
 # Variables a flow may use. phone_number is deliberately absent: it is never spoken.
 FLOW_VARIABLES = ("customer_name", "name", "honorific", "title", "gender", "addressed_name",
-                  "follow_up_detail", "company_name", "business_type")
+                  "follow_up_detail", "company_name", "business_type", "title_to_use", "time_greeting")
 BLOCK_GROUPS = ("greeting", "main_script", "questions", "objections", "closing", "tone", "rules")
 MAX_BLOCK_CHARS = 8000
 MAX_PROMPT_CHARS = 50000  # same ceiling as AgentCreate.system_prompt

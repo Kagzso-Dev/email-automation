@@ -1,5 +1,5 @@
 // AI voice calls from the Contacts page. Everything except GET /config is
-// ADMIN-only and returns 404 while ENABLE_AI_CALLS is off.
+// ADMIN and EDITOR, and returns 404 while ENABLE_AI_CALLS is off.
 //
 //   GET  /api/ai-calls/config           feature flag + limits (any signed-in user)
 //   POST /api/ai-calls/parse            upload .xlsx/.csv → headers, rows, detected columns
@@ -45,13 +45,13 @@ aiCallsRouter.get("/config", (req, res) => {
   res.json({
     enabled: aiCallsConfig.enabled,
     configured: aiCallsConfig.enabled && isAiCallsConfigured(),
-    canStart: req.user?.role === "ADMIN",
+    canStart: req.user?.role === "ADMIN" || req.user?.role === "EDITOR",
     maxPerRun: aiCallsConfig.maxPerRun,
     minGapSec: aiCallsConfig.minGapSec,
     defaultGapSec: Math.max(DEFAULT_GAP_SEC, aiCallsConfig.minGapSec),
     defaultCountryCode: aiCallsConfig.defaultCountryCode,
     flowEditor: isCallFlowEditorEnabled(),
-    testCallNumbers: isCallFlowEditorEnabled() && req.user?.role === "ADMIN" ? aiCallsConfig.flowTestNumbers.map(maskPhone) : [],
+    testCallNumbers: isCallFlowEditorEnabled() && (req.user?.role === "ADMIN" || req.user?.role === "EDITOR") ? aiCallsConfig.flowTestNumbers.map(maskPhone) : [],
   });
 });
 
@@ -59,7 +59,7 @@ function featureGate(_req: Request, _res: Response, next: NextFunction) {
   if (!aiCallsConfig.enabled) return next(new AppError(404, "AI calls are disabled (set ENABLE_AI_CALLS=true)", "not_found"));
   next();
 }
-aiCallsRouter.use(featureGate, requireRole("ADMIN"));
+aiCallsRouter.use(featureGate, requireRole("ADMIN", "EDITOR")); // editors may start calls (Contacts / AI Call Customers)
 
 aiCallsRouter.post(
   "/parse",

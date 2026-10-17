@@ -56,7 +56,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: "System",
-    items: [{ to: "/settings", label: "Settings", icon: "settings" }],
+    items: [{ to: "/settings", label: "Settings", icon: "settings", hideKey: "settings-editors" }],
   },
 ];
 
@@ -69,7 +69,7 @@ function cx(...parts: Array<string | false | null | undefined>) {
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const location = useLocation();
-  // "Call Flows" only shows for admins while ENABLE_AI_CALLS + ENABLE_CALL_FLOW_EDITOR are on.
+  // "Call Flows" shows for admins and editors while ENABLE_AI_CALLS + ENABLE_CALL_FLOW_EDITOR are on.
   const aiCalls = useAiCallsConfig();
   const showCallFlows = !!aiCalls.data?.flowEditor && !!aiCalls.data.canStart;
   // "AI Call Customers" only shows for admins while ENABLE_AI_CALLS is on.
@@ -89,7 +89,8 @@ export function Layout({ children }: { children: ReactNode }) {
         (n.to !== "/call-flows" || showCallFlows) &&
         (n.to !== "/ai-call-customers" || showAiCustomers) &&
         (n.to !== "/whatsapp-inbox" || user?.role === "ADMIN") && // customer messages: admins only
-        !(n.hideKey && hidden.has(n.hideKey)),
+        // Settings hidden "for editors" never hides from admins (they must be able to turn it back on).
+        !(n.hideKey && hidden.has(n.hideKey) && !(n.hideKey === "settings-editors" && user?.role === "ADMIN")),
     ),
   })).filter((g) => g.items.length > 0); // a group with nothing left loses its label too
 

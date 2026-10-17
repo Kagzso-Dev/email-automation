@@ -162,8 +162,8 @@ describe("GET /api/dashboard/{email,whatsapp,calls}", () => {
     expect((await get("/api/dashboard/calls?days=x", "ADMIN")).status).toBe(400);
   });
 
-  it("keeps call numbers admin-only, like the AI call pages", async () => {
-    expect((await get("/api/dashboard/calls?days=7", "EDITOR")).status).toBe(403);
+  it("lets editors see call numbers, like the AI call pages", async () => {
+    expect((await get("/api/dashboard/calls?days=x", "EDITOR")).status).toBe(400); // past the role gate
   });
 
   it("returns 404 for calls while AI calls are disabled", async () => {

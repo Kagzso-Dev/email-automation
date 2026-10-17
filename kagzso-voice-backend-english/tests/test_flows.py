@@ -244,7 +244,7 @@ def test_version_is_pinned_and_published_versions_are_immutable(client, auth, sy
     rows = _call_row(sync_engine)
     assert [r[2] for r in rows] == ["flow:flow_d@v1", "flow:flow_d@v1", "Nila", "flow:flow_d@v2"]
     assert rows[2][1]["flow_fallback"] == "version_conflict"
-    assert rows[0][4] == "Hi, is this {{customer_name}}?" and rows[3][4] == "Hi {{name}}, different greeting?"
+    assert rows[0][4] == "Hi {{title_to_use}}, {{time_greeting}}." and rows[3][4] == "Hi {{name}}, different greeting?"
     with sync_engine.connect() as c:
         assert c.execute(text("select count(*) from agents where name = 'flow:flow_d@v1'")).scalar() == 1
 
@@ -280,7 +280,7 @@ def test_flow_silence_lines_are_spoken(client, auth, fakes, monkeypatch):
         for _ in range(3):
             _until(ws, "checkpoint")
         texts = [" ".join(s.texts) for s in fakes.tts.streams]
-        assert texts[:3] == ["Hi, is this Ragul?", "Ragul, are you still there?", "Okay, I'll let you go. Bye."]
+        assert texts[:3] == ["Hi sir, Good morning.", "Ragul, are you still there?", "Okay, I'll let you go. Bye."]
         ws.send_text(json.dumps({"event": "stop"}))
     time.sleep(0.3)
 
@@ -308,7 +308,7 @@ def test_preview_renders_like_a_call(client, auth):
     sample = {"customer_name": "Priya", "gender": "female", "follow_up_detail": "the quotation"}
     r = client.post("/api/flows/preview", headers=auth, json={"flow": nila_copy(), "sample": sample})
     body = r.json()
-    assert body["valid"] and body["greeting"] == "Hi, is this Priya?"
+    assert body["valid"] and body["greeting"] == "Hi madam, Good morning."
     assert body["system_prompt"] == llm.build_system_prompt(llm.NILA_AGENT["system_prompt"], {
         "customer_name": "Priya", "contact_name": "Priya", "gender": "female", "phone_number": "+910000000000",
         "follow_up_detail": "the quotation", "company_name": None, "business_type": None})
