@@ -448,9 +448,11 @@ interface ContactImportResult {
   duplicates: number;
   /** No usable email address. */
   skipped: number;
-  /** Email domain not on the approved sending list. */
+  /** Email domain not on the approved sending list (domainMode BLOCKLIST: on the blocked list). */
   rejectedDomain: number;
   failed: number;
+  /** Only set when Settings → "Email all domains except blocked ones" was on for this import. */
+  domainMode?: "BLOCKLIST";
 }
 
 interface ContactImportJobView {
@@ -498,10 +500,15 @@ export function ContactImportStatus({ jobId, filename, onDismiss }: { jobId: str
     );
   }
   const n = (v: number) => fullNumber.format(v);
+  const blocklist = r.domainMode === "BLOCKLIST";
   const details = [
     `Imported: ${n(r.created)} new, ${n(r.updated)} already saved (updated)`,
-    r.skipped ? `${n(r.skipped)} without an email address` : null,
-    r.rejectedDomain ? `${n(r.rejectedDomain)} with an email domain not on the approved list (Settings)` : null,
+    r.skipped ? `${n(r.skipped)} without ${blocklist ? "a valid" : "an"} email address` : null,
+    r.rejectedDomain
+      ? blocklist
+        ? `${n(r.rejectedDomain)} skipped: blocked domain`
+        : `${n(r.rejectedDomain)} with an email domain not on the approved list (Settings)`
+      : null,
     r.duplicates ? `${n(r.duplicates)} repeating an email from an earlier row (applied to that contact)` : null,
   ]
     .filter(Boolean)

@@ -70,6 +70,33 @@ model AllowedDomain {
   createdAt DateTime @default(now())
 }
 
+// Blocked recipient domains, used only when Settings → Domain mode is BLOCKLIST
+// ("Email all domains except blocked ones", behind ENABLE_DOMAIN_BLOCKLIST). An entry
+// also blocks its subdomains. The mode itself is the Setting row "sendingDomainMode"
+// (no row = ALLOWLIST). See domain/sendingDomainPolicy. New table only (0036).
+model BlockedSendingDomain {
+  id        String   @id @default(cuid())
+  domain    String   @unique // bare, lowercased, no leading '@' — e.g. "mailinator.com"
+  createdBy String   @db.VarChar(191) // admin's user id
+  createdAt DateTime @default(now())
+
+  @@map("blocked_sending_domains")
+}
+
+// Who changed the sending-domain rules, and when: the mode switch, the Blocked list and
+// (while ENABLE_DOMAIN_BLOCKLIST is on) the Approved list. Append-only. New table only (0036).
+model SendingDomainAudit {
+  id        String   @id @default(cuid())
+  action    String   @db.VarChar(32) // MODE_CHANGED | BLOCKED_ADDED | BLOCKED_REMOVED | APPROVED_ADDED | APPROVED_REMOVED
+  detail    String   @db.VarChar(191) // the new mode, or the domain
+  userId    String   @db.VarChar(191)
+  userEmail String   @db.VarChar(191) // kept so the log still reads after the user is removed
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("sending_domain_audit")
+}
+
 model List {
   id          String           @id @default(cuid())
   name        String

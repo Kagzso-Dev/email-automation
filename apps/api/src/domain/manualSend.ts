@@ -3,6 +3,7 @@ import { prisma } from "../prisma.js";
 import { manualKey, queueJobId } from "./idempotency.js";
 import { isSuppressed } from "./suppression.js";
 import { isEmailDomainAllowed } from "./allowedDomains.js";
+import { domainSkipText } from "./sendingDomainPolicy.js"; // wording only: same text as before unless BLOCKLIST
 import { getBulkSendDelays } from "./settings.js";
 import { batchTemplateLabel } from "./templateDelete.js";
 import { enqueueSend, enqueueManualBulkSend, type SendEmailJob } from "../queue/queues.js";
@@ -31,7 +32,7 @@ export async function sendManualEmail(
     return { status: "skipped", reason: "contact is unsubscribed, bounced or complained" };
   }
   if (!(await isEmailDomainAllowed(contact.email))) {
-    return { status: "skipped", reason: "email domain is not on the approved sending list" };
+    return { status: "skipped", reason: await domainSkipText(contact.email) };
   }
 
   const idempotencyKey = manualKey(templateId, contactId);
@@ -65,7 +66,7 @@ async function ineligibleReason(contactId: string): Promise<string | null> {
     return "contact is unsubscribed, bounced or complained";
   }
   if (!(await isEmailDomainAllowed(contact.email))) {
-    return "email domain is not on the approved sending list";
+    return domainSkipText(contact.email);
   }
   return null;
 }

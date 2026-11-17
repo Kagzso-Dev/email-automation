@@ -8,6 +8,7 @@ import { inlineLocalImages } from "../render/inlineImages.js";
 import { unsubscribeUrl } from "../render/unsubscribe.js";
 import { isSuppressed } from "./suppression.js";
 import { isEmailDomainAllowed } from "./allowedDomains.js";
+import { domainSkipReason } from "./sendingDomainPolicy.js";
 import { buildVars } from "./vars.js";
 import type { SendEmailJob } from "../queue/queues.js";
 
@@ -80,13 +81,17 @@ export async function deliverEmail(job: SendEmailJob): Promise<DeliveryOutcome> 
 
   // Approved-domain allowlist — a backstop to the import-time filter. When no
   // domains are configured this is a no-op (see domain/allowedDomains).
+  // Re-read on every send, so Settings → Domain mode (ENABLE_DOMAIN_BLOCKLIST) also
+  // applies to saved contacts: in BLOCKLIST mode only blocked domains are skipped
+  // (domain/sendingDomainPolicy). Always after the suppression check above.
   if (!(await isEmailDomainAllowed(contact.email))) {
+    const reason = await domainSkipReason(contact.email); // "domain not approved" unless BLOCKLIST
     await prisma.emailLog.update({
       where: { id: log.id },
-      data: { status: "FAILED", errorMessage: "domain not approved" },
+      data: { status: "FAILED", errorMessage: reason },
     });
-    logger.info({ emailLogId: log.id, contactId, to: contact.email }, "send skipped: domain not approved");
-    return { result: "skipped", emailLogId: log.id, reason: "domain not approved" };
+    logger.info({ emailLogId: log.id, contactId, to: contact.email }, `send skipped: ${reason}`);
+    return { result: "skipped", emailLogId: log.id, reason };
   }
 
   // Only bulk marketing (campaigns) carries the CAN-SPAM footer + List-Unsubscribe

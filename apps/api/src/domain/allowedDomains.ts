@@ -1,4 +1,5 @@
 import { prisma } from "../prisma.js";
+import { checkEmailDomainNow } from "./sendingDomainPolicy.js";
 
 /** Bare, lowercased domain of an address ("" when it has no `@`). */
 export function domainOf(email: string): string {
@@ -28,7 +29,11 @@ export async function loadAllowedDomains(): Promise<string[]> {
   return rows.map((r) => r.domain);
 }
 
-/** DB-backed single-address check, for the send path. */
+/**
+ * DB-backed single-address check, for the send path (and manual add/edit, manual and Send Queue sends).
+ * Follows the active domain mode (domain/sendingDomainPolicy): with ENABLE_DOMAIN_BLOCKLIST off, or in
+ * ALLOWLIST mode, it is exactly `domainAllowed(email, await loadAllowedDomains())`, as it always was.
+ */
 export async function isEmailDomainAllowed(email: string): Promise<boolean> {
-  return domainAllowed(email, await loadAllowedDomains());
+  return (await checkEmailDomainNow(email)).ok;
 }

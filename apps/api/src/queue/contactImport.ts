@@ -4,7 +4,7 @@
 
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
-import { domainAllowed, loadAllowedDomains } from "../domain/allowedDomains.js";
+import { checkEmailDomain, loadDomainPolicy } from "../domain/sendingDomainPolicy.js";
 import { parseContactFile } from "../domain/contactImport.js";
 import { IMPORT_MAX_ROWS, type ImportLimit } from "../domain/importLimit.js";
 import type { ContactImportJob } from "./queues.js";
@@ -19,12 +19,14 @@ export interface ContactImportResult extends ImportLimit {
   duplicates: number;
   /** Rows without a usable email address. */
   skipped: number;
-  /** Rows whose email domain is not on the approved sending list. */
+  /** Rows whose email domain is not on the approved sending list (BLOCKLIST mode: is on the blocked list). */
   rejectedDomain: number;
   /** skipped + rejectedDomain: rows not imported. */
   failed: number;
   /** Selected rows that had an email address. */
   total: number;
+  /** Only when Settings → Domain mode is BLOCKLIST (ENABLE_DOMAIN_BLOCKLIST), so the summary says "blocked domain". */
+  domainMode?: "BLOCKLIST";
 }
 
 export async function processContactImport(
@@ -35,7 +37,8 @@ export async function processContactImport(
   // A big file was read by the API already (only its first rows are here); a small one is read now.
   const { contacts, noEmail, limit } =
     job.parsed ?? (await parseContactFile(Buffer.from(job.fileBase64 ?? "", "base64"), job.format, maxRows));
-  const allowedDomains = await loadAllowedDomains();
+  // Approved list (default) or, in BLOCKLIST mode, the blocked list — read when the job runs (sendingDomainPolicy).
+  const domainPolicy = await loadDomainPolicy();
 
   let created = 0;
   let updated = 0;
@@ -49,8 +52,10 @@ export async function processContactImport(
       skipped++;
       continue;
     }
-    if (!domainAllowed(email, allowedDomains)) {
-      rejectedDomain++;
+    const verdict = checkEmailDomain(email, domainPolicy);
+    if (!verdict.ok) {
+      if (verdict.reason === "invalid") skipped++; // BLOCKLIST only: not a usable address
+      else rejectedDomain++;
       continue;
     }
     const data = {
@@ -88,6 +93,7 @@ export async function processContactImport(
     rejectedDomain,
     failed: skipped + rejectedDomain,
     total: contacts.length,
+    ...(domainPolicy.mode === "BLOCKLIST" ? { domainMode: "BLOCKLIST" as const } : {}),
   };
   logger.info({ format: job.format, ...result }, "contact import complete");
   return result;

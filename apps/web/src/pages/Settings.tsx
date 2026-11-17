@@ -16,6 +16,8 @@ import { CallRecordingsSection } from "../components/CallRecordingsSection";
 import { AiCallLanguagesSection } from "../components/AiCallLanguagesSection";
 import { VoiceResponseTuningSection } from "../components/VoiceResponseTuningSection";
 import { Switch } from "../components/Switch";
+import { SendingDomainModeSection } from "../components/SendingDomainModeSection";
+import { useSendingDomains } from "../lib/sendingDomains";
 
 interface ApiKey {
   id: string;
@@ -176,6 +178,8 @@ export function SettingsPage() {
       <WhatsAppSection isAdmin={isAdmin} />
 
       <BulkSendPacingSection isAdmin={isAdmin} />
+
+      <SendingDomainModeSection isAdmin={isAdmin} />
 
       <AllowedDomainsSection isAdmin={isAdmin} />
 
@@ -775,15 +779,24 @@ function AllowedDomainsSection({ isAdmin }: { isAdmin: boolean }) {
   });
 
   const items = list.data?.items ?? [];
+  // "Email all domains except blocked ones" is on (Domain mode, ENABLE_DOMAIN_BLOCKLIST): this list is kept, not used.
+  const inactive = useSendingDomains().blocklistOn;
 
   return (
-    <section className="settings-section">
+    <section className={`settings-section${inactive ? " opacity-60" : ""}`}>
       <h2 className="settings-heading">
         Approved sending domains
+        {inactive ? (
+          <span className="ml-2 rounded-full bg-line-strong px-2 py-0.5 align-middle text-xs font-medium text-slate-550">
+            Inactive
+          </span>
+        ) : null}
       </h2>
       <div className="settings-card space-y-4">
         <p className="text-slate-550">
-          {items.length === 0
+          {inactive
+            ? "Not used while “Email all domains except blocked ones” is on. The list is kept as it is and applies again when that is turned off."
+            : items.length === 0
             ? "No restriction — email can be sent to any address. Add a domain to restrict sending."
             : "Contacts are only emailed when their address domain is on this list. Others are skipped at import and never sent to."}
         </p>

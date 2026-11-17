@@ -14,6 +14,7 @@ import { enqueueContactImport } from "../../queue/queues.js";
 import { CONTACT_FILE_IN_MEMORY_BYTES, formatFromFilename, parseContactUpload } from "../../domain/contactImport.js";
 import { importUpload, removeUpload, unreadableFile } from "../importUpload.js";
 import { isEmailDomainAllowed } from "../../domain/allowedDomains.js";
+import { domainRefusedMessage } from "../../domain/sendingDomainPolicy.js";
 import {
   createManualSendBatch,
   getBatchView,
@@ -65,7 +66,7 @@ contactsRouter.post(
     const body = createContactInput.parse(req.body);
     const email = body.email.toLowerCase();
     if (!(await isEmailDomainAllowed(email))) {
-      throw badRequest(`Email domain is not on the approved sending list: ${email}`);
+      throw badRequest(await domainRefusedMessage(email));
     }
     const contact = await prisma.contact.create({
       data: { ...body, email, customFields: body.customFields ?? {} },
@@ -98,7 +99,7 @@ contactsRouter.put(
     const body = updateContactInput.parse(req.body);
     const email = body.email?.toLowerCase();
     if (email && !(await isEmailDomainAllowed(email))) {
-      throw badRequest(`Email domain is not on the approved sending list: ${email}`);
+      throw badRequest(await domainRefusedMessage(email));
     }
     const contact = await prisma.contact.update({
       where: { id },

@@ -29,6 +29,7 @@ import { healthRouter } from "./routes/health.js";
 import { statsRouter } from "./routes/stats.js";
 import { jobsRouter } from "./routes/jobs.js";
 import { settingsRouter } from "./routes/settings.js";
+import { sendingDomainsRouter } from "./routes/sendingDomains.js";
 import { aiCallsRouter } from "./routes/aiCalls.js";
 import { aiCallRecordingsRouter } from "./routes/aiCallRecordings.js";
 import { aiCallWebhookRouter } from "./routes/aiCallWebhook.js";
@@ -100,6 +101,7 @@ export function createApp() {
       res.json({ labels: { appName: labels.appName }, customized });
     }),
   );
+  app.use("/api/settings/sending-domains", sendingDomainsRouter); // Domain mode + Blocked list; 404 unless ENABLE_DOMAIN_BLOCKLIST
   app.use("/api/settings", settingsRouter);
   app.use("/api/ai-calls", aiCallRecordingsRouter); // recordings: ADMIN only, own paths
   app.use("/api/ai-calls", aiCallsRouter);

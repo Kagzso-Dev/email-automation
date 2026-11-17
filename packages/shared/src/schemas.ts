@@ -109,6 +109,17 @@ export const allowedDomainInput = z.object({
 });
 export type AllowedDomainInput = z.infer<typeof allowedDomainInput>;
 
+/**
+ * Settings → Domain mode (behind ENABLE_DOMAIN_BLOCKLIST). ALLOWLIST = only Approved domains are
+ * emailed (the default, and always when the flag is off); BLOCKLIST = every domain except Blocked ones.
+ */
+export const DOMAIN_MODES = ["ALLOWLIST", "BLOCKLIST"] as const;
+export type DomainMode = (typeof DOMAIN_MODES)[number];
+export const domainModeInput = z.object({ mode: z.enum(DOMAIN_MODES) });
+
+/** A Blocked domain: the same normalisation and validation as an Approved one. */
+export const blockedDomainInput = allowedDomainInput;
+
 /* ------------------------------------------------------------------ lists */
 
 export const createListInput = z.object({

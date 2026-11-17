@@ -20,6 +20,7 @@ import { authRequired, requireRole } from "../middleware/auth.js";
 import { conflict, notFound, wrap } from "../errors.js";
 import { getCostRates, setCostRates } from "../../domain/dashboardCosts.js";
 import { getBranding, resetBranding, setBranding } from "../../domain/branding.js";
+import { recordApprovedListChange } from "../../domain/sendingDomainAudit.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(authRequired);
@@ -123,6 +124,7 @@ settingsRouter.post(
     const existing = await prisma.allowedDomain.findUnique({ where: { domain } });
     if (existing) throw conflict(`${domain} is already approved`);
     const item = await prisma.allowedDomain.create({ data: { domain } });
+    await recordApprovedListChange(req.user!, "APPROVED_ADDED", domain); // only while ENABLE_DOMAIN_BLOCKLIST is on
     res.status(201).json(item);
   }),
 );
@@ -135,6 +137,7 @@ settingsRouter.delete(
     const existing = await prisma.allowedDomain.findUnique({ where: { id } });
     if (!existing) throw notFound("Approved domain");
     await prisma.allowedDomain.delete({ where: { id } });
+    await recordApprovedListChange(req.user!, "APPROVED_REMOVED", existing.domain); // only while the flag is on
     res.status(204).end();
   }),
 );
