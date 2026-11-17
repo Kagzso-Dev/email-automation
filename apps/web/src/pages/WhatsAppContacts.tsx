@@ -4,12 +4,15 @@ import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
 import { useConfirm } from "../components/confirm";
+import { useToast } from "../components/toast";
 import { SendWhatsApp, type WhatsAppRecipient } from "../components/SendWhatsApp";
 import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp";
 import { formatPhoneDisplay } from "@dispatch/shared";
 import { PhoneInput, phoneInputOk } from "../components/PhoneInput";
 import { ImportCountsSummary, ImportSummaryCard } from "../components/ImportSummary";
 import { fullNumber } from "../lib/numberFormat";
+import { importFilterStepOn } from "../lib/importFilter";
+import { WhatsAppImportFilter } from "../components/ImportFilterFlows";
 
 /** POST /api/whatsapp/contacts/import. created + updated + duplicates + failed = selectedRows. */
 interface WhatsAppImportResult {
@@ -144,6 +147,37 @@ export function WhatsAppContactsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] }),
   });
 
+  // Bulk "Delete (N)": the same checkbox selection as "Send message (N)", limited to
+  // rows visible under the current search/status filter and page.
+  const toast = useToast();
+  const bulkDeleteIds = items.filter((c) => selectedIds.has(c.id)).map((c) => c.id);
+  const bulkDel = useMutation({
+    mutationFn: (ids: string[]) =>
+      api<{ deleted: number }>("/api/whatsapp/contacts/bulk", { method: "DELETE", json: { ids }, notify: false }),
+    onSuccess: (r, ids) => {
+      const gone = new Set(ids);
+      qc.setQueriesData<Page>({ queryKey: ["whatsapp-contacts"] }, (old) =>
+        old?.items ? { ...old, items: old.items.filter((c) => !gone.has(c.id)) } : old,
+      );
+      setSelectedIds(new Set());
+      toast.success(`${r.deleted} contact${r.deleted === 1 ? "" : "s"} deleted`);
+      return qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] });
+    },
+    onError: (err) => toast.fromError(err, "Couldn't delete the selected contacts"),
+  });
+
+  async function deleteSelected() {
+    const ids = bulkDeleteIds;
+    if (!ids.length) return;
+    const ok = await confirm({
+      title: `Delete ${ids.length} contact(s)?`,
+      body: "This cannot be undone.",
+      confirmText: "Delete",
+      tone: "danger",
+    });
+    if (ok) bulkDel.mutate(ids);
+  }
+
   // The summary card below replaces the old "Contacts imported" toast: it also says what wasn't imported.
   const [importResult, setImportResult] = useState<{ filename: string; result: WhatsAppImportResult } | null>(null);
   const importMut = useMutation({
@@ -163,6 +197,9 @@ export function WhatsAppContactsPage() {
       return qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] });
     },
   });
+  // ENABLE_IMPORT_FILTER_STEP on: the file's rows open in the filter step first. Off: imported at once, as before.
+  const [filterFile, setFilterFile] = useState<File | null>(null);
+  const startImport = async (f: File) => ((await importFilterStepOn(qc)) ? setFilterFile(f) : importMut.mutate(f));
 
   const configured = config.data?.configured ?? false;
   const activeSelectedCount = items.filter(
@@ -196,6 +233,16 @@ export function WhatsAppContactsPage() {
         title="WhatsApp Contacts"
         action={
           <div className="flex flex-wrap gap-2">
+            {bulkDeleteIds.length > 0 && (
+              <button
+                className="btn-danger"
+                disabled={bulkDel.isPending}
+                title="Delete the selected contacts"
+                onClick={() => void deleteSelected()}
+              >
+                Delete ({bulkDeleteIds.length})
+              </button>
+            )}
             <button
               className="btn-whatsapp"
               disabled={!configured}
@@ -221,7 +268,7 @@ export function WhatsAppContactsPage() {
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) importMut.mutate(f);
+                if (f) void startImport(f);
                 e.target.value = "";
               }}
             />
@@ -406,6 +453,14 @@ export function WhatsAppContactsPage() {
 
       <AddContactModal open={showAdd} onClose={() => setShowAdd(false)} />
       <EditContactModal contact={editContact} onClose={() => setEditContact(null)} />
+      <WhatsAppImportFilter
+        file={filterFile}
+        onClose={() => setFilterFile(null)}
+        onBack={() => {
+          setFilterFile(null);
+          fileRef.current?.click(); // back to choosing a file; nothing was imported
+        }}
+      />
       <SendWhatsApp
         recipients={sendTargets}
         source="whatsapp"

@@ -165,6 +165,37 @@ export function ContactsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["contacts"] }),
   });
 
+  // Bulk "Delete (N)": the same checkbox selection as "Send email (N)", limited to
+  // rows visible under the current search/status filter and page.
+  const toast = useToast();
+  const bulkDeleteIds = items.filter((c) => selectedIds.has(c.id)).map((c) => c.id);
+  const bulkDel = useMutation({
+    mutationFn: (ids: string[]) =>
+      api<{ deleted: number }>("/api/contacts/bulk", { method: "DELETE", json: { ids }, notify: false }),
+    onSuccess: (r, ids) => {
+      const gone = new Set(ids);
+      qc.setQueriesData<Page>({ queryKey: ["contacts"] }, (old) =>
+        old?.items ? { ...old, items: old.items.filter((c) => !gone.has(c.id)) } : old,
+      );
+      setSelectedIds(new Set());
+      toast.success(`${r.deleted} contact${r.deleted === 1 ? "" : "s"} deleted`);
+      return qc.invalidateQueries({ queryKey: ["contacts"] });
+    },
+    onError: (err) => toast.fromError(err, "Couldn't delete the selected contacts"),
+  });
+
+  async function deleteSelected() {
+    const ids = bulkDeleteIds;
+    if (!ids.length) return;
+    const ok = await confirm({
+      title: `Delete ${ids.length} contact(s)?`,
+      body: "This cannot be undone.",
+      confirmText: "Delete",
+      tone: "danger",
+    });
+    if (ok) bulkDel.mutate(ids);
+  }
+
   // The import runs as a queued job; ContactImportStatus follows it and shows the summary.
   const [importJob, setImportJob] = useState<{ jobId: string; filename: string } | null>(null);
   const importMut = useMutation({
@@ -184,6 +215,16 @@ export function ContactsPage() {
         title="Contacts"
         action={
           <div className="flex flex-wrap gap-2">
+            {bulkDeleteIds.length > 0 && (
+              <button
+                className="btn-danger"
+                disabled={bulkDel.isPending}
+                title="Delete the selected contacts"
+                onClick={() => void deleteSelected()}
+              >
+                Delete ({bulkDeleteIds.length})
+              </button>
+            )}
             <button
               className="btn-ghost"
               title="Send a template to the selected active contacts"

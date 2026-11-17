@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Router } from "express";
+import { z } from "zod";
 import {
   createContactInput,
   idParam,
@@ -106,6 +107,24 @@ contactsRouter.put(
       data: { ...body, ...(email ? { email } : {}) },
     });
     res.json(contact);
+  }),
+);
+
+// Bulk delete for the checked rows on Email Contacts. Same logic as the per-row
+// DELETE /:id (clear email logs first, then the contacts), applied to each given id.
+// Registered before "/:id" so "bulk" isn't read as an id. Only the ids sent are touched.
+const bulkDeleteContactsInput = z.object({ ids: z.array(z.string().min(1)).min(1).max(1000) });
+
+contactsRouter.delete(
+  "/bulk",
+  wrap(async (req, res) => {
+    const { ids } = bulkDeleteContactsInput.parse(req.body);
+    const unique = [...new Set(ids)];
+    const [, { count }] = await prisma.$transaction([
+      prisma.emailLog.deleteMany({ where: { contactId: { in: unique } } }),
+      prisma.contact.deleteMany({ where: { id: { in: unique } } }),
+    ]);
+    res.json({ deleted: count });
   }),
 );
 

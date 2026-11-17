@@ -45,6 +45,8 @@ import { TrainingFromCallButton } from "./TrainingFromCall";
 import { ImportCountsSummary, OverLimitNote } from "./ImportSummary";
 import { CallInsightsLine, InterestBadge } from "./CallInsights";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
+import { useImportFilterStep } from "../lib/importFilter";
+import { VoicecallImportFilter } from "./ImportFilterFlows";
 
 /**
  * "AI Call Customers" page (/ai-call-customers): saved customers for AI voice calls.
@@ -540,6 +542,9 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   // Admins: also import into other language lists (this page's list is always included).
   const [also, setAlso] = useState<AiCallLanguage[]>([]);
   const [perLanguage, setPerLanguage] = useState<LanguageImportSummary[] | null>(null);
+  // ENABLE_IMPORT_FILTER_STEP on: after the column mapping, the rows open in the filter step. Off: as before.
+  const filterStep = useImportFilterStep();
+  const [filtering, setFiltering] = useState(false);
 
   const parse = useMutation({
     mutationFn: (file: File) => {
@@ -723,6 +728,25 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
     );
   }
 
+  if (filtering) {
+    return (
+      <VoicecallImportFilter
+        filename={parse.variables?.name ?? "file"}
+        rows={rows}
+        checks={checks}
+        totalRows={sheet.totalRows}
+        maxRows={sheet.maxRows}
+        language={language}
+        also={also}
+        onBack={() => {
+          setFiltering(false);
+          startOver(); // back to "Choose file"; nothing was imported
+        }}
+        onClose={onClose}
+      />
+    );
+  }
+
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -820,9 +844,13 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
         <button
           className="btn-primary"
           disabled={!mapping.phone || validRows.length === 0 || doImport.isPending}
-          onClick={() => doImport.mutate()}
+          onClick={() => (filterStep.enabled ? setFiltering(true) : doImport.mutate())}
         >
-          {doImport.isPending ? "Importing…" : `Import ${validRows.length} valid row${validRows.length === 1 ? "" : "s"}`}
+          {filterStep.enabled
+            ? `Next: filter ${validRows.length} valid row${validRows.length === 1 ? "" : "s"}`
+            : doImport.isPending
+              ? "Importing…"
+              : `Import ${validRows.length} valid row${validRows.length === 1 ? "" : "s"}`}
         </button>
       </div>
     </div>

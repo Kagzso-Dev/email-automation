@@ -484,7 +484,8 @@ const yesNo = (v: boolean | undefined) => (v === undefined ? "" : v ? "yes" : "n
 const fromYesNo = (s: string) => (s === "" ? undefined : s === "yes");
 const scoreOrUndefined = (s: string) => (s === "" ? undefined : clampScore(s));
 
-function CheckGroup<T extends string>({
+// Exported for the import filter step (components/ImportFilterStep.tsx); unchanged here.
+export function CheckGroup<T extends string>({
   label,
   options,
   value,
@@ -512,7 +513,7 @@ function CheckGroup<T extends string>({
 
 const EXTRA_FIELDS: DqExtraField[] = ["city", "state", "district", "pincode", "category", "source", "dateAdded"];
 
-function FilterPanel({
+export function FilterPanel({
   filters,
   onChange,
   facets,

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import {
   createWhatsAppContactInput,
   createWhatsAppTemplateInput,
@@ -165,6 +166,20 @@ whatsappRouter.put(
     const body = updateWhatsAppContactInput.parse(req.body);
     const contact = await prisma.whatsAppContact.update({ where: { id }, data: body });
     res.json(contact);
+  }),
+);
+
+// Bulk delete for the checked rows on WhatsApp Contacts. Same effect as the per-row
+// DELETE /contacts/:id, applied to each given id. Registered before "/contacts/:id"
+// so "bulk" isn't read as an id. Only the ids sent are touched — never "all".
+const bulkDeleteWhatsAppContactsInput = z.object({ ids: z.array(z.string().min(1)).min(1).max(1000) });
+
+whatsappRouter.delete(
+  "/contacts/bulk",
+  wrap(async (req, res) => {
+    const { ids } = bulkDeleteWhatsAppContactsInput.parse(req.body);
+    const { count } = await prisma.whatsAppContact.deleteMany({ where: { id: { in: [...new Set(ids)] } } });
+    res.json({ deleted: count });
   }),
 );
 
