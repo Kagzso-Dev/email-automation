@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { matchPath, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { useInboxUnread } from "../lib/whatsappInbox";
 import { useSidebarHiddenItems } from "../lib/sidebar";
 import { useBranding, useDocumentTitle } from "../lib/branding";
 import { navForRole } from "../lib/navAccess";
+import { useImportFilterStep } from "../lib/importFilter";
 import { aiCallLanguagePath, splitAiCallLanguagePath, type AiCallLanguageInfo, type HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
@@ -19,7 +20,12 @@ type NavEntry = {
   hideKey?: HideableNavItem;
 };
 
-type NavGroup = { label: string; items: NavEntry[] };
+type NavGroup = {
+  label: string;
+  items: NavEntry[];
+  /** The AI call language sections ("Calls · English", "Calls · Tamil", …): their links fold away under the heading. */
+  collapsible?: boolean;
+};
 
 export const NAV_GROUPS: NavGroup[] = [
   {
@@ -67,9 +73,20 @@ export const NAV_GROUPS: NavGroup[] = [
 ];
 
 /**
+ * ENABLE_IMPORT_FILTER_STEP on: "Upload History" right after Send Queue (admins and editors). Added only while the
+ * flag is on, so with it off the menu (NAV_GROUPS) is exactly as before.
+ */
+export function withUploadHistory(groups: NavGroup[], on: boolean): NavGroup[] {
+  if (!on) return groups;
+  const item: NavEntry = { to: "/upload-history", label: "Upload History", icon: "activity" };
+  return groups.map((g) => ({ ...g, items: g.items.flatMap((i) => (i.to === "/send-queue" ? [i, item] : [i])) }));
+}
+
+/**
  * The "Calls" section once more AI call languages are switched on: English keeps its items
  * (labelled "Calls · English"), and each other language gets the same two pages under its own
  * address (/ta/ai-call-customers, /ta/call-flows) in a section of its own, right after it.
+ * Each language section can be folded open/closed (CollapsibleNavGroup); a new language needs nothing here.
  */
 export function withLanguageGroups(groups: NavGroup[], languages: AiCallLanguageInfo[]): NavGroup[] {
   const others = languages.filter((l) => l.code !== "en" && l.enabled);
@@ -78,19 +95,135 @@ export function withLanguageGroups(groups: NavGroup[], languages: AiCallLanguage
     g.label !== "Calls"
       ? [g]
       : [
-          { ...g, label: "Calls · English" },
+          { ...g, label: "Calls · English", collapsible: true },
           ...others.map((l) => ({
             label: `Calls · ${l.name}`,
             items: g.items.map((n) => ({ ...n, to: aiCallLanguagePath(l.code, n.to) })),
+            collapsible: true,
           })),
         ],
   );
 }
 
 const COLLAPSE_KEY = "dispatch:sidebar-collapsed";
+/** Open/closed per foldable section, by its label: { "Calls · Tamil": false }. Only the user's own clicks are saved. */
+const GROUP_OPEN_KEY = "dispatch:sidebar-groups-open";
 
 function cx(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
+}
+
+function readGroupsOpen(): Record<string, unknown> {
+  try {
+    const all: unknown = JSON.parse(localStorage.getItem(GROUP_OPEN_KEY) ?? "{}");
+    return all && typeof all === "object" && !Array.isArray(all) ? (all as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveGroupOpen(label: string, open: boolean) {
+  try {
+    localStorage.setItem(GROUP_OPEN_KEY, JSON.stringify({ ...readGroupsOpen(), [label]: open }));
+  } catch {
+    /* storage unavailable — non-fatal */
+  }
+}
+
+/**
+ * A sidebar section whose links fold away under its heading (chevron on the right; the heading is the toggle).
+ * Each section opens and closes on its own and remembers it in this browser. It opens by itself when the page
+ * you're on is one of its links, so the current page is never folded away. On the collapsed desktop icon
+ * rail there are no headings, so its links always show there.
+ */
+export function CollapsibleNavGroup({
+  labelId,
+  label,
+  defaultOpen = true,
+  active = false,
+  railCollapsed = false,
+  children,
+}: {
+  /** Id of the heading; the surrounding role="group" is labelled by it. */
+  labelId: string;
+  label: string;
+  /** Open when the user hasn't folded it before. */
+  defaultOpen?: boolean;
+  /** The current page is one of this section's links. */
+  active?: boolean;
+  /** The desktop sidebar is the collapsed icon rail. */
+  railCollapsed?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState<boolean>(() => {
+    if (active) return true;
+    const saved = readGroupsOpen()[label];
+    return typeof saved === "boolean" ? saved : defaultOpen;
+  });
+  // Open and done opening. Until then the links are clipped (that is the fold); after, their focus ring may
+  // stick out past the section's edge.
+  const [settled, setSettled] = useState(open);
+
+  // Arriving on one of its pages unfolds it (only on arrival: it can still be folded while you're there).
+  useEffect(() => {
+    if (active && !open) {
+      setOpen(true);
+      setSettled(false);
+    }
+  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    setSettled(false);
+    saveGroupOpen(label, next);
+  };
+  const regionId = `${labelId}-links`;
+
+  return (
+    <>
+      <button
+        type="button"
+        id={labelId}
+        aria-expanded={open}
+        aria-controls={regionId}
+        onClick={toggle}
+        className={cx(
+          "mb-1.5 flex w-full items-center justify-between gap-2 px-3 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 transition-colors hover:text-ink",
+          railCollapsed && "md:hidden",
+        )}
+      >
+        <span className="truncate">{label}</span>
+        <Icon
+          name="chevron-down"
+          size={12}
+          className={cx(
+            "shrink-0 transition-transform duration-300 ease-in-out-soft motion-reduce:transition-none",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+      {/* Height animates via the grid row (0fr ↔ 1fr), with a fade; folded links are invisible, so they
+          can't be tabbed to or read out. */}
+      <div
+        id={regionId}
+        className={cx(
+          // No motion-reduce:transition-none here: the global reduced-motion rule shortens it instead, which
+          // still ends it (transitionend), so `settled` comes back.
+          "grid transition-[grid-template-rows,opacity,visibility] duration-300 ease-in-out-soft",
+          open ? "grid-rows-[1fr] opacity-100" : "invisible grid-rows-[0fr] opacity-0",
+          railCollapsed && "md:visible md:grid-rows-[1fr] md:opacity-100",
+        )}
+        onTransitionEnd={(e) => {
+          if (e.target === e.currentTarget && e.propertyName === "grid-template-rows") setSettled(open);
+        }}
+      >
+        <div className={cx("min-h-0", !(open && settled) && "overflow-hidden", railCollapsed && "md:overflow-visible")}>
+          {children}
+        </div>
+      </div>
+    </>
+  );
 }
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -101,6 +234,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const showCallFlows = !!aiCalls.data?.flowEditor && !!aiCalls.data.canStart;
   // "Voicecall Contact" (/ai-call-customers) only shows for admins while ENABLE_AI_CALLS is on.
   const showAiCustomers = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
+  // "Upload History" (/upload-history): only while ENABLE_IMPORT_FILTER_STEP is on.
+  const showUploadHistory = useImportFilterStep().enabled;
   // Optional items an admin hid in Settings → Sidebar menu (workspace-wide).
   const hidden = new Set<string>(useSidebarHiddenItems());
   // Unread customer messages on the "WhatsApp Inbox" item (admins only; polls while the tab is
@@ -110,7 +245,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { appName } = useBranding();
   useDocumentTitle(appName);
   const groups = navForRole(
-    withLanguageGroups(NAV_GROUPS, aiCalls.data?.languages ?? []).map((g) => ({
+    withLanguageGroups(withUploadHistory(NAV_GROUPS, showUploadHistory), aiCalls.data?.languages ?? []).map((g) => ({
       ...g,
       items: g.items.filter((n) => {
         const page = splitAiCallLanguagePath(n.to).path; // "/ta/call-flows" follows "/call-flows"
@@ -258,23 +393,9 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* Primary navigation */}
         {/* Scrolls on its own so the footer below never covers the last item. */}
         <nav aria-label="Main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4 pt-2">
-          {groups.map((g, gi) => (
-            <div
-              key={g.label}
-              role="group"
-              aria-labelledby={`nav-group-${gi}`}
-              className={cx(gi > 0 && "mt-5", gi > 0 && collapsed && "md:mt-2 md:border-t md:border-line/70 md:pt-2")}
-            >
-              {/* Section label — hidden on the collapsed desktop rail (a divider shows instead). */}
-              <div
-                id={`nav-group-${gi}`}
-                className={cx(
-                  "mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500",
-                  collapsed && "md:sr-only",
-                )}
-              >
-                {g.label}
-              </div>
+          {groups.map((g, gi) => {
+            const labelId = `nav-group-${gi}`;
+            const links = (
               <ul className="flex flex-col gap-0.5">
                 {g.items.map((n) => (
                   <li key={n.to}>
@@ -307,8 +428,43 @@ export function Layout({ children }: { children: ReactNode }) {
                   </li>
                 ))}
               </ul>
-            </div>
-          ))}
+            );
+            return (
+              <div
+                key={g.label}
+                role="group"
+                aria-labelledby={labelId}
+                className={cx(gi > 0 && "mt-5", gi > 0 && collapsed && "md:mt-2 md:border-t md:border-line/70 md:pt-2")}
+              >
+                {g.collapsible ? (
+                  <CollapsibleNavGroup
+                    labelId={labelId}
+                    label={g.label}
+                    defaultOpen
+                    // Same rule NavLink uses for its active highlight.
+                    active={g.items.some((n) => matchPath({ path: n.to, end: n.end ?? false }, location.pathname) !== null)}
+                    railCollapsed={collapsed}
+                  >
+                    {links}
+                  </CollapsibleNavGroup>
+                ) : (
+                  <>
+                    {/* Section label — hidden on the collapsed desktop rail (a divider shows instead). */}
+                    <div
+                      id={labelId}
+                      className={cx(
+                        "mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500",
+                        collapsed && "md:sr-only",
+                      )}
+                    >
+                      {g.label}
+                    </div>
+                    {links}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </nav>
 
         {/* Footer — account + sign out (pinned below the scrolling menu) */}

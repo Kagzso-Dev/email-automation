@@ -10,6 +10,7 @@ import { Badge, EmptyState, ErrorNote, Modal, type BadgeTone } from "./ui";
 import { QueuePagination, ScrollTable, SkeletonRows } from "./QueueTable";
 import type { QueueViewProps } from "../pages/SendQueue";
 import { QueueActions } from "./QueueActions";
+import { DeleteHistoryButton } from "./DeleteHistoryButton";
 
 /**
  * Send Queue → "AI Call follow-ups": drafts created after AI calls. Nothing is
@@ -178,6 +179,37 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
                   </td>
                   <td className="px-4 py-2.5 text-xs text-slate-550">{formatDateTime(f.createdAt)}</td>
                   <td className="px-4 py-2.5">
+                    {f.status !== "PENDING_APPROVAL" && (
+                      <div className="flex justify-end">
+                        <DeleteHistoryButton
+                          path={`/api/ai-call-followups/${f.id}`}
+                          what={`follow-up for ${c?.customerName || (c ? formatPhoneDisplay(c.phone) : "this customer")}`}
+                          blockedReason={
+                            f.status === "APPROVED" && f.channel === "CALL" && !f.aiCallRunId
+                              ? "This call is still scheduled. It can be deleted once the call has been made."
+                              : null
+                          }
+                          refresh={[["ai-call-followups"], ["ai-call-customer"], ["send-queue-history-count", "ai-followups"]]}
+                          body={
+                            <>
+                              Removes this follow-up from the Send Queue and from "Download all history". This can't be undone.
+                              {f.channel === "WHATSAPP" && f.whatsappBatchId
+                                ? " The WhatsApp message it queued stays on the WhatsApp tab."
+                                : f.aiCallRunId
+                                  ? " The call it made stays in the call history."
+                                  : ""}{" "}
+                              The customer's timeline notes that it was deleted.
+                              {f.channel === "CALL" && f.reason === "No answer" && (
+                                <span className="mt-2 block text-warn">
+                                  This is a "No answer" retry: once deleted it no longer counts toward the retry limit, so the
+                                  customer can get another automatic call-again.
+                                </span>
+                              )}
+                            </>
+                          }
+                        />
+                      </div>
+                    )}
                     {f.status === "PENDING_APPROVAL" && (
                       <div className="flex flex-col items-end gap-1.5">
                         <button

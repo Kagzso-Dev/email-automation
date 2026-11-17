@@ -181,9 +181,10 @@ afterEach(cleanup);
 /* ------------------------------------------------------------------ lib */
 
 describe("page defaults and filters", () => {
-  it("WhatsApp: Phone type = Mobile only; Voicecall: Mobile + Landline; every language included", () => {
-    expect(pageDefaults("whatsapp")).toEqual({ filters: { phoneType: ["mobile"] }, languages: ALL_LANGUAGES });
-    expect(pageDefaults("voicecall")).toEqual({ filters: { phoneType: ["mobile", "landline"] }, languages: ALL_LANGUAGES });
+  it("WhatsApp: Phone type = Mobile only; Voicecall: Mobile + Landline; every language included; every 'already used' option ticked", () => {
+    const exclude = ["contacts", "sent", "called"];
+    expect(pageDefaults("whatsapp")).toEqual({ filters: { phoneType: ["mobile"] }, languages: ALL_LANGUAGES, exclude });
+    expect(pageDefaults("voicecall")).toEqual({ filters: { phoneType: ["mobile", "landline"] }, languages: ALL_LANGUAGES, exclude });
     expect(ALL_LANGUAGES).toEqual(["ta", "en", "indic", "unknown"]);
   });
 

@@ -6,9 +6,17 @@
 // The rows stay in the browser until "Import N selected" sends them to the page's own importer.
 
 import { normalizePhoneE164, sanitizeCountryCode } from "@dispatch/shared";
-import { prisma } from "../prisma.js";
-import { checkRows, loadLookups, overallScore, type DqExcludedReason, type DqMapping, type DqStatus } from "./dataQuality.js";
+import {
+  checkRows,
+  detectDataQualityColumns,
+  loadLookups,
+  overallScore,
+  type DqExcludedReason,
+  type DqMapping,
+  type DqStatus,
+} from "./dataQuality.js";
 import { phoneType, tierFor, type PhoneType, type Tier } from "./dataQualityExport.js";
+import { findUsed, type UsedInfo } from "./importFilterUsed.js";
 import { rowsToWhatsAppContacts } from "./whatsappImport.js";
 
 /** One row as the page's importer reads it. */
@@ -84,20 +92,28 @@ export type WhatsAppDraftCheck = DraftCheck & {
   importProblem: string | null;
   /** The number is already a WhatsApp contact: the importer updates that contact (its usual rule). */
   alreadySaved: boolean;
+  /** "Exclude already used data": which checks match. */
+  used: UsedInfo;
 };
 
 export const WHATSAPP_NO_NUMBER = "No usable WhatsApp number: the importer skips this row";
 
 /**
  * Each row exactly as the WhatsApp importer reads it (its own column names and phone rule), then the
- * Data Quality checks. Email is left out: the WhatsApp importer does not save it. Read-only.
+ * Data Quality checks and the "already used" checks. Email is left out of the Data Quality checks (the
+ * WhatsApp importer does not save it) but, when the file has an email column, it is used for "already
+ * sent" (email logs, Send Queue). Read-only.
  */
 export async function checkWhatsAppDraft(
   headers: string[],
   rows: Record<string, string>[],
   defaultCountryCode: string | undefined,
+  callCountryCode = "91",
 ): Promise<WhatsAppDraftCheck[]> {
+  // The WhatsApp importer's own rule for the country code (an unusable setting counts as 91).
+  const cc = sanitizeCountryCode(defaultCountryCode);
   const phoneHeader = whatsappPhoneHeader(headers);
+  const emailHeader = detectDataQualityColumns(headers).email;
   const inputs = rows.map((row) => {
     const [contact] = rowsToWhatsAppContacts([row], defaultCountryCode); // what would be imported
     // The names and business even when the number is unusable (the importer reads them the same way).
@@ -111,24 +127,42 @@ export async function checkWhatsAppDraft(
         email: null,
       },
       importable: !!contact,
-      digits: contact?.phone ?? null, // stored form: digits with country code, no '+'
     };
   });
-  const digits = [...new Set(inputs.flatMap((i) => (i.digits ? [i.digits] : [])))];
-  const [checks, saved] = await Promise.all([
-    // The WhatsApp importer's own rule for the country code (an unusable setting counts as 91).
-    checkDraftRows(
-      inputs.map((i) => i.input),
-      sanitizeCountryCode(defaultCountryCode),
-    ),
-    digits.length
-      ? prisma.whatsAppContact.findMany({ where: { phone: { in: digits } }, select: { phone: true } }).then((r) => new Set(r.map((c) => c.phone)))
-      : Promise.resolve(new Set<string>()),
-  ]);
+  const checks = await checkDraftRows(
+    inputs.map((i) => i.input),
+    cc,
+  );
+  const used = await findUsed(
+    "whatsapp",
+    checks.map((c, i) => ({ phone: c.phone, email: emailHeader ? (rows[i]![emailHeader] ?? null) : null, excludedReason: c.excludedReason })),
+    { whatsappCountryCode: cc, callCountryCode },
+  );
   return checks.map((c, i) => ({
     ...c,
     importable: inputs[i]!.importable,
     importProblem: inputs[i]!.importable ? null : WHATSAPP_NO_NUMBER,
-    alreadySaved: !!inputs[i]!.digits && saved.has(inputs[i]!.digits!),
+    alreadySaved: inputs[i]!.importable && !!used[i]!.inContacts,
+    used: used[i]!,
   }));
+}
+
+/* ------------------------------------------------------------------ Voicecall Contact */
+
+export type VoicecallDraftCheck = DraftCheck & { used: UsedInfo };
+
+/** The Data Quality checks and the "already used" checks; "already in contacts" = this language's list. Read-only. */
+export async function checkVoicecallDraft(
+  rows: DraftRowInput[],
+  language: string,
+  callCountryCode: string,
+  whatsappCountryCode: string | undefined,
+): Promise<VoicecallDraftCheck[]> {
+  const checks = await checkDraftRows(rows, callCountryCode);
+  const used = await findUsed(
+    "voicecall",
+    checks.map((c) => ({ phone: c.phone, email: c.email, excludedReason: c.excludedReason })),
+    { language, whatsappCountryCode: sanitizeCountryCode(whatsappCountryCode), callCountryCode },
+  );
+  return checks.map((c, i) => ({ ...c, used: used[i]! }));
 }

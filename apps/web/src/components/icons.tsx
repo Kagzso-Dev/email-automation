@@ -30,7 +30,8 @@ export type IconName =
   | "lock"
   | "eye"
   | "eye-off"
-  | "quality";
+  | "quality"
+  | "chevron-down";
 
 const PATHS: Record<IconName, JSX.Element> = {
   dashboard: (
@@ -195,6 +196,11 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6L12 3z" />
       <path d="M8.75 12.25l2.25 2.25 4.25-4.5" />
+    </>
+  ),
+  "chevron-down": (
+    <>
+      <path d="M6 9l6 6 6-6" />
     </>
   ),
 };

@@ -19,8 +19,13 @@ const loadConfig = () => api<ImportFilterConfig>("/api/import-filter/config").ca
 
 /** The flag for rendering (OFF until it is known). */
 export function useImportFilterStep(): ImportFilterConfig {
+  return useImportFilterStepState();
+}
+
+/** The flag plus whether it is still loading (a page that only exists with the flag on waits instead of flashing "off"). */
+export function useImportFilterStepState(): ImportFilterConfig & { loading: boolean } {
   const q = useQuery({ queryKey: CONFIG_KEY, queryFn: loadConfig, staleTime: 60_000, retry: false });
-  return q.data?.enabled === true ? q.data : OFF;
+  return { ...(q.data?.enabled === true ? q.data : OFF), loading: q.isLoading };
 }
 
 /** The flag at the moment a file is picked (waits for it when it isn't loaded yet; any failure = OFF). */
@@ -50,7 +55,56 @@ export interface DraftCheck {
   score: number | null;
   phoneType: DqPhoneType;
   tier: DqTier | null;
+  /** "Exclude already used data": which checks match (absent on an older API = none). */
+  used?: UsedInfo;
 }
+
+/* ------------------------------------------------------------------ "Exclude already used data" */
+
+export type UsedOption = "contacts" | "sent" | "called";
+export const USED_OPTIONS: [UsedOption, string][] = [
+  ["contacts", "Already in contacts (this channel)"],
+  ["sent", "Already sent to (WhatsApp sends / email logs / Send Queue history)"],
+  ["called", "Already called (call logs, do-not-call)"],
+];
+export const ALL_USED: UsedOption[] = USED_OPTIONS.map(([v]) => v);
+
+/** From the API (apps/api/src/domain/importFilterUsed.ts). Dates are ISO strings; null = unknown. */
+export interface UsedInfo {
+  inContacts: { at: string | null } | null;
+  sent: { at: string | null; via: ("whatsapp" | "email")[] } | null;
+  called: { at: string | null; reason: "called" | "do_not_call" | "not_interested" | "wrong_person" } | null;
+}
+export const NOT_USED: UsedInfo = { inContacts: null, sent: null, called: null };
+
+/** "12 Nov 2026" (the viewer's time zone). */
+export const shortDate = (iso: string | null | undefined) =>
+  iso ? new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : null;
+
+const CALLED_TEXT = { do_not_call: "Do not call", not_interested: "Not interested (call result)", wrong_person: "Wrong person (call result)" } as const;
+
+/** Why the row is excluded: one reason per TICKED option it matches (none = it is not excluded). */
+export function usedReasons(r: { used: UsedInfo }, exclude: readonly UsedOption[], page: ImportFilterPage): string[] {
+  const out: string[] = [];
+  const on = (o: UsedOption) => exclude.includes(o);
+  const { inContacts, sent, called } = r.used;
+  if (on("contacts") && inContacts) {
+    const where = page === "whatsapp" ? "WhatsApp Contacts" : "this Voicecall list";
+    out.push(`Already in ${where}${inContacts.at ? ` (added ${shortDate(inContacts.at)})` : ""}`);
+  }
+  if (on("sent") && sent) {
+    const how = sent.via.length > 1 ? "WhatsApp, email" : sent.via[0] === "email" ? "email" : "WhatsApp";
+    out.push(`Already sent${sent.at ? ` ${shortDate(sent.at)}` : ""} (${how})`);
+  }
+  if (on("called") && called) {
+    out.push(called.reason === "called" ? `Already called${called.at ? ` ${shortDate(called.at)}` : ""}` : CALLED_TEXT[called.reason]);
+  }
+  return out;
+}
+
+/** The row matches a ticked "already used" option: it is not imported. */
+export const isExcluded = (r: { used: UsedInfo }, exclude: readonly UsedOption[]) =>
+  (exclude.includes("contacts") && !!r.used.inContacts) || (exclude.includes("sent") && !!r.used.sent) || (exclude.includes("called") && !!r.used.called);
 
 export type DraftLanguage = "ta" | "en" | "indic" | "unknown";
 export const LANGUAGE_OPTIONS: [DraftLanguage, string][] = [
@@ -87,6 +141,7 @@ export interface DraftRow extends DraftCheck {
   alreadySaved: boolean;
   /** Approve / Reject here: held in memory only. Rejected rows are not imported. */
   review: DqReview;
+  used: UsedInfo;
 }
 
 export function toDraftRows(
@@ -102,6 +157,7 @@ export function toDraftRows(
       importProblem: problem,
       alreadySaved: c.alreadySaved === true,
       review: "PENDING",
+      used: c.used ?? NOT_USED,
     };
   });
 }
@@ -110,11 +166,11 @@ export function toDraftRows(
 
 export type ImportFilterPage = "whatsapp" | "voicecall";
 
-/** The filters ticked when the view opens; the user can change any of them. */
-export function pageDefaults(page: ImportFilterPage): { filters: DqFilters; languages: DraftLanguage[] } {
+/** The filters ticked when the view opens; the user can change any of them. Every "already used" option is ticked. */
+export function pageDefaults(page: ImportFilterPage): { filters: DqFilters; languages: DraftLanguage[]; exclude: UsedOption[] } {
   return page === "whatsapp"
-    ? { filters: { phoneType: ["mobile"] }, languages: [...ALL_LANGUAGES] }
-    : { filters: { phoneType: ["mobile", "landline"] }, languages: [...ALL_LANGUAGES] };
+    ? { filters: { phoneType: ["mobile"] }, languages: [...ALL_LANGUAGES], exclude: [...ALL_USED] }
+    : { filters: { phoneType: ["mobile", "landline"] }, languages: [...ALL_LANGUAGES], exclude: [...ALL_USED] };
 }
 
 /* ------------------------------------------------------------------ filtering (same rules as the Data Quality page) */
@@ -152,8 +208,8 @@ export function draftRowMatches(r: DraftRow, f: DqFilters, languages: DraftLangu
   return true;
 }
 
-/** Can go to the importer: the importer takes it and it wasn't rejected here. */
-export const isSelectable = (r: DraftRow) => r.importable && r.review !== "REJECTED";
+/** Can go to the importer: the importer takes it, it wasn't rejected here, and it isn't excluded as already used. */
+export const isSelectable = (r: DraftRow, exclude: readonly UsedOption[] = []) => r.importable && r.review !== "REJECTED" && !isExcluded(r, exclude);
 
 /* ------------------------------------------------------------------ WhatsApp: the chosen rows as a file */
 
@@ -170,3 +226,58 @@ export function rowsToCsv(headers: string[], rows: Record<string, string>[]): st
 
 /** "contacts.xlsx" → "contacts-selected.csv". */
 export const selectedFileName = (filename: string) => `${filename.replace(/\.[^.]+$/, "") || "import"}-selected.csv`;
+
+export const EXCLUDED_HEADER = "Excluded because";
+
+/** The excluded rows with every original column, plus why each was excluded. */
+export function excludedRowsCsv(
+  headers: string[],
+  rawRows: Record<string, string>[],
+  excluded: DraftRow[],
+  exclude: readonly UsedOption[],
+  page: ImportFilterPage,
+): string {
+  return rowsToCsv(
+    [...headers, EXCLUDED_HEADER],
+    excluded.map((r) => ({ ...(rawRows[r.rowIndex] ?? {}), [EXCLUDED_HEADER]: usedReasons(r, exclude, page).join("; ") })),
+  );
+}
+
+/** Save text as a file in the browser (UTF-8 with BOM, so Excel opens Tamil text correctly). Nothing is uploaded. */
+export function downloadText(filename: string, text: string) {
+  const url = URL.createObjectURL(new Blob([`﻿${text}`], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ------------------------------------------------------------------ what "Import N selected" hands over */
+
+/** The settings used for an import (stored in Upload History). */
+export interface FiltersUsed {
+  filters: DqFilters;
+  languages: DraftLanguage[];
+  exclude: UsedOption[];
+  /** The status tab ("ALL" = every status). */
+  tab: string;
+  /** "Only show rows scoring N+" (null = off). */
+  minScore: number | null;
+  approved: number;
+  rejected: number;
+  /** Rows the user unticked by hand. */
+  unticked: number;
+}
+
+export interface ImportSelection {
+  /** Sent to the importer, in file order. */
+  rowIndexes: number[];
+  /** Excluded as already used (the whole file, with the options ticked). */
+  excluded: DraftRow[];
+  /** The excluded rows as CSV (original columns + why). */
+  excludedCsv: string;
+  settings: FiltersUsed;
+}

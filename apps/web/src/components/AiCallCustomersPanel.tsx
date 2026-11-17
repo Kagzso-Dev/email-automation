@@ -732,6 +732,8 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
     return (
       <VoicecallImportFilter
         filename={parse.variables?.name ?? "file"}
+        headers={sheet.headers}
+        rawRows={sheet.rows}
         rows={rows}
         checks={checks}
         totalRows={sheet.totalRows}
@@ -1025,6 +1027,7 @@ const EVENT_LABEL: Record<string, string> = {
   followup_cancelled: "Follow-up cancelled",
   followup_failed: "Follow-up failed",
   followup_handed_over: "Follow-up queued",
+  followup_deleted: "Follow-up deleted from Send Queue",
   whatsapp_sent: "WhatsApp sent",
   whatsapp_failed: "WhatsApp not sent",
   replied: "Replied",

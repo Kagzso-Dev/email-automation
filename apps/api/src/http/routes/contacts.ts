@@ -23,8 +23,9 @@ import {
   retryFailedItems,
   sendManualEmail,
 } from "../../domain/manualSend.js";
+import { deleteEmailBatch } from "../../domain/sendHistoryDelete.js";
 import { authRequired } from "../middleware/auth.js";
-import { badRequest, notFound, wrap } from "../errors.js";
+import { AppError, badRequest, notFound, wrap } from "../errors.js";
 
 export const contactsRouter = Router();
 contactsRouter.use(authRequired);
@@ -209,6 +210,18 @@ contactsRouter.post(
     const batchId = await retryFailedItems(req.params.id);
     if (!batchId) throw badRequest("Nothing to retry — no failed contacts in that batch");
     res.status(202).json({ batchId });
+  }),
+);
+
+// Send Queue → Delete (one row): the batch and its recipient rows. Refused while it is still
+// sending. Email Logs and contacts are not touched (domain/sendHistoryDelete.ts).
+contactsRouter.delete(
+  "/send/batches/:id",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const r = await deleteEmailBatch(id, req.user!.email);
+    if (!r.ok) throw new AppError(r.status, r.message, r.status === 404 ? "not_found" : "conflict");
+    res.status(204).end();
   }),
 );
 

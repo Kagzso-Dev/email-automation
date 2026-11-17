@@ -1,16 +1,23 @@
 import { useMemo, useState } from "react";
 import { CheckGroup, FilterPanel } from "../pages/DataQuality";
-import { EXCLUDED_LABELS, issueLabel, type DqFilters, type DqRecordStatus, type DqReview } from "../lib/dataQuality";
+import { cleanFilters, EXCLUDED_LABELS, issueLabel, type DqFilters, type DqRecordStatus, type DqReview } from "../lib/dataQuality";
 import {
   ALL_LANGUAGES,
+  downloadText,
   draftRowMatches,
+  excludedRowsCsv,
+  isExcluded,
   isSelectable,
   LANGUAGE_LABELS,
   LANGUAGE_OPTIONS,
   pageDefaults,
+  usedReasons,
+  USED_OPTIONS,
   type DraftLanguage,
   type DraftRow,
   type ImportFilterPage,
+  type ImportSelection,
+  type UsedOption,
 } from "../lib/importFilter";
 import { fullNumber } from "../lib/numberFormat";
 import { useConfirm } from "./confirm";
@@ -18,8 +25,9 @@ import { OverLimitNote } from "./ImportSummary";
 import { Badge, ErrorNote, Table, Tabs, type BadgeTone } from "./ui";
 
 // The import filter step (ENABLE_IMPORT_FILTER_STEP): the Data Quality filter view on a file's rows BEFORE
-// they are imported. Same filters, score controls and table as the Data Quality page. Everything here is in
-// memory: nothing is saved until "Import N selected" hands the chosen rows to the page's own importer.
+// they are imported. Same filters, score controls and table as the Data Quality page, plus "Exclude already used
+// data". Everything here is in memory: nothing is saved until "Import N selected" hands the chosen rows to the
+// page's own importer.
 
 const ROW_TONE: Record<DqRecordStatus, BadgeTone> = { VALID: "ok", INVALID: "crit", DUPLICATE: "warn", EXCLUDED: "neutral" };
 const REVIEW_TONE: Record<DqReview, BadgeTone> = { PENDING: "neutral", APPROVED: "ok", REJECTED: "crit" };
@@ -31,6 +39,9 @@ const n = (v: number) => fullNumber.format(v);
 export interface ImportFilterStepProps {
   page: ImportFilterPage;
   filename: string;
+  /** The file's columns and rows as read (for "Download excluded rows"). */
+  headers: string[];
+  rawRows: Record<string, string>[];
   /** The rows read (the first maxRows of the file), already checked. */
   rows: DraftRow[];
   /** Data rows in the file. */
@@ -43,15 +54,29 @@ export interface ImportFilterStepProps {
   error?: unknown;
   /** Back to choosing a file. Nothing is imported. */
   onBack: () => void;
-  /** The chosen rows (their rowIndex), in file order. */
-  onImport: (rowIndexes: number[]) => void;
+  /** The chosen rows and what was used to choose them. */
+  onImport: (selection: ImportSelection) => void;
 }
 
-export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, destination, importing, error, onBack, onImport }: ImportFilterStepProps) {
+export function ImportFilterStep({
+  page,
+  filename,
+  headers,
+  rawRows,
+  rows,
+  totalRows,
+  maxRows,
+  destination,
+  importing,
+  error,
+  onBack,
+  onImport,
+}: ImportFilterStepProps) {
   const confirm = useConfirm();
   const defaults = useMemo(() => pageDefaults(page), [page]);
   const [filters, setFilters] = useState<DqFilters>(defaults.filters);
   const [languages, setLanguages] = useState<DraftLanguage[]>(defaults.languages);
+  const [exclude, setExclude] = useState<UsedOption[]>(defaults.exclude);
   const [tab, setTab] = useState<Tab>("ALL");
   const [minScore, setMinScore] = useState(70);
   const [aboveOnly, setAboveOnly] = useState(false);
@@ -63,12 +88,14 @@ export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, des
   const matching = all.filter((r) => draftRowMatches(r, filters, languages));
   const byTab = tab === "ALL" ? matching : matching.filter((r) => r.status === tab);
   const shown = aboveOnly ? byTab.filter((r) => r.score != null && r.score >= minScore) : byTab;
-  const pickable = shown.filter(isSelectable);
+  const pickable = shown.filter((r) => isSelectable(r, exclude));
   // Never more than one import takes (the rows read are already capped at maxRows).
   const selected = pickable.filter((r) => !unticked.has(r.rowIndex)).slice(0, maxRows);
   const count = (s: DqRecordStatus) => matching.filter((r) => r.status === s).length;
   const skippedOverLimit = Math.max(0, totalRows - rows.length);
-  const alreadySaved = all.filter((r) => r.alreadySaved).length;
+  // Excluded as already used: in the whole file (download, history) and among the rows shown (the counter).
+  const excludedAll = all.filter((r) => isExcluded(r, exclude));
+  const excludedShown = shown.filter((r) => isExcluded(r, exclude)).length;
 
   // Review by score (Data Quality's rule): valid rows not reviewed yet.
   const unreviewed = all.filter((r) => r.status === "VALID" && r.review === "PENDING" && r.score != null);
@@ -108,6 +135,25 @@ export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, des
       return next;
     });
 
+  const csvOfExcluded = () => excludedRowsCsv(headers, rawRows, excludedAll, exclude, page);
+  const base = filename.replace(/\.[^.]+$/, "") || "import";
+  const confirmImport = () =>
+    onImport({
+      rowIndexes: selected.map((r) => r.rowIndex),
+      excluded: excludedAll,
+      excludedCsv: excludedAll.length ? csvOfExcluded() : "",
+      settings: {
+        filters: cleanFilters(filters),
+        languages,
+        exclude,
+        tab,
+        minScore: aboveOnly ? minScore : null,
+        approved: all.filter((r) => r.review === "APPROVED").length,
+        rejected: all.filter((r) => r.review === "REJECTED").length,
+        unticked: unticked.size,
+      },
+    });
+
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -124,8 +170,26 @@ export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, des
       <p className="mb-3 text-xs text-slate-550">
         Checked with the Data Quality rules (rules score only; the AI score needs a saved Data Quality check). Only the rows you keep go to
         the {destination} import, which then applies its own rules, duplicates included.
-        {alreadySaved > 0 && ` ${n(alreadySaved)} number${alreadySaved === 1 ? " is" : "s are"} already saved: the import updates ${alreadySaved === 1 ? "it" : "them"}.`}
       </p>
+
+      <div className="card mb-3 space-y-2 p-4">
+        <CheckGroup label="Exclude already used data" options={USED_OPTIONS} value={exclude} onChange={setExclude} />
+        <p className="text-xs text-slate-550">Ticked: matching rows are left out and not imported. Unticked: they go to the import like any other row.</p>
+        {page === "whatsapp" && (
+          <p className="rounded-lg bg-surface-muted px-3 py-2 text-xs text-ink">
+            WhatsApp numbers already saved in WhatsApp Contacts are excluded by default. Untick “Already in contacts” to import them: the
+            import then updates those contacts.
+          </p>
+        )}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+          <span className="text-slate-550">
+            {n(excludedAll.length)} row{excludedAll.length === 1 ? "" : "s"} in this file {excludedAll.length === 1 ? "is" : "are"} excluded as already used.
+          </span>
+          <button type="button" className="btn-ghost" disabled={excludedAll.length === 0} onClick={() => downloadText(`${base}-excluded.csv`, csvOfExcluded())}>
+            Download excluded rows ({n(excludedAll.length)})
+          </button>
+        </div>
+      </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         <label className="flex items-center gap-2 text-slate-550">
@@ -151,9 +215,10 @@ export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, des
         filters={filters}
         onChange={setFilters}
         facets={undefined}
-        showing={`Showing ${n(shown.length)} of ${n(rows.length)}`}
+        showing={`Showing ${n(shown.length)} of ${n(rows.length)}, ${n(excludedShown)} excluded as already used`}
         busy={false}
         onClear={() => {
+          // "Exclude already used data" is not a filter: it stays as it is.
           setFilters({});
           setLanguages([...ALL_LANGUAGES]);
           setTab("ALL");
@@ -190,41 +255,50 @@ export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, des
             "Language",
             "Check",
             "Score",
+            "Already used",
             "Notes",
             "Review",
           ]}
         >
-          {shown.map((r) => (
-            <tr key={r.rowIndex} className="border-b border-line-subtle align-top last:border-0">
-              <td className="px-4 py-3">
-                {isSelectable(r) && (
-                  <input type="checkbox" aria-label={`Select row ${r.rowIndex + 2}`} checked={!unticked.has(r.rowIndex)} onChange={() => toggle(r.rowIndex)} />
-                )}
-              </td>
-              <td className="px-4 py-3 font-mono text-xs">{r.rowIndex + 2}</td>
-              <td className="px-4 py-3">{r.name ?? <span className="text-slate-550">—</span>}</td>
-              <td className="px-4 py-3 font-mono text-xs">{r.phone ?? r.phoneRaw ?? "—"}</td>
-              <td className="px-4 py-3">
-                {r.businessName ?? <span className="text-slate-550">—</span>}
-                {r.email && <div className="text-xs text-slate-550">{r.email}</div>}
-              </td>
-              <td className="px-4 py-3 text-xs">{LANGUAGE_LABELS[r.language]}</td>
-              <td className="px-4 py-3">
-                <Badge tone={ROW_TONE[r.status]}>{r.status === "EXCLUDED" && r.excludedReason ? EXCLUDED_LABELS[r.excludedReason] : r.status.toLowerCase()}</Badge>
-              </td>
-              <td className="px-4 py-3 font-mono text-xs">{r.score ?? "—"}</td>
-              <td className="max-w-xs px-4 py-3 text-xs">
-                {r.importProblem && <div className="text-crit">{r.importProblem}</div>}
-                {r.alreadySaved && <div className="text-warn">Already saved: the import updates it</div>}
-                {[...r.issues, ...r.flags]
-                  .filter((c) => !(r.alreadySaved && c === "in_whatsapp"))
-                  .map((c) => (
-                    <div key={c}>{issueLabel(c)}</div>
+          {shown.map((r) => {
+            const reasons = usedReasons(r, exclude, page);
+            return (
+              <tr key={r.rowIndex} className={`border-b border-line-subtle align-top last:border-0 ${reasons.length ? "bg-surface-muted" : ""}`}>
+                <td className="px-4 py-3">
+                  {isSelectable(r, exclude) && (
+                    <input type="checkbox" aria-label={`Select row ${r.rowIndex + 2}`} checked={!unticked.has(r.rowIndex)} onChange={() => toggle(r.rowIndex)} />
+                  )}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">{r.rowIndex + 2}</td>
+                <td className="px-4 py-3">{r.name ?? <span className="text-slate-550">—</span>}</td>
+                <td className="px-4 py-3 font-mono text-xs">{r.phone ?? r.phoneRaw ?? "—"}</td>
+                <td className="px-4 py-3">
+                  {r.businessName ?? <span className="text-slate-550">—</span>}
+                  {r.email && <div className="text-xs text-slate-550">{r.email}</div>}
+                </td>
+                <td className="px-4 py-3 text-xs">{LANGUAGE_LABELS[r.language]}</td>
+                <td className="px-4 py-3">
+                  <Badge tone={ROW_TONE[r.status]}>{r.status === "EXCLUDED" && r.excludedReason ? EXCLUDED_LABELS[r.excludedReason] : r.status.toLowerCase()}</Badge>
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">{r.score ?? "—"}</td>
+                <td className="max-w-xs px-4 py-3 text-xs text-warn">
+                  {reasons.map((t) => (
+                    <div key={t}>{t}</div>
                   ))}
-              </td>
-              <td className="px-4 py-3">{r.status === "VALID" ? <Badge tone={REVIEW_TONE[r.review]}>{r.review.toLowerCase()}</Badge> : null}</td>
-            </tr>
-          ))}
+                </td>
+                <td className="max-w-xs px-4 py-3 text-xs">
+                  {r.importProblem && <div className="text-crit">{r.importProblem}</div>}
+                  {r.alreadySaved && !reasons.length && <div className="text-warn">Already saved: the import updates it</div>}
+                  {[...r.issues, ...r.flags]
+                    .filter((c) => !(r.alreadySaved && c === "in_whatsapp"))
+                    .map((c) => (
+                      <div key={c}>{issueLabel(c)}</div>
+                    ))}
+                </td>
+                <td className="px-4 py-3">{r.status === "VALID" ? <Badge tone={REVIEW_TONE[r.review]}>{r.review.toLowerCase()}</Badge> : null}</td>
+              </tr>
+            );
+          })}
         </Table>
       </div>
 
@@ -239,7 +313,7 @@ export function ImportFilterStep({ page, filename, rows, totalRows, maxRows, des
           <button type="button" className="btn-ghost" disabled={importing} onClick={onBack}>
             Back
           </button>
-          <button type="button" className="btn-primary" disabled={importing || selected.length === 0} onClick={() => onImport(selected.map((r) => r.rowIndex))}>
+          <button type="button" className="btn-primary" disabled={importing || selected.length === 0} onClick={confirmImport}>
             {importing ? "Importing…" : `Import ${n(selected.length)} selected`}
           </button>
         </div>

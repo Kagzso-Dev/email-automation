@@ -76,6 +76,9 @@ export interface AiCallFollowup {
   decidedByEmail: string | null;
   decidedAt: string | null;
   createdAt: string;
+  /** Set once an approved WhatsApp follow-up was handed to a batch / a call follow-up to an AI call run. */
+  whatsappBatchId?: string | null;
+  aiCallRunId?: string | null;
   delivery: { status: string; at: string | null; detail: string | null } | null;
   customer?: {
     id: string;

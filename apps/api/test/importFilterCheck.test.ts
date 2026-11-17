@@ -15,7 +15,7 @@ import {
 // Same results as the Data Quality page's own rules; existing tables are only read; nothing is written,
 // queued or sent to an AI service.
 
-vi.mock("../src/prisma.js", async () => ({ prisma: (await import("./fakePrisma.js")).fake.db }));
+vi.mock("../src/prisma.js", async () => ({ prisma: (await import("./fakePrismaPlus.js")).db }));
 const enqueued = vi.hoisted(() => [] as unknown[]);
 vi.mock("../src/queue/queues.js", async (orig) => ({
   ...(await orig<typeof import("../src/queue/queues.js")>()),

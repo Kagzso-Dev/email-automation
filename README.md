@@ -776,6 +776,16 @@ follow-ups give one row per follow-up. The file is streamed from
 `GET /api/send-queue/history/:channel/export` (`email`, `whatsapp`, `ai-followups`); the button is
 disabled when there's no history.
 
+**Delete (each row).** The trash button on a row removes that one entry for good, after a confirm:
+an Email batch with its recipient rows (Email Logs and contacts stay), a WhatsApp batch with its
+messages (they also leave the WhatsApp Inbox threads and stop counting as already sent; contacts,
+templates and customer replies stay), or an AI Call follow-up (the WhatsApp batch or call it led to
+stays; the customer's timeline notes the delete). It's disabled, and the API answers 409, while a batch
+is still sending, a follow-up is waiting for approval (reject it first) or an approved call hasn't been
+made yet. Deleting a "No answer" call-again frees a retry under the retry limit. Endpoints:
+`DELETE /api/contacts/send/batches/:id`, `DELETE /api/whatsapp/send/batches/:id`,
+`DELETE /api/ai-call-followups/:id`. No migration.
+
 AI call data in both tools is admin-only and returns 404 while `ENABLE_AI_CALLS=false`, like the AI Call
 follow-ups tab.
 

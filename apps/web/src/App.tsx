@@ -20,6 +20,7 @@ import { AiCallCustomersPage } from "./pages/AiCallCustomers";
 import { CampaignsPage } from "./pages/Campaigns";
 import { CampaignDetailPage } from "./pages/CampaignDetail";
 import { SendQueuePage } from "./pages/SendQueue";
+import { UploadHistoryPage } from "./pages/UploadHistory";
 import { TriggersPage } from "./pages/Triggers";
 import { SettingsPage } from "./pages/Settings";
 import { DataQualityPage } from "./pages/DataQuality";
@@ -92,6 +93,7 @@ export function App() {
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/campaigns/:id" element={<CampaignDetailPage />} />
         <Route path="/send-queue" element={<SendQueuePage />} />
+        <Route path="/upload-history" element={<UploadHistoryPage />} /> {/* "Not available" unless ENABLE_IMPORT_FILTER_STEP */}
         <Route path="/triggers" element={<TriggersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/login" element={<Navigate to="/" replace />} />

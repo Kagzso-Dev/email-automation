@@ -1162,3 +1162,34 @@ model AiAgentKnowledgeItem {
   @@index([fileId])
   @@map("ai_agent_knowledge_items")
 }
+
+/// Upload History (ENABLE_IMPORT_FILTER_STEP, migration 0037): one row per confirmed "Import N selected" on
+/// WhatsApp Contacts / Voicecall Contact. Written only after the page's importer answered; never on Back.
+/// No relation to users (who uploaded is a snapshot). The excluded-rows CSV is cleared after 30 days; the
+/// counts and filters stay. No other table is touched.
+model UploadHistory {
+  id                String    @id @default(cuid())
+  fileName          String    @db.VarChar(255)
+  channel           String    @db.VarChar(16) // whatsapp | voicecall
+  language          String?   @db.VarChar(8) // voicecall: this page's list (en, ta, …)
+  uploadedById      String    @db.VarChar(191)
+  uploadedByEmail   String    @db.VarChar(191)
+  totalRows         Int
+  imported          Int
+  excludedUsed      Int
+  filteredOut       Int
+  duplicates        Int
+  failed            Int
+  skippedOverLimit  Int       @default(0)
+  filters           Json // filters, languages and "exclude already used" options at import time
+  result            Json // the importer's own answer
+  excludedRows      Int       @default(0)
+  excludedCsv       String?   @db.MediumText // null once purged (30 days) or when nothing was excluded
+  excludedExpiresAt DateTime
+  excludedPurgedAt  DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([excludedExpiresAt])
+  @@map("upload_history")
+}

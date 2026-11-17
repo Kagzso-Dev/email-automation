@@ -10,6 +10,7 @@ import { formatDateTime } from "../lib/schedule";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { AiCallFollowupsQueue } from "../components/AiCallFollowupsQueue";
 import { QueueActions } from "../components/QueueActions";
+import { DeleteHistoryButton } from "../components/DeleteHistoryButton";
 import { useScrolledShadow } from "../lib/useScrolledShadow";
 
 /**
@@ -174,6 +175,9 @@ function Chevron({ open }: { open: boolean }) {
 }
 
 const HEAD = ["", "Batch", "Template", "Recipients", "Status", "Sent", "Failed", "Started", "Completed", ""];
+
+const STILL_SENDING = "Still sending. It can be deleted once it has finished.";
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /* ------------------------------------------------------------------ CSV download */
 
@@ -347,7 +351,7 @@ function EmailQueue({ view, setView }: QueueViewProps) {
                   <td className="px-4 py-2.5 text-xs text-slate-550">
                     {b.completedAt ? formatDateTime(b.completedAt) : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                     <DownloadCsvButton
                       filename={`email-batch-${b.id.slice(0, 8)}.csv`}
                       buildCsv={async () => {
@@ -368,6 +372,13 @@ function EmailQueue({ view, setView }: QueueViewProps) {
                           ]),
                         );
                       }}
+                    />
+                    <DeleteHistoryButton
+                      path={`/api/contacts/send/batches/${b.id}`}
+                      what={`email batch ${b.id.slice(0, 8)}`}
+                      blockedReason={b.status === "RUNNING" ? STILL_SENDING : null}
+                      refresh={[["email-batches"], ["send-queue-history-count", "email"]]}
+                      body={`Removes this batch and its ${plural(b.total, "recipient")} from the Send Queue and from "Download all history". This can't be undone. Contacts and Email Logs stay as they are.`}
                     />
                   </td>
                 </tr>
@@ -586,7 +597,7 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
                   <td className="px-4 py-2.5 text-xs text-slate-550">
                     {b.completedAt ? formatDateTime(b.completedAt) : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                  <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                     <DownloadCsvButton
                       filename={`whatsapp-batch-${b.id.slice(0, 8)}.csv`}
                       buildCsv={async () => {
@@ -607,6 +618,13 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
                           ]),
                         );
                       }}
+                    />
+                    <DeleteHistoryButton
+                      path={`/api/whatsapp/send/batches/${b.id}`}
+                      what={`WhatsApp batch ${b.id.slice(0, 8)}`}
+                      blockedReason={b.status === "RUNNING" ? STILL_SENDING : null}
+                      refresh={[["whatsapp-batches"], ["send-queue-history-count", "whatsapp"]]}
+                      body={`Removes this batch and its ${plural(b.total, "message")} from the Send Queue, from "Download all history" and from the WhatsApp Inbox conversations. These numbers no longer count as already sent. This can't be undone. Contacts, templates and customer replies stay as they are.`}
                     />
                   </td>
                 </tr>

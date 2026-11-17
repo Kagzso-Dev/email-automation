@@ -17,7 +17,8 @@ import { aiCallsConfig } from "../../config/aiCalls.js";
 import { isImportFilterStepEnabled } from "../../config/importFilterStep.js";
 import { whatsappConfig } from "../../config/whatsapp.js";
 import { aiCallFormatFromFilename, readAiCallSheetUpload } from "../../domain/aiCallImport.js";
-import { checkDraftRows, checkWhatsAppDraft } from "../../domain/importFilterCheck.js";
+import { aiCallLanguage } from "@dispatch/shared";
+import { checkVoicecallDraft, checkWhatsAppDraft } from "../../domain/importFilterCheck.js";
 import { IMPORT_MAX_ROWS } from "../../domain/importLimit.js";
 import { importUpload, removeUpload, unreadableFile } from "../importUpload.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -67,7 +68,7 @@ importFilterRouter.post(
     }
     if (sheet.headers.length === 0) throw badRequest("The file has no header row");
     if (sheet.rows.length === 0) throw badRequest("The file has no data rows");
-    const checks = await checkWhatsAppDraft(sheet.headers, sheet.rows, whatsappConfig.defaultCountryCode);
+    const checks = await checkWhatsAppDraft(sheet.headers, sheet.rows, whatsappConfig.defaultCountryCode, aiCallsConfig.defaultCountryCode);
     res.json({
       filename: file.originalname,
       headers: sheet.headers,
@@ -95,6 +96,8 @@ const voicecallCheckInput = z
       .array(z.object({ name: text(200), phone: text(60), business: text(300), email: text(300) }).strict())
       .min(1, "No rows to check")
       .max(IMPORT_MAX_ROWS),
+    // This page's list: "already in contacts" means already in THIS list (the importer's own duplicate rule).
+    language: aiCallLanguage.default("en"),
   })
   .strict();
 
@@ -105,7 +108,7 @@ importFilterRouter.post(
   requireRole("ADMIN", "EDITOR"),
   checkLimiter,
   wrap(async (req, res) => {
-    const { rows } = voicecallCheckInput.parse(req.body);
-    res.json({ checks: await checkDraftRows(rows, aiCallsConfig.defaultCountryCode) });
+    const { rows, language } = voicecallCheckInput.parse(req.body);
+    res.json({ checks: await checkVoicecallDraft(rows, language, aiCallsConfig.defaultCountryCode, whatsappConfig.defaultCountryCode) });
   }),
 );

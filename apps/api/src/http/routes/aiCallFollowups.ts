@@ -6,12 +6,14 @@
 //   PATCH /api/ai-call-followups/:id           edit before send (template / time / note)
 //   POST  /api/ai-call-followups/:id/approve   approve → queue with the existing sender
 //   POST  /api/ai-call-followups/:id/reject    reject (nothing is sent)
+//   DELETE /api/ai-call-followups/:id          remove a decided follow-up from the history (domain/sendHistoryDelete.ts)
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { editFollowupInput, idParam, listFollowupsQuery } from "@dispatch/shared";
 import { aiCallsConfig } from "../../config/aiCalls.js";
 import { approveFollowup, editFollowup, FollowupError, listFollowups, rejectFollowup } from "../../domain/aiCallFollowups.js";
+import { deleteFollowup } from "../../domain/sendHistoryDelete.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, wrap } from "../errors.js";
 
@@ -69,5 +71,15 @@ aiCallFollowupsRouter.post(
     const { id } = idParam.parse(req.params);
     await rejectFollowup(id, req.user!.email).catch(toHttp);
     res.json({ ok: true });
+  }),
+);
+
+aiCallFollowupsRouter.delete(
+  "/:id",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const r = await deleteFollowup(id, req.user!.email);
+    if (!r.ok) throw new AppError(r.status, r.message, r.status === 404 ? "not_found" : "conflict");
+    res.status(204).end();
   }),
 );

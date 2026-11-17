@@ -32,6 +32,7 @@ import {
   getWhatsAppBatchView,
   listWhatsAppSendBatches,
 } from "../../domain/whatsappSend.js";
+import { deleteWhatsAppBatch } from "../../domain/sendHistoryDelete.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, badRequest, conflict, notFound, wrap } from "../errors.js";
 
@@ -430,6 +431,18 @@ whatsappRouter.get(
     const view = await getWhatsAppBatchView(req.params.id);
     if (!view) throw notFound("WhatsApp send batch");
     res.json(view);
+  }),
+);
+
+// Send Queue → Delete (one row): the batch, its messages and their media links. Refused while it
+// is still sending. Contacts and templates are not touched (domain/sendHistoryDelete.ts).
+whatsappRouter.delete(
+  "/send/batches/:id",
+  wrap(async (req, res) => {
+    const { id } = idParam.parse(req.params);
+    const r = await deleteWhatsAppBatch(id, req.user!.email);
+    if (!r.ok) throw new AppError(r.status, r.message, r.status === 404 ? "not_found" : "conflict");
+    res.status(204).end();
   }),
 );
 

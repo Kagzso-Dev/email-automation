@@ -43,6 +43,7 @@ import { historyFilterRouter } from "./routes/historyFilter.js";
 import { sendQueueHistoryRouter } from "./routes/sendQueueHistory.js";
 import { dataQualityRouter } from "./routes/dataQuality.js";
 import { importFilterRouter } from "./routes/importFilter.js";
+import { uploadHistoryRouter } from "./routes/uploadHistory.js";
 
 export function createApp() {
   const app = express();
@@ -116,6 +117,7 @@ export function createApp() {
   app.use("/api/send-queue/history", sendQueueHistoryRouter); // read-only "download all history"
   app.use("/api/data-quality", dataQualityRouter); // admin only; staging tables + local Ollama only
   app.use("/api/import-filter", importFilterRouter); // read-only checks before an import; 404 unless ENABLE_IMPORT_FILTER_STEP
+  app.use("/api/upload-history", uploadHistoryRouter); // upload_history table only (migration 0037); 404 unless ENABLE_IMPORT_FILTER_STEP
   app.use("/api", callCostByFlowRouter);
   app.use("/api", statsRouter);
 

@@ -4,8 +4,9 @@ import { AI_CALL_LANGUAGE_NAMES, type AiCallLanguage } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { withLanguage } from "../lib/aiCallLanguage";
 import type { ImportSummary, LanguageImportSummary } from "../lib/aiCallCustomers";
-import { rowsToCsv, selectedFileName, toDraftRows, type DraftCheck } from "../lib/importFilter";
+import { rowsToCsv, selectedFileName, toDraftRows, type DraftCheck, type ImportSelection } from "../lib/importFilter";
 import { fullNumber } from "../lib/numberFormat";
+import { saveUploadHistory } from "../lib/uploadHistory";
 import { ImportCountsSummary } from "./ImportSummary";
 import { ImportFilterStep } from "./ImportFilterStep";
 import { ErrorNote, Modal, Spinner, Table } from "./ui";
@@ -14,7 +15,9 @@ import { ErrorNote, Modal, Spinner, Table } from "./ui";
 // and held in this component's state; "Import N selected" sends only the chosen rows to the page's EXISTING
 // importer, unchanged: WhatsApp → POST /api/whatsapp/contacts/import (the chosen rows as a CSV with the
 // file's own columns), Voicecall → POST /api/ai-call-customers/import (or /import-to-languages), exactly the
-// request the page makes today. Back or Close drops everything; nothing was saved.
+// request the page makes today. Only after the importer answered is the upload written to Upload History
+// (POST /api/upload-history); if that fails the import stands and a warning is shown. Back or Close drops
+// everything; nothing was saved.
 
 const n = (v: number) => fullNumber.format(v);
 const newDraftId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -37,6 +40,26 @@ function CheckFailed({ error, onBack }: { error: unknown; onBack: () => void }) 
           Back
         </button>
       </div>
+    </div>
+  );
+}
+
+function HistoryNote({ warning }: { warning: string | null }) {
+  return warning ? (
+    <p role="note" className="mt-3 rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-sm text-warn">
+      {warning}
+    </p>
+  ) : (
+    <p className="mt-3 text-xs text-slate-550">Saved to Upload History.</p>
+  );
+}
+
+function DoneButton({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="mt-4 flex justify-end">
+      <button type="button" className="btn-primary" onClick={onClose}>
+        Done
+      </button>
     </div>
   );
 }
@@ -70,6 +93,15 @@ export function WhatsAppImportFilter({ file, onClose, onBack }: { file: File | n
   );
 }
 
+interface WhatsAppDone {
+  result: WhatsAppImportResult;
+  imported: number;
+  failed: number;
+  excluded: number;
+  filteredOut: number;
+  historyWarning: string | null;
+}
+
 function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => void; onBack: () => void }) {
   const qc = useQueryClient();
   const [draftId] = useState(newDraftId);
@@ -86,19 +118,44 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
     refetchOnWindowFocus: false,
   });
   const rows = useMemo(() => (preview.data ? toDraftRows(preview.data.checks) : []), [preview.data]);
-  const [done, setDone] = useState<{ result: WhatsAppImportResult; sent: number } | null>(null);
+  const [done, setDone] = useState<WhatsAppDone | null>(null);
   const doImport = useMutation({
-    mutationFn: async (rowIndexes: number[]) => {
+    mutationFn: async (sel: ImportSelection): Promise<WhatsAppDone> => {
       const p = preview.data!;
-      const csv = rowsToCsv(p.headers, rowIndexes.map((i) => p.rows[i]!));
+      const csv = rowsToCsv(p.headers, sel.rowIndexes.map((i) => p.rows[i]!));
       const fd = new FormData();
       fd.append("file", new File([csv], selectedFileName(p.filename), { type: "text/csv" }));
       const result = await api<WhatsAppImportResult>("/api/whatsapp/contacts/import", { method: "POST", body: fd, notify: false });
-      return { result, sent: rowIndexes.length };
+
+      // Every row read is counted once: excluded (already used) → no WhatsApp number → filtered out → sent.
+      const excludedIdx = new Set(sel.excluded.map((r) => r.rowIndex));
+      const noNumber = rows.filter((r) => !r.importable && !excludedIdx.has(r.rowIndex)).length;
+      const filteredOut = rows.length - excludedIdx.size - noNumber - sel.rowIndexes.length;
+      const counts = { imported: result.created + result.updated, failed: noNumber + result.failed, excluded: excludedIdx.size, filteredOut };
+      const historyWarning = await saveUploadHistory(
+        {
+          fileName: p.filename,
+          channel: "whatsapp",
+          language: null,
+          totalRows: p.totalRows,
+          imported: counts.imported,
+          excludedUsed: counts.excluded,
+          filteredOut,
+          duplicates: result.duplicates,
+          failed: counts.failed,
+          skippedOverLimit: Math.max(0, p.totalRows - p.rows.length),
+          excludedRows: excludedIdx.size,
+          filters: sel.settings,
+          result,
+        },
+        sel.excludedCsv,
+      );
+      return { result, ...counts, historyWarning };
     },
     onSuccess: (r) => {
       setDone(r);
       void qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] });
+      void qc.invalidateQueries({ queryKey: ["upload-history"] });
     },
   });
 
@@ -107,36 +164,35 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
   const p = preview.data;
 
   if (done) {
-    const { result: r, sent } = done;
-    const noNumber = rows.filter((x) => !x.importable).length; // the importer reports these as failed
-    const filteredOut = rows.length - noNumber - sent;
+    const { result: r } = done;
     return (
       <div>
         <ImportCountsSummary
           counts={{
             totalRows: p.totalRows,
             maxRows: p.maxRows,
-            selectedRows: rows.length - filteredOut,
-            imported: r.created + r.updated,
-            failed: noNumber + r.failed,
+            selectedRows: rows.length - done.filteredOut - done.excluded,
+            imported: done.imported,
+            failed: done.failed,
             duplicates: r.duplicates,
             skippedOverLimit: Math.max(0, p.totalRows - p.rows.length),
           }}
-          extra={[{ label: "Filtered out", value: filteredOut }]}
+          extra={[
+            { label: "Excluded (already used)", value: done.excluded },
+            { label: "Filtered out", value: done.filteredOut },
+          ]}
           details={[
             `Imported: ${n(r.created)} new, ${n(r.updated)} already saved (updated)`,
-            noNumber + r.failed ? `${n(noNumber + r.failed)} without a usable phone number` : null,
+            done.failed ? `${n(done.failed)} without a usable phone number` : null,
             r.duplicates ? `${n(r.duplicates)} repeating a number from an earlier row (applied to that contact)` : null,
-            filteredOut ? `${n(filteredOut)} left out by the filters` : null,
+            done.excluded ? `${n(done.excluded)} excluded as already used` : null,
+            done.filteredOut ? `${n(done.filteredOut)} left out by the filters` : null,
           ]
             .filter(Boolean)
             .join(" · ")}
         />
-        <div className="mt-4 flex justify-end">
-          <button type="button" className="btn-primary" onClick={onClose}>
-            Done
-          </button>
-        </div>
+        <HistoryNote warning={done.historyWarning} />
+        <DoneButton onClose={onClose} />
       </div>
     );
   }
@@ -145,6 +201,8 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
     <ImportFilterStep
       page="whatsapp"
       filename={p.filename}
+      headers={p.headers}
+      rawRows={p.rows}
       rows={rows}
       totalRows={p.totalRows}
       maxRows={p.maxRows}
@@ -152,7 +210,7 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
       importing={doImport.isPending}
       error={doImport.error}
       onBack={onBack}
-      onImport={(idx) => doImport.mutate(idx)}
+      onImport={(sel) => doImport.mutate(sel)}
     />
   );
 }
@@ -172,6 +230,9 @@ export interface VoicecallImportRow {
 
 export interface VoicecallImportFilterProps {
   filename: string;
+  /** The file's columns and rows as read (for "Download excluded rows"). */
+  headers: string[];
+  rawRows: Record<string, string>[];
   rows: VoicecallImportRow[];
   /** The page's own row check, per row (rows with errors or a repeated number are not sent today). */
   checks: { errors: string[]; duplicate: boolean }[];
@@ -191,8 +252,34 @@ const SAME_NUMBER = "Same number as an earlier row: skipped, as today";
 const rowProblem = (c: { errors: string[]; duplicate: boolean } | undefined): string | null =>
   !c ? null : c.errors.length ? c.errors.join("; ") : c.duplicate ? SAME_NUMBER : null;
 
+interface VoicecallDone {
+  one?: ImportSummary;
+  many?: LanguageImportSummary[];
+  imported: number;
+  failed: number;
+  duplicates: number;
+  doNotCall: number;
+  excluded: number;
+  filteredOut: number;
+  invalid: number;
+  repeated: number;
+  historyWarning: string | null;
+}
+
 /** Voicecall Contact → Import file → after the column mapping: the filter step. */
-export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRows, language, also, onBack, onClose }: VoicecallImportFilterProps) {
+export function VoicecallImportFilter({
+  filename,
+  headers,
+  rawRows,
+  rows,
+  checks,
+  totalRows,
+  maxRows,
+  language,
+  also,
+  onBack,
+  onClose,
+}: VoicecallImportFilterProps) {
   const qc = useQueryClient();
   const [draftId] = useState(newDraftId);
   const check = useQuery({
@@ -200,7 +287,10 @@ export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRo
     queryFn: () =>
       api<{ checks: DraftCheck[] }>("/api/import-filter/voicecall/check", {
         method: "POST",
-        json: { rows: rows.map((r) => ({ name: r.customerName || null, phone: r.phone || null, business: r.businessName || null, email: r.email || null })) },
+        json: {
+          rows: rows.map((r) => ({ name: r.customerName || null, phone: r.phone || null, business: r.businessName || null, email: r.email || null })),
+          language,
+        },
         notify: false,
       }),
     staleTime: Infinity,
@@ -209,24 +299,66 @@ export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRo
     refetchOnWindowFocus: false,
   });
   const draft = useMemo(() => (check.data ? toDraftRows(check.data.checks, (i) => rowProblem(checks[i])) : []), [check.data, checks]);
-  const [done, setDone] = useState<{ one?: ImportSummary; many?: LanguageImportSummary[]; sent: number } | null>(null);
+  const [done, setDone] = useState<VoicecallDone | null>(null);
   const doImport = useMutation({
-    mutationFn: async (rowIndexes: number[]) => {
-      const chosen = rowIndexes.map((i) => rows[i]!);
+    mutationFn: async (sel: ImportSelection): Promise<VoicecallDone> => {
+      const chosen = sel.rowIndexes.map((i) => rows[i]!);
+      let one: ImportSummary | undefined;
+      let many: LanguageImportSummary[] | undefined;
       if (also.length === 0) {
-        const one = await api<ImportSummary>(withLanguage("/api/ai-call-customers/import", language), { method: "POST", json: { rows: chosen }, notify: false });
-        return { one, sent: chosen.length };
+        one = await api<ImportSummary>(withLanguage("/api/ai-call-customers/import", language), { method: "POST", json: { rows: chosen }, notify: false });
+      } else {
+        many = (
+          await api<{ results: LanguageImportSummary[] }>("/api/ai-call-customers/import-to-languages", {
+            method: "POST",
+            json: { rows: chosen, languages: [language, ...also] },
+            notify: false,
+          })
+        ).results;
       }
-      const r = await api<{ results: LanguageImportSummary[] }>("/api/ai-call-customers/import-to-languages", {
-        method: "POST",
-        json: { rows: chosen, languages: [language, ...also] },
-        notify: false,
-      });
-      return { many: r.results, sent: chosen.length };
+
+      // Every row read is counted once: excluded (already used) → invalid / repeated (skipped, as today) →
+      // filtered out → sent (then the importer's own imported / skipped / duplicates).
+      const excludedIdx = new Set(sel.excluded.map((r) => r.rowIndex));
+      const kept = checks.filter((_, i) => !excludedIdx.has(i));
+      const invalid = kept.filter((c) => c.errors.length > 0).length;
+      const repeated = kept.filter((c) => c.errors.length === 0 && c.duplicate).length;
+      const filteredOut = rows.length - excludedIdx.size - invalid - repeated - chosen.length;
+      const sum = (k: "imported" | "skipped" | "duplicates" | "doNotCall") => (one ? one[k] : (many ?? []).reduce((s, r) => s + r[k], 0));
+      const counts = {
+        imported: sum("imported"),
+        failed: invalid + sum("skipped"),
+        duplicates: repeated + sum("duplicates"),
+        doNotCall: sum("doNotCall"),
+        excluded: excludedIdx.size,
+        filteredOut,
+        invalid,
+        repeated,
+      };
+      const historyWarning = await saveUploadHistory(
+        {
+          fileName: filename,
+          channel: "voicecall",
+          language,
+          totalRows,
+          imported: counts.imported,
+          excludedUsed: counts.excluded,
+          filteredOut,
+          duplicates: counts.duplicates,
+          failed: counts.failed,
+          skippedOverLimit: Math.max(0, totalRows - rows.length),
+          excludedRows: excludedIdx.size,
+          filters: sel.settings,
+          result: one ?? { languages: many },
+        },
+        sel.excludedCsv,
+      );
+      return { one, many, ...counts, historyWarning };
     },
     onSuccess: (r) => {
       setDone(r);
       void qc.invalidateQueries({ queryKey: ["ai-call-customers"] });
+      void qc.invalidateQueries({ queryKey: ["upload-history"] });
     },
   });
 
@@ -234,24 +366,15 @@ export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRo
   if (check.error || !check.data) return <CheckFailed error={check.error} onBack={onBack} />;
 
   if (done) {
-    const invalid = checks.filter((c) => c.errors.length > 0).length;
-    const repeated = checks.filter((c) => c.errors.length === 0 && c.duplicate).length;
-    const filteredOut = rows.length - invalid - repeated - done.sent;
     const skippedOverLimit = Math.max(0, totalRows - rows.length);
-    const doneButton = (
-      <div className="mt-4 flex justify-end">
-        <button type="button" className="btn-primary" onClick={onClose}>
-          Done
-        </button>
-      </div>
-    );
     if (done.many) {
       return (
         <div>
           <p className="mb-2 text-sm text-slate-550">
             Each language list is imported on its own; a number already in a list is a duplicate there.
-            {invalid > 0 || repeated > 0 ? ` ${n(invalid)} invalid and ${n(repeated)} repeated rows in the file were skipped for every list.` : ""}
-            {filteredOut > 0 ? ` ${n(filteredOut)} rows were left out by the filters.` : ""}
+            {done.invalid > 0 || done.repeated > 0 ? ` ${n(done.invalid)} invalid and ${n(done.repeated)} repeated rows in the file were skipped for every list.` : ""}
+            {done.excluded > 0 ? ` ${n(done.excluded)} rows were excluded as already used.` : ""}
+            {done.filteredOut > 0 ? ` ${n(done.filteredOut)} rows were left out by the filters.` : ""}
           </p>
           <Table head={["Language", "Imported", "Duplicates", "Do not call", "Problem"]}>
             {done.many.map((r) => (
@@ -264,32 +387,34 @@ export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRo
               </tr>
             ))}
           </Table>
-          {doneButton}
+          <HistoryNote warning={done.historyWarning} />
+          <DoneButton onClose={onClose} />
         </div>
       );
     }
-    const one = done.one!;
     return (
       <div>
         <ImportCountsSummary
           counts={{
             totalRows,
             maxRows,
-            selectedRows: rows.length - filteredOut,
-            imported: one.imported,
-            failed: invalid + one.skipped,
-            duplicates: repeated + one.duplicates,
+            selectedRows: rows.length - done.filteredOut - done.excluded,
+            imported: done.imported,
+            failed: done.failed,
+            duplicates: done.duplicates,
             skippedOverLimit,
           }}
           extra={[
-            { label: "Do not call", value: one.doNotCall, tone: one.doNotCall ? "warn" : "neutral" },
-            { label: "Filtered out", value: filteredOut },
+            { label: "Do not call", value: done.doNotCall, tone: done.doNotCall ? "warn" : "neutral" },
+            { label: "Excluded (already used)", value: done.excluded },
+            { label: "Filtered out", value: done.filteredOut },
           ]}
         />
-        {one.doNotCall > 0 && (
+        {done.doNotCall > 0 && (
           <p className="mt-3 text-sm text-slate-550">Numbers already on the do-not-call list were saved as “Do not call” and will never be dialled.</p>
         )}
-        {doneButton}
+        <HistoryNote warning={done.historyWarning} />
+        <DoneButton onClose={onClose} />
       </div>
     );
   }
@@ -298,6 +423,8 @@ export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRo
     <ImportFilterStep
       page="voicecall"
       filename={filename}
+      headers={headers}
+      rawRows={rawRows}
       rows={draft}
       totalRows={totalRows}
       maxRows={maxRows}
@@ -305,7 +432,7 @@ export function VoicecallImportFilter({ filename, rows, checks, totalRows, maxRo
       importing={doImport.isPending}
       error={doImport.error}
       onBack={onBack}
-      onImport={(idx) => doImport.mutate(idx)}
+      onImport={(sel) => doImport.mutate(sel)}
     />
   );
 }

@@ -3,13 +3,13 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import jwt from "jsonwebtoken";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { fake } from "./fakePrisma.js";
+import { fake, history } from "./fakePrismaPlus.js";
 
 // /api/import-filter (ENABLE_IMPORT_FILTER_STEP). Flag off: only GET /config answers ({ enabled: false }),
 // everything else 404, and the existing importers work as before. Flag on: the checks read only — nothing
 // is saved before the page's own importer is called with the chosen rows. Prisma is an in-memory fake.
 
-vi.mock("../src/prisma.js", async () => ({ prisma: (await import("./fakePrisma.js")).fake.db }));
+vi.mock("../src/prisma.js", async () => ({ prisma: (await import("./fakePrismaPlus.js")).db }));
 const removed = vi.hoisted(() => [] as string[]);
 vi.mock("../src/http/importUpload.js", async (orig) => {
   const real = await orig<typeof import("../src/http/importUpload.js")>();
@@ -110,7 +110,9 @@ describe("flag on", () => {
       ["mobile", true, true],
     ]);
     expect(writes()).toEqual([]);
+    expect(history.rows).toEqual([]); // no upload history before the final confirm
     expect(fake.T("whatsAppContact")).toEqual([{ id: "w1", phone: "919876500104", firstName: "Old", status: "ACTIVE" }]);
+    expect(body.checks[3].used.inContacts).toEqual({ at: null }); // "already in contacts" (seeded without a date)
     expect(removed).toHaveLength(1);
     expect(existsSync(removed[0]!)).toBe(false);
   });
