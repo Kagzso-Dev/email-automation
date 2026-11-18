@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AI_CALL_LANGUAGE_NAMES, aiAgentLanguageSupported, type AiAgentView } from "@dispatch/shared";
+import { Plus } from "lucide-react";
 import { PageHeader } from "../components/Layout";
+import { PageHeader as ActionPageHeader } from "../components/PageHeader";
 import { AiAgentForm } from "../components/AiAgentForm";
 import { AiAgentKnowledge } from "../components/AiAgentKnowledge";
 import { AiAgentPublish } from "../components/AiAgentPublish";
@@ -9,7 +11,7 @@ import { AiAgentCall } from "../components/AiAgentCall";
 import { AiCallLanguageNotice } from "../components/AiCallLanguageNotice";
 import { useConfirm } from "../components/confirm";
 import { Badge, EmptyState, ErrorNote, Spinner, Tabs } from "../components/ui";
-import { SectionHardStopBar } from "../components/HardStopButton";
+import { SectionHardStopButton, SectionHardStopStatus } from "../components/HardStopButton";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { titleFor, useAiCallLanguage } from "../lib/aiCallLanguage";
 import { api } from "../lib/api";
@@ -60,16 +62,13 @@ export function AiAgentsPage() {
 
   return (
     <div>
-      <PageHeader
+      <ActionPageHeader
         title={title}
         subtitle={`AI business executives that call in ${AI_CALL_LANGUAGE_NAMES[language]}: objective, knowledge and instructions, then the AI leads the conversation within the fixed safety rules.`}
-        action={
-          <button type="button" className="btn-primary" onClick={() => setSelected("new")}>
-            New AI agent
-          </button>
-        }
+        dangerAction={<SectionHardStopButton section="CALLS" language={language} />}
+        primaryAction={{ label: "Create agent", icon: Plus, onClick: () => setSelected("new") }}
       />
-      <SectionHardStopBar section="CALLS" language={language} />
+      <SectionHardStopStatus section="CALLS" language={language} />
       <AiCallLanguageNotice />
       {!aiAgentLanguageSupported(language) && (
         <p className="mb-3 rounded-lg border border-warn-line bg-warn-soft px-3 py-2 text-sm">

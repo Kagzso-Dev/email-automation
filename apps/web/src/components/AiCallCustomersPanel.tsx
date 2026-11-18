@@ -35,7 +35,8 @@ import {
   type LanguageImportSummary,
 } from "../lib/aiCallCustomers";
 import { formatDateTime } from "../lib/schedule";
-import { PageHeader } from "./Layout";
+import { Copy, PhoneCall, Plus, Trash2, Upload } from "lucide-react";
+import { FILTER_ROW, HEADER_CONTROL, PageHeader } from "./PageHeader";
 import { AiCallModal } from "./AiCallModal";
 import { Icon } from "./icons";
 import { PhoneInput, phoneInputOk } from "./PhoneInput";
@@ -45,7 +46,7 @@ import { TrainingFromCallButton } from "./TrainingFromCall";
 import { ImportCountsSummary, OverLimitNote } from "./ImportSummary";
 import { CallInsightsLine, InterestBadge } from "./CallInsights";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
-import { SectionHardStopBar } from "./HardStopButton";
+import { SectionHardStopButton, SectionHardStopStatus } from "./HardStopButton";
 import { useImportFilterStep } from "../lib/importFilter";
 import { VoicecallImportFilter } from "./ImportFilterFlows";
 
@@ -133,55 +134,46 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
             ? "Customers for AI voice calls, their call stage and follow-ups. Separate from email and WhatsApp contacts."
             : "This language's own customer list: they are called only with its call flows, in its language. The same number can also be in other languages' lists; do-not-call applies to every list."
         }
-        action={
-          <div className="flex flex-wrap gap-2">
-            <button
-              className="btn-ghost"
-              disabled={!canCall}
-              title={
-                canCall
-                  ? "Call the ticked customers with the AI voice agent"
-                  : isEnglish(language)
-                    ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
-                    : `Set VOICE_BACKEND_URL_${language.toUpperCase()} (this language's voice backend) to enable calls`
-              }
-              onClick={() => setCallIds([...selected])}
-            >
-              <Icon name="phone" size={16} />
-              {selected.size > 0 ? `Call selected (${selected.size})` : "AI Call"}
-            </button>
-            {selected.size > 0 && (
-              <button
-                className="btn-ghost text-crit"
-                disabled={del.isPending}
-                onClick={() => confirmDelete([...selected], `${selected.size} customer${selected.size === 1 ? "" : "s"}`)}
-              >
-                <Icon name="trash" size={16} />
-                Delete ({selected.size})
-              </button>
-            )}
-            {selected.size > 0 && isAdmin && copyTargets.length > 0 && (
-              <button className="btn-ghost" onClick={() => setCopyIds([...selected])}>
-                Copy to other languages ({selected.size})
-              </button>
-            )}
-            <button className="btn-ghost" onClick={() => setImportOpen(true)}>
-              Import file
-            </button>
-            <button className="btn-primary" onClick={() => setEditing("new")}>
-              Add customer
-            </button>
-          </div>
-        }
+        dangerAction={<SectionHardStopButton section="CALLS" language={language} />}
+        secondaryActions={[
+          selected.size > 0 && {
+            label: `Delete (${selected.size})`,
+            icon: Trash2,
+            tone: "danger",
+            disabled: del.isPending,
+            onClick: () => confirmDelete([...selected], `${selected.size} customer${selected.size === 1 ? "" : "s"}`),
+          },
+          {
+            label: selected.size > 0 ? `Start voice call (${selected.size})` : "Start voice call",
+            icon: PhoneCall,
+            disabled: !canCall,
+            title: canCall
+              ? "Call the ticked customers with the AI voice agent"
+              : isEnglish(language)
+                ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
+                : `Set VOICE_BACKEND_URL_${language.toUpperCase()} (this language's voice backend) to enable calls`,
+            onClick: () => setCallIds([...selected]),
+          },
+          selected.size > 0 &&
+            isAdmin &&
+            copyTargets.length > 0 && {
+              label: `Copy to other languages (${selected.size})`,
+              icon: Copy,
+              onClick: () => setCopyIds([...selected]),
+            },
+          { label: "Import file", icon: Upload, onClick: () => setImportOpen(true) },
+        ]}
+        primaryAction={{ label: "Add contact", icon: Plus, onClick: () => setEditing("new") }}
       />
-      <SectionHardStopBar section="CALLS" language={language} />
+      <SectionHardStopStatus section="CALLS" language={language} />
 
       <AiCallLanguageNotice>You can already add and import this language's customers; calling them starts working once it is.</AiCallLanguageNotice>
       <RunningCallsNote />
 
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+      <div className={FILTER_ROW}>
         <input
-          className="input sm:max-w-xs"
+          className={`input ${HEADER_CONTROL} sm:max-w-xs`}
+          aria-label="Search customers"
           placeholder="Search name, business, phone, email"
           value={search}
           onChange={(e) => {
@@ -190,7 +182,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           }}
         />
         <select
-          className="input sm:max-w-[10rem]"
+          className={`input ${HEADER_CONTROL} sm:max-w-[10rem]`}
           aria-label="Gender filter"
           value={gender}
           onChange={(e) => {
@@ -203,7 +195,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           <option value="female">Female</option>
         </select>
         <select
-          className="input sm:max-w-[13rem]"
+          className={`input ${HEADER_CONTROL} sm:max-w-[13rem]`}
           aria-label="Call stage filter"
           value={stage}
           onChange={(e) => {

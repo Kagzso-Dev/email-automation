@@ -120,7 +120,7 @@ async function saveOldAgent(language: AiCallLanguage) {
 describe("AI Agents page", () => {
   it("new agent: defaults, then created in the section's language", async () => {
     page("ta");
-    fireEvent.click(await screen.findByRole("button", { name: "New AI agent" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
     expect(field("AI executive name").value).toBe("Thaara");
     expect(field("Calling on behalf of").value).toBe("Kagzso Technology Services");
     expect(field("Gender (for sir / madam)").value).toBe("male");
@@ -159,7 +159,7 @@ describe("AI Agents page", () => {
 
   it("the form has no Business card: no category, industry or business name, and no reference to the library", async () => {
     page("ta");
-    fireEvent.click(await screen.findByRole("button", { name: "New AI agent" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
     for (const gone of ["Business", "Category", "Industry", "Business / company name"]) expect(screen.queryByText(gone)).toBeNull();
     expect(screen.queryByText(/AI agent industries/)).toBeNull();
     expect(screen.queryByText(/Other – Enter manually/)).toBeNull();
@@ -182,7 +182,7 @@ describe.each(AI_CALL_LANGUAGES)("the %s section", (language) => {
 
   it("has no Business UI on a new agent, and creating one works", async () => {
     page(language);
-    fireEvent.click(await screen.findByRole("button", { name: "New AI agent" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create agent" }));
     noBusinessUi();
     fireEvent.change(field("Agent name"), { target: { value: "Agent" } });
     if (autonomous) {

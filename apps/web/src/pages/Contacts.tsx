@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { PageHeader } from "../components/Layout";
+import { MessageCircle, PhoneCall, Plus, Send, Trash2, Upload } from "lucide-react";
+import { FILTER_ROW, HEADER_CONTROL, PageHeader } from "../components/PageHeader";
 import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
-import { SectionHardStopBar } from "../components/HardStopButton";
+import { SectionHardStopButton, SectionHardStopStatus } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { SendWhatsApp } from "../components/SendWhatsApp";
 import { useWhatsAppConfig, WHATSAPP_NOT_CONFIGURED_HINT } from "../lib/whatsapp";
 import { AiCallModal } from "../components/AiCallModal";
-import { Icon } from "../components/icons";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { formatPhoneDisplay } from "@dispatch/shared";
 import { PhoneInput, phoneInputOk } from "../components/PhoneInput";
@@ -214,77 +214,67 @@ export function ContactsPage() {
     <div>
       <PageHeader
         title="Contacts"
-        action={
-          <div className="flex flex-wrap gap-2">
-            {bulkDeleteIds.length > 0 && (
-              <button
-                className="btn-danger"
-                disabled={bulkDel.isPending}
-                title="Delete the selected contacts"
-                onClick={() => void deleteSelected()}
-              >
-                Delete ({bulkDeleteIds.length})
-              </button>
-            )}
-            <button
-              className="btn-ghost"
-              title="Send a template to the selected active contacts"
-              onClick={openBulkSend}
-            >
-              Send email{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
-            </button>
-            {SHOW_WHATSAPP && (
-              <button
-                className="btn-whatsapp"
-                disabled={!waConfigured}
-                title={
-                  waConfigured
-                    ? "Send a WhatsApp template to the selected contacts that have a phone number"
-                    : WHATSAPP_NOT_CONFIGURED_HINT
-                }
-                onClick={openWaSend}
-              >
-                Send WhatsApp{waEligible.length > 0 ? ` (${waEligible.length})` : ""}
-              </button>
-            )}
-            {SHOW_AI_CALL && aiCallsConfig.data?.enabled && (
-              <button
-                className="btn-ghost"
-                disabled={!aiCallsConfig.data.configured || !aiCallsConfig.data.canStart}
-                title={
-                  !aiCallsConfig.data.canStart
-                    ? "Only admins can start AI calls"
-                    : !aiCallsConfig.data.configured
-                      ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
-                      : "Call customers from an Excel / CSV file with the AI voice agent"
-                }
-                onClick={() => setAiCallOpen(true)}
-              >
-                <Icon name="phone" size={16} />
-                AI Call
-              </button>
-            )}
-            <button className="btn-ghost" onClick={() => fileRef.current?.click()}>
-              Import file
-            </button>
-            <button className="btn-primary" onClick={() => setShowAdd(true)}>
-              Add contact
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".csv,.xlsx,.pdf"
-              hidden
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) importMut.mutate(f);
-                e.target.value = "";
-              }}
-            />
-          </div>
+        dangerAction={<SectionHardStopButton section="EMAIL" />}
+        secondaryActions={[
+          bulkDeleteIds.length > 0 && {
+            label: `Delete (${bulkDeleteIds.length})`,
+            icon: Trash2,
+            tone: "danger",
+            disabled: bulkDel.isPending,
+            title: "Delete the selected contacts",
+            onClick: () => void deleteSelected(),
+          },
+          {
+            label: `Send email${selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}`,
+            icon: Send,
+            title: "Send a template to the selected active contacts",
+            onClick: openBulkSend,
+          },
+          SHOW_WHATSAPP && {
+            label: `Send WhatsApp${waEligible.length > 0 ? ` (${waEligible.length})` : ""}`,
+            icon: MessageCircle,
+            disabled: !waConfigured,
+            title: waConfigured
+              ? "Send a WhatsApp template to the selected contacts that have a phone number"
+              : WHATSAPP_NOT_CONFIGURED_HINT,
+            onClick: openWaSend,
+          },
+          SHOW_AI_CALL &&
+            aiCallsConfig.data?.enabled && {
+              label: "AI Call",
+              icon: PhoneCall,
+              disabled: !aiCallsConfig.data.configured || !aiCallsConfig.data.canStart,
+              title: !aiCallsConfig.data.canStart
+                ? "Only admins can start AI calls"
+                : !aiCallsConfig.data.configured
+                  ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
+                  : "Call customers from an Excel / CSV file with the AI voice agent",
+              onClick: () => setAiCallOpen(true),
+            },
+          { label: "Import file", icon: Upload, onClick: () => fileRef.current?.click() },
+        ]}
+        primaryAction={{ label: "Add contact", icon: Plus, onClick: () => setShowAdd(true) }}
+        helper={
+          <>
+            Import a <b>.csv</b> or <b>.xlsx</b> file with an <code>email</code> column (plus optional{" "}
+            <code>first name</code>, <code>last name</code>, <code>phone</code>, <code>business name</code>), or a{" "}
+            <b>.pdf</b> to pull every email address out of its text. Rows whose domain is not on the approved sending list
+            (Settings) are skipped.
+          </>
         }
       />
-      <SectionHardStopBar section="EMAIL" />
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".csv,.xlsx,.pdf"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) importMut.mutate(f);
+          e.target.value = "";
+        }}
+      />
+      <SectionHardStopStatus section="EMAIL" />
 
       {importMut.isPending && <div className="mb-3 text-sm text-slate-550">Uploading file…</div>}
       {importJob && (
@@ -300,13 +290,6 @@ export function ContactsPage() {
           <ErrorNote error={del.error} />
         </div>
       )}
-      <p className="mb-4 text-xs text-slate-550">
-        Import a <b>.csv</b> or <b>.xlsx</b> file with an <code>email</code> column (plus optional{" "}
-        <code>first name</code>, <code>last name</code>, <code>phone</code>, <code>business name</code>),
-        or a <b>.pdf</b> to pull every email address out of its text. Rows whose domain is not on the
-        approved sending list (Settings) are skipped.
-      </p>
-
       {SHOW_WHATSAPP && waConfigured && selectedIds.size > 0 && waSkippedNoPhone > 0 && (
         <div className="mb-3 text-xs text-warn">
           {waSkippedNoPhone} contact{waSkippedNoPhone === 1 ? "" : "s"} skipped for WhatsApp — no
@@ -337,9 +320,10 @@ export function ContactsPage() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row">
+      <div className={FILTER_ROW}>
         <input
-          className="input sm:max-w-xs"
+          className={`input ${HEADER_CONTROL} sm:max-w-xs`}
+          aria-label="Search contacts"
           placeholder="Search email or name"
           value={search}
           onChange={(e) => {
@@ -348,7 +332,8 @@ export function ContactsPage() {
           }}
         />
         <select
-          className="input sm:max-w-[12rem]"
+          className={`input ${HEADER_CONTROL} sm:max-w-[12rem]`}
+          aria-label="Status filter"
           value={status}
           onChange={(e) => {
             setStatus(e.target.value);

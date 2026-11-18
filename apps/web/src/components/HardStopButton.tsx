@@ -2,8 +2,9 @@
 // with the summary) and the cancelled-rows CSV downloads. Only rendered while the flag is on (useHardStopEnabled).
 // Work already in progress (calls, messages, emails) always finishes: there is no hang-up or end-call option.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { OctagonX } from "lucide-react";
 import {
   AI_CALL_LANGUAGE_NAMES,
   DEFAULT_AI_CALL_LANGUAGE,
@@ -29,6 +30,7 @@ import {
 } from "../lib/hardStop";
 import { formatDateTime } from "../lib/schedule";
 import { useConfirm } from "./confirm";
+import { HEADER_BUTTON_DANGER } from "./PageHeader";
 import { ErrorNote } from "./ui";
 
 const CSV_LABEL: Record<HardStopCsvChannel, string> = { email: "emails", whatsapp: "WhatsApp", calls: "calls" };
@@ -41,6 +43,8 @@ export function HardStopButton({
   title,
   invalidate = [],
   className = "btn-danger",
+  icon,
+  wrapperClassName = "inline-flex flex-col items-end gap-1",
 }: {
   scope: HardStopScope;
   targetId: string | null;
@@ -50,6 +54,9 @@ export function HardStopButton({
   /** Queries to refresh once the stop is applied (the list the button sits in). */
   invalidate?: QueryKey[];
   className?: string;
+  /** Shown before the label (page headers). */
+  icon?: ReactNode;
+  wrapperClassName?: string;
 }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -77,8 +84,15 @@ export function HardStopButton({
   }
 
   return (
-    <span className="inline-flex flex-col items-end gap-1">
-      <button type="button" className={className} disabled={press.isPending || (!!stop && !wide)} onClick={() => void ask()}>
+    <span className={wrapperClassName}>
+      <button
+        type="button"
+        className={className}
+        aria-label={label}
+        disabled={press.isPending || (!!stop && !wide)}
+        onClick={() => void ask()}
+      >
+        {icon}
         {press.isPending ? "Stopping…" : label}
       </button>
       {press.error && <ErrorNote error={press.error} />}
@@ -151,6 +165,45 @@ export function SectionHardStopBar({ section, language = DEFAULT_AI_CALL_LANGUAG
   const enabled = useHardStopEnabled();
   if (!enabled) return null;
   return <SectionHardStop section={section} language={language} />;
+}
+
+/**
+ * A section's Hard stop as a page-header action (PageHeader dangerAction): the button only. Renders nothing while
+ * ENABLE_HARD_STOP is off (PageHeader then hides the slot and its divider). Pair it with SectionHardStopStatus.
+ */
+export function SectionHardStopButton({ section, language = DEFAULT_AI_CALL_LANGUAGE }: { section: HardStopSection; language?: AiCallLanguage }) {
+  const enabled = useHardStopEnabled();
+  if (!enabled) return null;
+  const { button, title } = SECTION_LABEL[section](language);
+  return (
+    <HardStopButton
+      scope={section}
+      targetId={section === "CALLS" ? language : null}
+      label={button}
+      title={title}
+      className={HEADER_BUTTON_DANGER}
+      wrapperClassName="flex flex-col gap-1 max-sm:w-full"
+      icon={<OctagonX size={16} aria-hidden="true" className="shrink-0" />}
+    />
+  );
+}
+
+/** That section's latest stop ("Stopping... / Stopped" and the CSV downloads), as a full-width block under the header. */
+export function SectionHardStopStatus({ section, language = DEFAULT_AI_CALL_LANGUAGE }: { section: HardStopSection; language?: AiCallLanguage }) {
+  const enabled = useHardStopEnabled();
+  if (!enabled) return null;
+  return <SectionHardStopLatest section={section} language={language} />;
+}
+
+function SectionHardStopLatest({ section, language }: { section: HardStopSection; language: AiCallLanguage }) {
+  const latest = useLatestSectionStop(section, section === "CALLS" ? language : null);
+  const stop = latest.data?.stop;
+  if (!stop) return null;
+  return (
+    <div className="mb-4">
+      <HardStopStatus stop={stop} />
+    </div>
+  );
 }
 
 function SectionHardStop({ section, language }: { section: HardStopSection; language: AiCallLanguage }) {
