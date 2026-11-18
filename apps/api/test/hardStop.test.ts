@@ -363,6 +363,17 @@ describe("email retries, campaign fan-out and Stop all", () => {
     expect(await getHardStopView(stopId)).toMatchObject({ status: "STOPPED", cancelled: 500 });
   });
 
+  it("a campaign whose fan-out finished (SENT) but whose emails were still queued is paused; one with nothing left to cancel stays SENT", async () => {
+    campaign("k1", "SENT");
+    campaign("k2", "SENT");
+    hs.seed("contact", { id: "c1", email: "c1@x.test" });
+    sendJob("k1", "c1");
+    sendJob("k2", "c1", { status: "ACTIVE" }); // its last email is being sent: nothing to cancel
+    const { stopId } = await pressHardStop("ALL", null, ADMIN);
+    expect(status("campaign")).toEqual({ k1: "PAUSED", k2: "SENT" });
+    expect((await getHardStopView(stopId))!.paused.campaigns).toEqual([{ id: "k1", name: "Campaign k1" }]);
+  });
+
   it("a single campaign's Hard stop touches no other campaign and no trigger", async () => {
     campaign("k1", "SENDING");
     campaign("k2", "SCHEDULED");

@@ -334,18 +334,20 @@ async function closeInterruptedLedger(stop: HardStop, keys: string[]): Promise<v
  * removed with a conditional delete (only while still PENDING: a worker that claimed one first keeps it, in
  * progress) and recorded. `coveredOnly`: only those dispatched before the stop was applied.
  */
-async function cancelEmailJobs(stop: HardStop, where: Prisma.JobWhereInput, opts: { coveredOnly?: boolean } = {}): Promise<void> {
+async function cancelEmailJobs(stop: HardStop, where: Prisma.JobWhereInput, opts: { coveredOnly?: boolean } = {}): Promise<number> {
   const jobs = await prisma.job.findMany({
     where: { ...where, queue: QUEUE.sendEmail, status: "PENDING" },
     select: { id: true, payload: true, attempts: true, createdAt: true },
   });
   const covered = opts.coveredOnly ? jobs.filter((j) => dispatchedAtOf(j) < stop.appliedAt) : jobs;
+  let cancelled = 0;
   for (const part of chunk(covered, 500)) {
     const ids = part.map((j) => j.id);
     await prisma.job.deleteMany({ where: { id: { in: ids }, status: "PENDING" } });
     const left = new Set((await prisma.job.findMany({ where: { id: { in: ids } }, select: { id: true } })).map((j) => j.id));
     const gone = part.filter((j) => !left.has(j.id));
     if (gone.length === 0) continue;
+    cancelled += gone.length;
     await closeInterruptedLedger(
       stop,
       gone.filter((j) => j.attempts > 0).map((j) => payloadOf(j.payload).idempotencyKey).filter((k): k is string => !!k),
@@ -353,17 +355,23 @@ async function cancelEmailJobs(stop: HardStop, where: Prisma.JobWhereInput, opts
     // A pending job that already ran once (and failed) is a retry; DeferJobError gives the attempt back.
     await record(stop.id, await emailJobRecords(gone, (j) => j.attempts > 0));
   }
+  return cancelled;
 }
 
 async function applyCampaign(stop: HardStop, campaignId: string, opts: { recordPaused: boolean }): Promise<void> {
   const c = await prisma.campaign.findUnique({ where: { id: campaignId }, select: { id: true, name: true, lastRunAt: true } });
   if (!c) return;
-  // Paused, the existing state its Schedule button resumes from. A campaign already SENT (its last emails still
-  // queued) keeps SENT: it will not run again anyway.
+  // Paused, the existing state its Schedule / Send now buttons resume from. First, so a fan-out stops at its next chunk.
   const paused = await prisma.campaign.updateMany({ where: { id: campaignId, status: { in: ["SCHEDULED", "SENDING"] } }, data: { status: "PAUSED" } });
   // Fan-out not dispatched yet (as Pause clears it).
   await prisma.job.deleteMany({ where: { queue: QUEUE.campaignDispatch, status: "PENDING", dedupeKey: { startsWith: `disp:${campaignId}:` } } });
-  await cancelEmailJobs(stop, { dedupeKey: { startsWith: `campaign_${campaignId}_` } });
+  const cancelled = await cancelEmailJobs(stop, { dedupeKey: { startsWith: `campaign_${campaignId}_` } });
+  // A campaign whose fan-out had finished (SENT) but whose emails were still queued did not really go out: it is
+  // paused too, so its page doesn't say SENT. One with nothing cancelled stays SENT.
+  const pausedSent =
+    paused.count === 0 && cancelled > 0
+      ? await prisma.campaign.updateMany({ where: { id: campaignId, status: "SENT" }, data: { status: "PAUSED" } })
+      : { count: 0 };
   // In progress: emails being sent now, and a fan-out part way (it stops at its next 500 contacts).
   const active = await prisma.job.findMany({
     where: {
@@ -377,7 +385,7 @@ async function applyCampaign(stop: HardStop, campaignId: string, opts: { recordP
   });
   await record(stop.id, [
     { channel: "email", kind: "job", refTable: "Campaign", refId: campaignId, name: c.name, extra: { since: c.lastRunAt?.toISOString() ?? null } },
-    ...(opts.recordPaused && paused.count === 1
+    ...(opts.recordPaused && paused.count + pausedSent.count === 1
       ? [{ channel: "email", kind: "paused_campaign", refTable: "Campaign", refId: campaignId, name: c.name } satisfies Rec]
       : []),
     ...active.map((j): Rec => ({ channel: "email", kind: "in_progress", refTable: "Job", refId: j.id, extra: { queue: j.queue, dedupeKey: j.dedupeKey } })),
@@ -750,8 +758,8 @@ export async function settleStuckInProgress(stopId: string): Promise<number> {
  * were in progress.
  */
 export async function sweepCoveredEmailJobs(stop: HardStop): Promise<void> {
-  if (stop.scope === "ALL") return cancelEmailJobs(stop, {}, { coveredOnly: true });
-  if (stop.scope === "CAMPAIGN") return cancelEmailJobs(stop, { dedupeKey: { startsWith: `campaign_${stop.targetId}_` } }, { coveredOnly: true });
+  if (stop.scope === "ALL") await cancelEmailJobs(stop, {}, { coveredOnly: true });
+  if (stop.scope === "CAMPAIGN") await cancelEmailJobs(stop, { dedupeKey: { startsWith: `campaign_${stop.targetId}_` } }, { coveredOnly: true });
 }
 
 /** The stopped batches a lead-gen purge may apply to. */

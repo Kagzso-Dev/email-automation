@@ -108,9 +108,10 @@ describe("flag on", () => {
     emailBatch();
     expect(await (await get("/api/hard-stop/latest?scope=EMAIL_BATCH&targetId=b1")).json()).toEqual({ stop: null });
     const all = (await (await post("/api/hard-stop/all", "ADMIN")).json()) as HardStopResult;
-    const latest = await (await get("/api/hard-stop/latest?scope=EMAIL_BATCH&targetId=b1")).json();
+    const latest = (await (await get("/api/hard-stop/latest?scope=EMAIL_BATCH&targetId=b1")).json()) as { stop: { id: string } };
     expect(latest.stop.id).toBe(all.stop.id);
-    expect((await (await get("/api/hard-stop/latest-all", "ADMIN")).json()).stop.id).toBe(all.stop.id);
+    const latestAll = (await (await get("/api/hard-stop/latest-all", "ADMIN")).json()) as { stop: { id: string } };
+    expect(latestAll.stop.id).toBe(all.stop.id);
   });
 
   it("CSV: the cancelled rows of one channel, BOM + the email import's columns; an unknown channel is a 400", async () => {
