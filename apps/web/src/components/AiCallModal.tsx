@@ -26,6 +26,8 @@ import { AI_CALL_LANGUAGE_NAMES } from "@dispatch/shared";
 import { useToast } from "./toast";
 import { TrainingFromCallButton } from "./TrainingFromCall";
 import { Badge, ErrorNote, Modal, Spinner, type BadgeTone } from "./ui";
+import { useHardStopEnabled } from "../lib/hardStop";
+import { HardStopButton, HardStopTargetStatus } from "./HardStopButton";
 
 /**
  * "AI Call" on the Contacts page: upload a sheet of customers, map its columns,
@@ -733,6 +735,8 @@ export function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRu
   });
   const running = run.data?.status === "RUNNING";
   const now = useNow(running);
+  // ENABLE_HARD_STOP: "Hard stop" instead of "Cancel remaining calls". A call in progress always runs to its end.
+  const hardStop = useHardStopEnabled();
 
   if (run.isLoading) return <Spinner />;
   if (run.error) return <ErrorNote error={run.error} />;
@@ -773,8 +777,15 @@ export function RunStatus({ runId, onNewRun, onClose }: { runId: string; onNewRu
       </div>
 
       {cancel.error && <ErrorNote error={cancel.error} />}
+      {hardStop && r.status === "CANCELLED" && (
+        <div className="mb-3">
+          <HardStopTargetStatus scope="AI_CALL_RUN" targetId={runId} />
+        </div>
+      )}
       <div className="flex flex-wrap justify-end gap-2">
-        {running ? (
+        {running && hardStop ? (
+          <HardStopButton scope="AI_CALL_RUN" targetId={runId} invalidate={[["ai-call-run", runId], ["ai-call-runs"]]} />
+        ) : running ? (
           <button className="btn-danger" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
             {cancel.isPending ? "Cancelling…" : "Cancel remaining calls"}
           </button>

@@ -31,6 +31,8 @@ import { pinnedFlowForRun } from "../domain/callFlows.js";
 import { businessForCall, markCustomerCalling, syncCustomerFromLog } from "../domain/aiCallCustomerSync.js";
 import { knownQuestionsForFlow } from "../domain/aiAgentQuestions.js";
 import { getVoiceCall, placeVoiceCall, VoiceBackendError } from "../services/voiceBackend.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
+import { claimAiCallLog } from "../domain/hardStop.js";
 import { DeferJobError } from "./engine.js";
 import type { AiCallRunJob } from "./queues.js";
 
@@ -45,7 +47,12 @@ export function greetingDelayOf(skipped: unknown): number | null {
 }
 
 async function finish(runId: string): Promise<Record<string, number>> {
-  await prisma.aiCallRun.update({ where: { id: runId }, data: { status: "DONE", nextCallAt: null } });
+  if (isHardStopEnabled()) {
+    // Only a run still RUNNING becomes DONE: one a hard stop cancelled meanwhile stays CANCELLED.
+    await prisma.aiCallRun.updateMany({ where: { id: runId, status: "RUNNING" }, data: { status: "DONE", nextCallAt: null } });
+  } else {
+    await prisma.aiCallRun.update({ where: { id: runId }, data: { status: "DONE", nextCallAt: null } });
+  }
   const rows = await prisma.aiCallLog.groupBy({ by: ["status"], where: { runId }, _count: { _all: true } });
   const counts: Record<string, number> = {};
   for (const r of rows) counts[r.status] = r._count._all;
@@ -156,10 +163,13 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   // Re-check opt-outs at dial time: someone may have unsubscribed since the run started.
   const doNotCall = await loadDoNotCallPhones(aiCallsConfig.defaultCountryCode);
   if (doNotCall.has(next.phone)) {
-    await prisma.aiCallLog.update({
-      where: { id: next.id },
-      data: { status: "FAILED", error: "Skipped — number is on the do-not-call list" },
-    });
+    const skip = { status: "FAILED" as const, error: "Skipped — number is on the do-not-call list" };
+    if (isHardStopEnabled()) {
+      // Only while still QUEUED, so a skip can never overwrite a call a hard stop cancelled.
+      await prisma.aiCallLog.updateMany({ where: { id: next.id, status: "QUEUED" }, data: skip });
+    } else {
+      await prisma.aiCallLog.update({ where: { id: next.id }, data: skip });
+    }
     logger.info({ runId, logId: next.id, phone: maskPhone(next.phone) }, "ai call skipped (do-not-call)");
     await syncCustomerFromLog(next.id);
     throw deferFor(1000);
@@ -169,13 +179,23 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   // for a run queued before the pause. Checked at dial time, like do-not-call.
   const paused = flow ? autonomousCallBlockedReason(flow.language, flow.definition) : null;
   if (paused) {
-    await prisma.aiCallLog.update({ where: { id: next.id }, data: { status: "FAILED", error: `Skipped — ${paused}` } });
+    if (isHardStopEnabled()) {
+      await prisma.aiCallLog.updateMany({ where: { id: next.id, status: "QUEUED" }, data: { status: "FAILED", error: `Skipped — ${paused}` } });
+    } else {
+      await prisma.aiCallLog.update({ where: { id: next.id }, data: { status: "FAILED", error: `Skipped — ${paused}` } });
+    }
     logger.info({ runId, logId: next.id, phone: maskPhone(next.phone), language }, "ai call skipped (autonomous calls paused)");
     await syncCustomerFromLog(next.id);
     throw deferFor(1000);
   }
 
-  await prisma.aiCallLog.update({ where: { id: next.id }, data: { status: "DIALING", startedAt: new Date() } });
+  if (isHardStopEnabled()) {
+    // Hard stop check point: dial only if the run is still running and this call still QUEUED. A stop that got there
+    // first wins (nothing is dialled); the next run of this job re-reads the run and stops.
+    if (!(await claimAiCallLog(runId, next.id))) throw deferFor(1000);
+  } else {
+    await prisma.aiCallLog.update({ where: { id: next.id }, data: { status: "DIALING", startedAt: new Date() } });
+  }
   await prisma.aiCallRun.update({ where: { id: runId }, data: { nextCallAt: null } });
   await markCustomerCalling(next.id);
   try {

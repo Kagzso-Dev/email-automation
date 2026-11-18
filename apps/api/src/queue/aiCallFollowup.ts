@@ -16,10 +16,14 @@ import { aiCallLanguageBlockedReason, asAiCallLanguage, languageName, runInProgr
 import { flowVersionForCallAgain } from "../domain/callFlows.js";
 import { addCustomerEvent } from "../domain/aiCallFollowups.js";
 import { linkCustomersToRun } from "../domain/aiCallCustomerSync.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
 import { DeferJobError } from "./engine.js";
 import { enqueueAiCallRun, type AiCallFollowupJob } from "./queues.js";
 
 const later = (ms: number) => new DeferJobError(new Date(Date.now() + ms));
+
+/** Hard stop: the follow-up was no longer APPROVED-without-a-run when its run was about to be linked. */
+class FollowupTakenError extends Error {}
 
 async function fail(id: string, customerId: string, status: "FAILED" | "CANCELLED", why: string) {
   await prisma.aiCallFollowup.update({ where: { id }, data: { status, error: why } });
@@ -54,6 +58,8 @@ export async function processAiCallFollowup(payload: Record<string, unknown>): P
   if (await runInProgressReason(language)) throw later(60_000);
   if ((await callsCountedTowardDailyCap()) + 1 > aiCallsConfig.dailyCap) throw later(60 * 60_000);
 
+  if (isHardStopEnabled()) return startClaimedCallAgainRun(f, flowVersionId, language);
+
   const run = await prisma.aiCallRun.create({
     data: {
       mode: "SELECTED",
@@ -70,6 +76,52 @@ export async function processAiCallFollowup(payload: Record<string, unknown>): P
     include: { logs: { select: { id: true } } },
   });
   await prisma.aiCallFollowup.update({ where: { id: f.id }, data: { aiCallRunId: run.id } });
+  await linkCustomersToRun(run.id, [{ logId: run.logs[0]!.id, customerId: c.id }], f.decidedByEmail);
+  await enqueueAiCallRun({ runId: run.id });
+  await addCustomerEvent({ customerId: c.id, type: "followup_handed_over", detail: `Call again started (attempt ${f.attempt})`, refId: f.id });
+  logger.info({ followupId: f.id, runId: run.id, language, phone: maskPhone(c.phone) }, "ai call follow-up → call run started");
+  return { runId: run.id };
+}
+
+type FollowupWithCustomer = NonNullable<Awaited<ReturnType<typeof loadFollowup>>>;
+const loadFollowup = (id: string) => prisma.aiCallFollowup.findUnique({ where: { id }, include: { customer: true } });
+
+/**
+ * Hard stop (ENABLE_HARD_STOP) version of the hand-over above, same steps. The check point: the call run is created
+ * and linked in one transaction, and only while the follow-up is still APPROVED with no run. A stop that cancelled it
+ * first wins: the transaction rolls back and nothing is dialled.
+ */
+async function startClaimedCallAgainRun(f: FollowupWithCustomer, flowVersionId: string | null, language: string): Promise<unknown> {
+  const c = f.customer;
+  const run = await prisma
+    .$transaction(async (tx) => {
+      const r = await tx.aiCallRun.create({
+        data: {
+          mode: "SELECTED",
+          gapSeconds: aiCallsConfig.minGapSec,
+          maxCalls: 1,
+          total: 1,
+          createdByEmail: f.decidedByEmail,
+          skipped: { invalid: 0, duplicates: 0, doNotCall: 0, capped: 0 },
+          ...(flowVersionId ? { flow: { create: { flowVersionId } } } : {}),
+          logs: {
+            create: [{ position: 0, customerName: c.customerName, gender: c.gender, followUpDetail: c.followUpDetail, phone: c.phone }],
+          },
+        },
+        include: { logs: { select: { id: true } } },
+      });
+      const { count } = await tx.aiCallFollowup.updateMany({ where: { id: f.id, status: "APPROVED", aiCallRunId: null }, data: { aiCallRunId: r.id } });
+      if (count !== 1) throw new FollowupTakenError();
+      return r;
+    })
+    .catch((err) => {
+      if (err instanceof FollowupTakenError) return null;
+      throw err;
+    });
+  if (!run) {
+    logger.info({ followupId: f.id }, "ai call follow-up not started — a hard stop cancelled it first");
+    return { skipped: "cancelled before its call started" };
+  }
   await linkCustomersToRun(run.id, [{ logId: run.logs[0]!.id, customerId: c.id }], f.decidedByEmail);
   await enqueueAiCallRun({ runId: run.id });
   await addCustomerEvent({ customerId: c.id, type: "followup_handed_over", detail: `Call again started (attempt ${f.attempt})`, refId: f.id });

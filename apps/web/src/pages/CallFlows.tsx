@@ -21,6 +21,8 @@ import {
   type TestCallNumberList,
 } from "@dispatch/shared";
 import { api } from "../lib/api";
+import { useHardStopEnabled } from "../lib/hardStop";
+import { HARD_STOP_CONFIRM_TEXT } from "@dispatch/shared";
 import { useAiCallsConfig, type AiCallRun } from "../lib/aiCalls";
 import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
 import { AiCallLanguageNotice } from "../components/AiCallLanguageNotice";
@@ -1602,26 +1604,40 @@ function TestCallModal({
   // "Another AI call run is still in progress": offer to stop that run (same cancel as the AI Call modal).
   const blockedByRun = start.error instanceof Error && /still in progress/i.test(start.error.message);
   const language = useAiCallLanguage(); // only this language's run blocks its test calls
+  // ENABLE_HARD_STOP: the same button is "Hard stop" (a call in progress always finishes; there is no end-call option).
+  const hardStop = useHardStopEnabled();
   const stopRunning = useMutation({
     mutationFn: async () => {
       const { items } = await api<{ items: Pick<AiCallRun, "id" | "status">[] }>(withLanguage("/api/ai-calls/runs", language));
       const running = items.filter((r) => r.status === "RUNNING");
-      for (const r of running) await api(`/api/ai-calls/runs/${r.id}/cancel`, { method: "POST", notify: false });
+      for (const r of running) {
+        await api(hardStop ? `/api/hard-stop/ai-call-runs/${r.id}` : `/api/ai-calls/runs/${r.id}/cancel`, { method: "POST", notify: false });
+      }
       return running.length;
     },
     onSuccess: (n) => {
       start.reset();
+      if (hardStop) {
+        toast.success(n ? "Hard stop applied" : "No AI call run is dialling now", [
+          "A call already in progress finishes on its own; place the test call once it has ended.",
+        ]);
+        return;
+      }
       toast.success(n ? "Running AI call run stopped" : "No AI call run is running now", ["You can place the test call now."]);
     },
   });
   const askStopRunning = async () => {
     if (
-      await confirm({
-        title: "Stop the AI call run in progress?",
-        body: "Calls still waiting in that run are cancelled. A call already ringing finishes on its own.",
-        confirmText: "Stop run",
-        tone: "danger",
-      })
+      await confirm(
+        hardStop
+          ? { title: "Hard stop the AI call run in progress?", body: HARD_STOP_CONFIRM_TEXT, confirmText: "Hard stop", tone: "danger" }
+          : {
+              title: "Stop the AI call run in progress?",
+              body: "Calls still waiting in that run are cancelled. A call already ringing finishes on its own.",
+              confirmText: "Stop run",
+              tone: "danger",
+            },
+      )
     )
       stopRunning.mutate();
   };
@@ -1721,7 +1737,7 @@ function TestCallModal({
               {blockedByRun && (
                 <div className="mt-2 flex justify-end">
                   <button className="btn-danger" disabled={stopRunning.isPending} onClick={() => void askStopRunning()}>
-                    {stopRunning.isPending ? "Stopping…" : "Stop running call"}
+                    {stopRunning.isPending ? "Stopping…" : hardStop ? "Hard stop" : "Stop running call"}
                   </button>
                 </div>
               )}

@@ -17,3 +17,5 @@ export * from "./whatsappReplies.js";
 export * from "./aiProviders.js";
 export * from "./aiAgents.js";
 export * from "./callInsights.js";
+export * from "./templateImages.js";
+export * from "./hardStop.js";

@@ -25,7 +25,7 @@ function safeHref(url: string): string | null {
 }
 
 /** Vet a URL for use in an <img src>. Only http(s) — no data:/cid: from user input. */
-function safeImgSrc(url: string): string | null {
+export function safeImgSrc(url: string): string | null {
   if (!/^https?:\/\//i.test(url.trim())) return null;
   return url.trim().replace(/["'<>\s`]/g, encodeURIComponent);
 }

@@ -494,6 +494,8 @@ interface ContactImportResult {
   failed: number;
   /** Only set when Settings → "Email all domains except blocked ones" was on for this import. */
   domainMode?: "BLOCKLIST";
+  /** Only set when a Stop all (ENABLE_HARD_STOP) ended this import: the rows after the batch being written. */
+  hardStop?: { reason: string; notImported: number };
 }
 
 interface ContactImportJobView {
@@ -551,6 +553,9 @@ export function ContactImportStatus({ jobId, filename, onDismiss }: { jobId: str
         : `${n(r.rejectedDomain)} with an email domain not on the approved list (Settings)`
       : null,
     r.duplicates ? `${n(r.duplicates)} repeating an email from an earlier row (applied to that contact)` : null,
+    r.hardStop
+      ? `Stopped: ${n(r.hardStop.notImported)} not imported (${r.hardStop.reason}; download them from Send Queue → Stop all running sends)`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");

@@ -44,6 +44,9 @@ import { sendQueueHistoryRouter } from "./routes/sendQueueHistory.js";
 import { dataQualityRouter } from "./routes/dataQuality.js";
 import { importFilterRouter } from "./routes/importFilter.js";
 import { uploadHistoryRouter } from "./routes/uploadHistory.js";
+import { imageSizeControlsRouter } from "./routes/imageSizeControls.js";
+import { templateDraftsRouter } from "./routes/templateDrafts.js";
+import { hardStopRouter } from "./routes/hardStop.js";
 
 export function createApp() {
   const app = express();
@@ -118,6 +121,9 @@ export function createApp() {
   app.use("/api/data-quality", dataQualityRouter); // admin only; staging tables + local Ollama only
   app.use("/api/import-filter", importFilterRouter); // read-only checks before an import; 404 unless ENABLE_IMPORT_FILTER_STEP
   app.use("/api/upload-history", uploadHistoryRouter); // upload_history table only (migration 0037); 404 unless ENABLE_IMPORT_FILTER_STEP
+  app.use("/api/image-size-controls", imageSizeControlsRouter); // GET /config only: { enabled } for ENABLE_IMAGE_SIZE_CONTROLS
+  app.use("/api/template-drafts", templateDraftsRouter); // template_drafts table only (migration 0039); 404 unless ENABLE_TEMPLATE_DRAFTS
+  app.use("/api/hard-stop", hardStopRouter); // Hard stop (migration 0038): GET /config always; the rest 404 unless ENABLE_HARD_STOP
   app.use("/api", callCostByFlowRouter);
   app.use("/api", statsRouter);
 

@@ -19,6 +19,7 @@ const RANK: Record<WhatsAppSendStatus, number> = {
   READ: 4,
   FAILED: 5,
   SKIPPED: 0,
+  CANCELLED: 0, // Hard stop: never sent, so it has no Meta message id and no webhook ever matches it
 };
 
 export type WhatsAppStatusValue = "sent" | "delivered" | "read" | "failed";

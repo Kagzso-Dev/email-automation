@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { toContactPhone, toWhatsAppDigits } from "./phone.js";
+import { templateImageEntry } from "./templateImages.js";
 
 /* ------------------------------------------------------------------ shared enums */
 
@@ -194,8 +195,10 @@ const templateFields = z.object({
   videoUrl: z.string().max(2000).nullish(),
   // Images embedded in the email body — hosted image URLs. Each is placed at its
   // own placeholder ({{image}}, {{image_2}}, {{image_3}} …) if the message has
-  // one, otherwise stacked at the top of the body in order.
-  images: z.array(z.string().max(2000)).max(10).nullish(),
+  // one, otherwise stacked at the top of the body in order. An entry is a plain URL
+  // (as before) or { url, size?, alt?, naturalWidth?, name? } — the image size
+  // controls (templateImages.ts, ENABLE_IMAGE_SIZE_CONTROLS).
+  images: z.array(templateImageEntry).max(10).nullish(),
   // "▶ Watch video" buttons (email clients can't embed players). Placeholders
   // {{video_link}}, {{video_link_2}} … mirror the images; unplaced buttons follow
   // the message body.

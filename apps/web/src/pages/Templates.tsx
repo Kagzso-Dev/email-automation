@@ -6,6 +6,19 @@ import { PageHeader } from "../components/Layout";
 import { EmptyState, ErrorNote, Spinner } from "../components/ui";
 import { useConfirm } from "../components/confirm";
 import { Icon } from "../components/icons";
+import { ImageSizeToolbar } from "../components/ImageSizeToolbar";
+import {
+  readNaturalWidth,
+  serializeImages,
+  toImageEntries,
+  usableWidth,
+  useImageSizeControls,
+  withUrl,
+  type ImageEntry,
+} from "../lib/imageSizeControls";
+import { Tabs } from "../components/ui";
+import { DraftSavedNote, TemplateDraftsList, draftsTabLabel, useDraftOpener } from "../components/TemplateDrafts";
+import { useDraftAutosave, useDraftList, useTemplateDraftsEnabled, type Draft } from "../lib/templateDrafts";
 
 type TemplateKind = "LETTER" | "MEETING";
 
@@ -43,7 +56,8 @@ interface Template {
   /** Legacy single fields — migrated into `images` / `videos` on first edit. */
   imageUrl?: string | null;
   videoUrl?: string | null;
-  images?: string[] | null;
+  /** Plain URLs, or { url, size, alt, … } once a size / alt text is set (image size controls). */
+  images?: Array<string | ImageEntry> | null;
   videos?: TemplateVideo[] | null;
   variables: string[];
   _count?: { campaigns: number; triggers: number };
@@ -85,10 +99,25 @@ export function TemplatesPage() {
   });
   const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
   const isAdmin = useAuth().user?.role === "ADMIN"; // editors: view only
+  // Template drafts (ENABLE_TEMPLATE_DRAFTS, admins). Off: no Drafts tab, and New template opens as before.
+  const draftsOn = useTemplateDraftsEnabled() && isAdmin;
+  const draftList = useDraftList("email", draftsOn);
+  const draftOpener = useDraftOpener<Partial<Template>>("email");
+  const [tab, setTab] = useState<"templates" | "drafts">("templates");
+  const [draft, setDraft] = useState<Draft<Partial<Template>> | null>(null);
+  const openNew = (d: Draft<Partial<Template>> | null) => {
+    setDraft(d);
+    setTab("templates");
+    setSelectedId("new");
+  };
+  const startNew = async () => {
+    if (!draftsOn || selectedId === "new") return setSelectedId("new"); // an open new form stays, as before
+    openNew(await draftOpener.startNew());
+  };
 
   const selected =
     selectedId === "new"
-      ? { ...BLANK }
+      ? draft?.state ?? { ...BLANK }
       : data?.items.find((t) => t.id === selectedId) ?? null;
 
   return (
@@ -97,13 +126,25 @@ export function TemplatesPage() {
         title="Templates"
         action={
           isAdmin ? (
-            <button className="btn-primary" onClick={() => setSelectedId("new")}>
+            <button className="btn-primary" onClick={() => void startNew()}>
               New template
             </button>
           ) : undefined
         }
       />
-      <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
+      {draftsOn && (
+        <Tabs
+          tabs={[
+            { value: "templates", label: "Templates" },
+            { value: "drafts", label: draftsTabLabel(draftList.data?.items.length) },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+      )}
+      {draftsOn && tab === "drafts" && <TemplateDraftsList<Partial<Template>> channel="email" onOpen={openNew} />}
+      {/* Hidden, not removed, on the Drafts tab: an open editor keeps its state. */}
+      <div className={`grid gap-6 lg:grid-cols-[260px_1fr]${draftsOn && tab === "drafts" ? " hidden" : ""}`}>
         <div>
           {isLoading ? (
             <Spinner />
@@ -139,9 +180,10 @@ export function TemplatesPage() {
 
         {selected ? (
           <TemplateEditor
-            key={selectedId}
+            key={selectedId === "new" && draft ? `draft-${draft.id}` : selectedId}
             initial={selected}
             isNew={selectedId === "new"}
+            draftId={selectedId === "new" ? draft?.id : undefined}
             readOnly={!isAdmin}
             onClose={() => setSelectedId(null)}
             onSaved={(id) => {
@@ -168,6 +210,7 @@ function TemplateEditor({
   onClose,
   onSaved,
   onDeleted,
+  draftId,
 }: {
   initial: Partial<Template>;
   isNew: boolean;
@@ -176,6 +219,8 @@ function TemplateEditor({
   onClose: () => void;
   onSaved: (id: string) => void;
   onDeleted: () => void;
+  /** Template drafts (ENABLE_TEMPLATE_DRAFTS): the draft `initial` was resumed from. */
+  draftId?: string;
 }) {
   const [form, setForm] = useState({
     name: initial.name ?? "",
@@ -187,7 +232,7 @@ function TemplateEditor({
     links: (initial.links ?? []) as TemplateLink[],
     meeting: (initial.meeting ?? {}) as TemplateMeeting,
     // Legacy single image / video migrate into the lists on first edit.
-    images: (initial.images ?? (initial.imageUrl ? [initial.imageUrl] : [])) as string[],
+    images: toImageEntries(initial.images ?? (initial.imageUrl ? [initial.imageUrl] : [])),
     videos: (initial.videos ??
       (initial.videoUrl ? [{ url: initial.videoUrl }] : [])) as TemplateVideo[],
     variables: [...(initial.variables ?? [])] as string[],
@@ -196,16 +241,37 @@ function TemplateEditor({
   const [testTo, setTestTo] = useState("");
   const [imageErrors, setImageErrors] = useState<Record<number, string>>({});
   const confirm = useConfirm();
+  const sizeControls = useImageSizeControls(); // ENABLE_IMAGE_SIZE_CONTROLS; off = Images exactly as before
 
   // De-duplicated, trimmed, non-empty — what actually gets saved / offered as chips.
   const variables = [...new Set(form.variables.map((s) => s.trim()).filter(Boolean))];
   const sampleVars = Object.fromEntries(variables.map((v) => [v, `«${v}»`]));
 
+  // Template drafts (ENABLE_TEMPLATE_DRAFTS): a new template only. Off: nothing is saved, the editor is as before.
+  const draftsOn = useTemplateDraftsEnabled();
+  const autosave = useDraftAutosave({ enabled: draftsOn && isNew && !readOnly, channel: "email", draftId, state: form, name: form.name });
+
   const updateMeeting = (patch: Partial<TemplateMeeting>) =>
     setForm((f) => ({ ...f, meeting: { ...f.meeting, ...patch } }));
 
   const setImageAt = (i: number, url: string) =>
-    setForm((f) => ({ ...f, images: f.images.map((x, j) => (j === i ? url : x)) }));
+    setForm((f) => ({ ...f, images: f.images.map((x, j) => (j === i ? withUrl(x, url) : x)) }));
+  const updateImageAt = (i: number, patch: Partial<ImageEntry>) =>
+    setForm((f) => ({ ...f, images: f.images.map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
+  const removeImageAt = (i: number) => {
+    clearImageError(i);
+    setForm((f) => ({ ...f, images: f.images.filter((_, j) => j !== i) }));
+  };
+  // Flag on: the row's thumbnail reports the image's own width (pasted URLs and uploads alike).
+  const noteNaturalWidth = (i: number, el: HTMLImageElement) => {
+    const w = usableWidth(el.naturalWidth);
+    const src = el.getAttribute("src");
+    if (!w) return;
+    setForm((f) => ({
+      ...f,
+      images: f.images.map((x, j) => (j === i && x.url === src && x.naturalWidth !== w ? { ...x, naturalWidth: w } : x)),
+    }));
+  };
   const setVideoAt = (i: number, patch: Partial<TemplateVideo>) =>
     setForm((f) => ({ ...f, videos: f.videos.map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
   const clearImageError = (i: number) =>
@@ -228,15 +294,23 @@ function TemplateEditor({
       }
       const fd = new FormData();
       fd.append("file", file);
-      return api<{ url: string }>("/api/templates/uploads/image", {
-        method: "POST",
-        body: fd,
-        notify: false,
-      });
+      const [res, naturalWidth] = await Promise.all([
+        api<{ url: string }>("/api/templates/uploads/image", {
+          method: "POST",
+          body: fd,
+          notify: false,
+        }),
+        // Flag on: read the image's own width from the file itself (for "Original size").
+        sizeControls ? readNaturalWidth(file) : Promise.resolve(null),
+      ]);
+      return { ...res, naturalWidth };
     },
-    onSuccess: (res, { index }) => {
+    onSuccess: (res, { index, file }) => {
       clearImageError(index);
       setImageAt(index, res.url);
+      if (sizeControls) {
+        updateImageAt(index, { name: file.name.slice(0, 255), ...(res.naturalWidth ? { naturalWidth: res.naturalWidth } : {}) });
+      }
     },
     onError: (err, { index }) =>
       setImageErrors((e) => ({
@@ -253,7 +327,7 @@ function TemplateEditor({
       const meeting = Object.fromEntries(
         Object.entries(form.meeting).filter(([, v]) => v && String(v).trim()),
       );
-      const images = form.images.map((u) => u.trim()).filter(Boolean);
+      const images = serializeImages(form.images); // untouched images stay plain URLs
       const videos = form.videos
         .map((v) => ({ url: v.url.trim(), label: v.label?.trim() || undefined }))
         .filter((v) => v.url);
@@ -272,7 +346,10 @@ function TemplateEditor({
       if (isNew) return api<Template>("/api/templates", { method: "POST", json: body });
       return api<Template>(`/api/templates/${initial.id}`, { method: "PUT", json: body });
     },
-    onSuccess: (t) => onSaved(t.id),
+    onSuccess: (t) => {
+      void autosave.finish(); // the real template exists now: delete its draft (no-op with drafts off)
+      onSaved(t.id);
+    },
   });
 
   const del = useMutation({
@@ -305,6 +382,7 @@ function TemplateEditor({
       <div className="card">
         <div className="mb-3 flex items-center justify-between gap-4">
           <div className="text-sm font-semibold">{isNew ? "New template" : readOnly ? "View template" : "Edit template"}</div>
+          <DraftSavedNote status={autosave.status} className="ml-auto" />
           <button
             type="button"
             onClick={onClose}
@@ -391,8 +469,8 @@ function TemplateEditor({
               "email",
               "status",
               "unsubscribe_url",
-              ...form.images.flatMap((u, i) =>
-                u.trim() ? [i === 0 ? "image" : `image_${i + 1}`] : [],
+              ...form.images.flatMap((img, i) =>
+                img.url.trim() ? [i === 0 ? "image" : `image_${i + 1}`] : [],
               ),
               ...form.videos.flatMap((v, i) =>
                 v.url.trim() ? [i === 0 ? "video_link" : `video_link_${i + 1}`] : [],
@@ -439,20 +517,21 @@ function TemplateEditor({
             message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).
           </p>
           <div className="flex flex-col gap-2">
-            {form.images.map((url, i) => (
+            {form.images.map((img, i) => (
               <div key={i} className="rounded-lg border border-line p-2">
                 <div className="flex gap-2">
-                  {url.trim() && (
+                  {img.url.trim() && (
                     <img
-                      src={url}
+                      src={img.url}
                       alt=""
                       className="h-10 w-10 shrink-0 rounded border border-line object-cover"
+                      onLoad={sizeControls ? (e) => noteNaturalWidth(i, e.currentTarget) : undefined}
                       onError={(e) => (e.currentTarget.style.opacity = "0.3")}
                     />
                   )}
                   <input
                     className="input font-mono text-xs"
-                    value={url}
+                    value={img.url}
                     placeholder="https://…/photo.jpg"
                     onChange={(e) => setImageAt(i, e.target.value)}
                   />
@@ -477,14 +556,20 @@ function TemplateEditor({
                     type="button"
                     aria-label="Remove image"
                     className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"
-                    onClick={() => {
-                      clearImageError(i);
-                      setForm((f) => ({ ...f, images: f.images.filter((_, j) => j !== i) }));
-                    }}
+                    onClick={() => removeImageAt(i)}
                   >
                     <Icon name="close" size={16} />
                   </button>
                 </div>
+                {sizeControls && (
+                  <ImageSizeToolbar
+                    image={img}
+                    index={i}
+                    onSize={(size) => updateImageAt(i, { size })}
+                    onAlt={(alt) => updateImageAt(i, { alt })}
+                    onRemove={() => removeImageAt(i)}
+                  />
+                )}
                 {imageErrors[i] && (
                   <div className="mt-1 text-xs text-crit">{imageErrors[i]}</div>
                 )}
@@ -494,7 +579,10 @@ function TemplateEditor({
           <button
             type="button"
             className="btn-ghost mt-2 text-xs"
-            onClick={() => setForm((f) => ({ ...f, images: [...f.images, ""] }))}
+            onClick={() =>
+              // Flag on: a new image starts at Best fit. Off: a plain URL, as before.
+              setForm((f) => ({ ...f, images: [...f.images, sizeControls ? { url: "", size: "fit" } : { url: "" }] }))
+            }
           >
             + Add image
           </button>

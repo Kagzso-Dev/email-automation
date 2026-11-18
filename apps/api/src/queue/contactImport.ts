@@ -7,6 +7,8 @@ import { prisma } from "../prisma.js";
 import { checkEmailDomain, loadDomainPolicy } from "../domain/sendingDomainPolicy.js";
 import { parseContactFile } from "../domain/contactImport.js";
 import { IMPORT_MAX_ROWS, type ImportLimit } from "../domain/importLimit.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
+import { HARD_STOP_IMPORT_BATCH, recordImportRowsNotImported, stopAllSince } from "../domain/hardStop.js";
 import type { ContactImportJob } from "./queues.js";
 
 /** The job's result, read by GET /api/contacts/import/:jobId. created + updated + duplicates + failed = selectedRows. */
@@ -27,6 +29,8 @@ export interface ContactImportResult extends ImportLimit {
   total: number;
   /** Only when Settings → Domain mode is BLOCKLIST (ENABLE_DOMAIN_BLOCKLIST), so the summary says "blocked domain". */
   domainMode?: "BLOCKLIST";
+  /** Only when a Stop all (ENABLE_HARD_STOP) stopped this import: the rows after the batch being written were not imported. */
+  hardStop?: { reason: string; notImported: number };
 }
 
 export async function processContactImport(
@@ -46,7 +50,24 @@ export async function processContactImport(
   let skipped = noEmail; // no usable email address
   let rejectedDomain = 0; // email domain not on the approved list
   const seen = new Set<string>();
+  // Hard stop (ENABLE_HARD_STOP): before each batch of HARD_STOP_IMPORT_BATCH rows, a Stop all applied since this
+  // import started ends it. The batch being written finishes; the rest are recorded for the cancelled-rows CSV.
+  const hardStop = isHardStopEnabled();
+  const startedAt = new Date();
+  let index = 0;
+  let stoppedBy: ContactImportResult["hardStop"];
   for (const row of contacts) {
+    if (hardStop && index > 0 && index % HARD_STOP_IMPORT_BATCH === 0) {
+      const stop = await stopAllSince(startedAt);
+      if (stop) {
+        const rest = contacts.slice(index);
+        await recordImportRowsNotImported(stop, job.filename, rest);
+        stoppedBy = { reason: stop.reason, notImported: rest.length };
+        logger.info({ format: job.format, imported: index, notImported: rest.length }, "contact import stopped by a hard stop");
+        break;
+      }
+    }
+    index++;
     const email = row.email.toLowerCase().trim();
     if (!email || !email.includes("@")) {
       skipped++;
@@ -94,6 +115,7 @@ export async function processContactImport(
     failed: skipped + rejectedDomain,
     total: contacts.length,
     ...(domainPolicy.mode === "BLOCKLIST" ? { domainMode: "BLOCKLIST" as const } : {}),
+    ...(stoppedBy ? { hardStop: stoppedBy } : {}),
   };
   logger.info({ format: job.format, ...result }, "contact import complete");
   return result;

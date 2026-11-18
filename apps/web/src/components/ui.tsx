@@ -93,7 +93,7 @@ export function Modal({
 }: {
   open: boolean;
   onClose: () => void;
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   /** Wider dialog for tables (default keeps the standard width). */
   wide?: boolean;
@@ -150,7 +150,7 @@ export function Tabs<T extends string>({
   value,
   onChange,
 }: {
-  tabs: { value: T; label: string }[];
+  tabs: { value: T; label: ReactNode }[];
   value: T;
   onChange: (v: T) => void;
 }) {

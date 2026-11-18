@@ -1,5 +1,8 @@
-import type { TemplateKind, TemplateLink, TemplateMeeting } from "@dispatch/shared";
+import type { TemplateImage, TemplateImageEntry, TemplateKind, TemplateLink, TemplateMeeting } from "@dispatch/shared";
+import { toTemplateImage } from "@dispatch/shared";
 import { env } from "../env.js";
+import { isImageSizeControlsEnabled } from "../config/imageSizeControls.js";
+import { renderSizedImageHtml } from "./imageSize.js";
 import { sanitizeEmailHtml } from "./sanitize.js";
 import { sign } from "./signing.js";
 import {
@@ -105,9 +108,10 @@ export interface RenderInput {
   /**
    * Additional embedded images. Each is placed at its own placeholder —
    * `{{image}}` for the first, `{{image_2}}`, `{{image_3}}` … for the rest —
-   * or stacked after the video buttons when no placeholder is present.
+   * or stacked after the video buttons when no placeholder is present. An entry is a
+   * plain URL or a URL with its size / alt text (used only with ENABLE_IMAGE_SIZE_CONTROLS).
    */
-  images?: string[] | null;
+  images?: TemplateImageEntry[] | null;
   /**
    * Additional "▶ Watch video" buttons. Placeholders `{{video_link}}`,
    * `{{video_link_2}}` … mirror the images; unplaced buttons follow the URL buttons.
@@ -211,9 +215,13 @@ export function render(input: RenderInput): RenderedEmail {
   // panels): each gets an indexed placeholder — {{image}} / {{image_2}} … and
   // {{video_link}} / {{video_link_2}} … — otherwise they follow the content and
   // the URL buttons: videos first, then images, both in order.
-  const imageUrls = [...(input.imageUrl ? [input.imageUrl] : []), ...(input.images ?? [])]
-    .map((u) => sub(u)?.trim() ?? "")
-    .filter(Boolean);
+  // An image entry is a plain URL or { url, size?, alt?, … } (image size controls).
+  const images = [...(input.imageUrl ? [input.imageUrl] : []), ...(input.images ?? [])]
+    .map(toTemplateImage)
+    .filter((img): img is TemplateImage => img !== null)
+    .map((img) => ({ ...img, url: sub(img.url)?.trim() ?? "", alt: sub(img.alt) }))
+    .filter((img) => img.url);
+  const imageUrls = images.map((img) => img.url);
   const videos = [
     ...(input.videoUrl ? [{ url: input.videoUrl }] : []),
     ...(input.videos ?? []),
@@ -221,7 +229,11 @@ export function render(input: RenderInput): RenderedEmail {
     .map((v) => ({ url: sub(v.url)?.trim() ?? "", label: sub(v.label)?.trim() || undefined }))
     .filter((v) => v.url);
 
-  const imageBlocks = imageUrls.map((u) => renderImageHtml(u));
+  // Flag off: every image renders exactly as before; stored sizes / alt texts are ignored.
+  const sizedImages = isImageSizeControlsEnabled();
+  const imageBlocks = images.map((img) =>
+    sizedImages ? renderSizedImageHtml(img) : renderImageHtml(img.url),
+  );
   const videoBlocks = videos.map((v) => renderVideoButtonHtml(v.url, v.label));
 
   const slot = (kind: "IMG" | "VID", i: number) => `@@DISPATCH_${kind}_SLOT_${i}@@`;

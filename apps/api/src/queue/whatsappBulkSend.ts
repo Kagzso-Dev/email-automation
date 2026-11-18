@@ -9,6 +9,8 @@ import { whatsappConfig } from "../config/whatsapp.js";
 import { bodyComponentsFromVariables, sendTemplateMessage, WhatsAppSendError } from "../services/whatsapp.js";
 import { headerComponentForTemplate } from "../domain/whatsappTemplateHeader.js";
 import { marketingCooldownUntil } from "../domain/whatsappCooldown.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
+import { claimWhatsAppItem, isHardStoppedBatch } from "../domain/hardStop.js";
 import { DeferJobError } from "./engine.js";
 import type { WhatsAppBulkSendJob } from "./queues.js";
 
@@ -83,7 +85,11 @@ export async function purgeConfirmedRecipient(sendId: string): Promise<void> {
       where: { id: send.batchId },
       select: { status: true, purgeAfter: true, purgeTable: true, purgeIds: true },
     });
-    const spec = batch && batch.status === "DONE" ? purgeSpecOf(batch) : undefined;
+    let spec = batch && batch.status === "DONE" ? purgeSpecOf(batch) : undefined;
+    // Hard stop (flag on): a lead-gen batch it stopped still deletes a recipient once Meta confirms delivery.
+    if (!spec && batch?.status === "CANCELLED" && isHardStopEnabled() && (await isHardStoppedBatch("WhatsAppSendBatch", send.batchId))) {
+      spec = purgeSpecOf(batch);
+    }
     if (!spec) return; // not lead-gen, still running (its finish() handles it) or cancelled
     const removed = await purgeBatchContacts(send.batchId, spec, [sendId]);
     if (removed) logger.info({ batchId: send.batchId, sendId, removed }, "whatsapp lead-gen: recipient deleted after confirmed delivery");
@@ -93,10 +99,23 @@ export async function purgeConfirmedRecipient(sendId: string): Promise<void> {
 }
 
 async function finish(batchId: string, purge?: PurgeSpec): Promise<Record<string, number>> {
-  await prisma.whatsAppSendBatch.update({
-    where: { id: batchId },
-    data: { status: "DONE", nextItemAt: null },
-  });
+  if (isHardStopEnabled()) {
+    // Only a batch still RUNNING becomes DONE. One a hard stop cancelled meanwhile stays CANCELLED; the stop settles
+    // the rest (queue/hardStopFinalizer.ts), so nothing below runs for it.
+    const { count } = await prisma.whatsAppSendBatch.updateMany({
+      where: { id: batchId, status: "RUNNING" },
+      data: { status: "DONE", nextItemAt: null },
+    });
+    if (count === 0) {
+      const rows = await prisma.whatsAppSend.groupBy({ by: ["status"], where: { batchId }, _count: { _all: true } });
+      return Object.fromEntries(rows.map((r) => [r.status, r._count._all]));
+    }
+  } else {
+    await prisma.whatsAppSendBatch.update({
+      where: { id: batchId },
+      data: { status: "DONE", nextItemAt: null },
+    });
+  }
   // A send interrupted mid-flight (worker restart) would otherwise stay SENDING for ever.
   // Marked FAILED once; never re-queued.
   await prisma.whatsAppSend.updateMany({
@@ -146,13 +165,16 @@ export async function processWhatsAppBulkSend(payload: Record<string, unknown>):
   // retry) until the cooldown is over; the contact itself is never touched.
   const cooldownUntil = await marketingCooldownUntil(item.phone, batch.template);
   if (cooldownUntil) {
-    await prisma.whatsAppSend.update({
-      where: { id: item.id },
-      data: {
-        status: "SKIPPED",
-        error: `Meta 131049 cooldown: a marketing template to this number was refused recently — send again after ${cooldownUntil.toISOString()}`,
-      },
-    });
+    const skip = {
+      status: "SKIPPED" as const,
+      error: `Meta 131049 cooldown: a marketing template to this number was refused recently — send again after ${cooldownUntil.toISOString()}`,
+    };
+    if (isHardStopEnabled()) {
+      // Only while still QUEUED, so a skip can never overwrite a row a hard stop cancelled.
+      await prisma.whatsAppSend.updateMany({ where: { id: item.id, status: "QUEUED" }, data: skip });
+    } else {
+      await prisma.whatsAppSend.update({ where: { id: item.id }, data: skip });
+    }
     logger.info({ batchId, itemId: item.id, until: cooldownUntil }, "whatsapp drip item skipped — 131049 cooldown");
     const left = await prisma.whatsAppSend.count({ where: { batchId, status: "QUEUED" } });
     if (left === 0) return { done: true, ...(await finish(batchId, purge)) };
@@ -160,7 +182,13 @@ export async function processWhatsAppBulkSend(payload: Record<string, unknown>):
     throw new DeferJobError(new Date(Date.now() + 1000));
   }
 
-  await prisma.whatsAppSend.update({ where: { id: item.id }, data: { status: "SENDING" } });
+  if (isHardStopEnabled()) {
+    // Hard stop check point: start the message only if the batch is still running and the message still QUEUED. A
+    // stop (or another worker) that got there first wins; the next run re-reads the batch and stops.
+    if (!(await claimWhatsAppItem(batchId, item.id))) throw new DeferJobError(new Date(Date.now() + 1000));
+  } else {
+    await prisma.whatsAppSend.update({ where: { id: item.id }, data: { status: "SENDING" } });
+  }
 
   try {
     if (!batch.template.providerTemplateName) {
@@ -225,4 +253,21 @@ export async function processWhatsAppBulkSend(payload: Record<string, unknown>):
   const runAt = new Date(Date.now() + pickDelayMs(batch.minDelaySec, batch.maxDelaySec));
   await prisma.whatsAppSendBatch.update({ where: { id: batchId }, data: { nextItemAt: runAt } });
   throw new DeferJobError(runAt);
+}
+
+/**
+ * Hard stop (ENABLE_HARD_STOP): once the last message in progress at the stop has ended, a lead-gen batch still
+ * deletes the recipients Meta confirmed it reached (DELIVERED / READ), the same rule as a finished batch. Cancelled,
+ * unsent, failed and only-SENT recipients are never deleted. Later confirmations go through purgeConfirmedRecipient.
+ */
+export async function purgeAfterHardStop(batchId: string): Promise<number> {
+  const batch = await prisma.whatsAppSendBatch.findUnique({
+    where: { id: batchId },
+    select: { purgeAfter: true, purgeTable: true, purgeIds: true },
+  });
+  const spec = batch ? purgeSpecOf(batch) : undefined;
+  if (!spec) return 0;
+  const removed = await purgeBatchContacts(batchId, spec);
+  logger.info({ batchId, removed, table: spec.table }, "whatsapp drip batch purged the recipients with confirmed delivery after a hard stop");
+  return removed;
 }

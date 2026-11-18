@@ -7,6 +7,7 @@ import {
   orderTemplateButtons,
   placeholdersIn,
   TEMPLATE_BUTTON_LIMITS,
+  TEMPLATE_HEADER_TYPES,
   toMetaTemplateName,
   type DispatchTemplateField,
   type TemplateButtonType,
@@ -17,6 +18,7 @@ import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
 import { ErrorNote } from "./ui";
 import { useBranding } from "../lib/branding";
+import { IDLE_DRAFT_STATUS, useDraftAutosave, useTemplateDraftsEnabled, type DraftStatus } from "../lib/templateDrafts";
 
 /**
  * Dispatch → Meta: build a template and submit it for Meta's review. It is
@@ -141,24 +143,81 @@ function AddButtonMenu({ buttons, onAdd }: { buttons: ButtonDraft[]; onAdd: (typ
   );
 }
 
-export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
+/** A saved "Create in Meta" draft (ENABLE_TEMPLATE_DRAFTS): the form's own fields. The header file itself isn't kept. */
+export interface MetaDraftState {
+  displayName: string;
+  name: string;
+  nameTouched: boolean;
+  language: string;
+  category: "MARKETING" | "UTILITY";
+  headerType: TemplateHeaderType;
+  headerText: string;
+  /** The attached header file's name, to ask for the file again on resume. */
+  headerFileName: string | null;
+  body: string;
+  vars: { field: DispatchTemplateField; example: string }[];
+  footer: string;
+  buttons: ButtonDraft[];
+}
+
+/** A draft's fields that have the right type; anything missing or wrong falls back to the form's own default. */
+function draftSeed(raw: unknown): Partial<MetaDraftState> {
+  if (!raw || typeof raw !== "object") return {};
+  const s = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const out: Partial<MetaDraftState> = {};
+  for (const k of ["displayName", "name", "language", "headerText", "body", "footer"] as const) {
+    if (typeof s[k] === "string") out[k] = s[k] as string;
+  }
+  if (typeof s.nameTouched === "boolean") out.nameTouched = s.nameTouched;
+  if (s.category === "MARKETING" || s.category === "UTILITY") out.category = s.category;
+  if ((TEMPLATE_HEADER_TYPES as readonly unknown[]).includes(s.headerType)) out.headerType = s.headerType as TemplateHeaderType;
+  if (typeof s.headerFileName === "string") out.headerFileName = s.headerFileName;
+  if (Array.isArray(s.vars)) {
+    out.vars = s.vars
+      .filter((v): v is Record<string, unknown> => !!v && typeof v === "object")
+      .map((v) => ({
+        field: (DISPATCH_TEMPLATE_FIELDS as readonly unknown[]).includes(v.field) ? (v.field as DispatchTemplateField) : "first_name",
+        example: str(v.example),
+      }));
+  }
+  if (Array.isArray(s.buttons)) {
+    out.buttons = s.buttons
+      .filter((b): b is Record<string, unknown> => !!b && typeof b === "object" && typeof b.type === "string" && b.type in BUTTON_TYPE_LABEL)
+      .map((b) => ({ type: b.type as TemplateButtonType, text: str(b.text), url: str(b.url), phone_number: str(b.phone_number) }));
+  }
+  return out;
+}
+
+export function CreateInMetaForm({
+  onClose,
+  draft,
+  onDraftStatus,
+}: {
+  onClose: () => void;
+  /** Template drafts (ENABLE_TEMPLATE_DRAFTS): the draft this form was resumed from. */
+  draft?: { id: string; state: unknown } | null;
+  /** Template drafts: the "Draft saved 10:42" note, for the dialog header. */
+  onDraftStatus?: (status: DraftStatus) => void;
+}) {
   const { appName } = useBranding();
   const qc = useQueryClient();
   const toast = useToast();
   const confirm = useConfirm();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [displayName, setDisplayName] = useState("");
-  const [name, setName] = useState("");
-  const [nameTouched, setNameTouched] = useState(false);
-  const [language, setLanguage] = useState("en");
-  const [category, setCategory] = useState<"MARKETING" | "UTILITY">("MARKETING");
-  const [headerType, setHeaderType] = useState<TemplateHeaderType>("NONE");
-  const [headerText, setHeaderText] = useState("");
+  const [seed] = useState(() => draftSeed(draft?.state)); // {} without a draft: every field starts as before
+  const [displayName, setDisplayName] = useState(seed.displayName ?? "");
+  const [name, setName] = useState(seed.name ?? "");
+  const [nameTouched, setNameTouched] = useState(seed.nameTouched ?? false);
+  const [language, setLanguage] = useState(seed.language ?? "en");
+  const [category, setCategory] = useState<"MARKETING" | "UTILITY">(seed.category ?? "MARKETING");
+  const [headerType, setHeaderType] = useState<TemplateHeaderType>(seed.headerType ?? "NONE");
+  const [headerText, setHeaderText] = useState(seed.headerText ?? "");
   const [file, setFile] = useState<File | null>(null);
-  const [body, setBody] = useState("Hi {{1}}, ");
-  const [vars, setVars] = useState<{ field: DispatchTemplateField; example: string }[]>([{ field: "first_name", example: "" }]);
-  const [footer, setFooter] = useState("");
-  const [buttons, setButtons] = useState<ButtonDraft[]>([quickReply("Yes, interested"), quickReply("Not now")]);
+  const [body, setBody] = useState(seed.body ?? "Hi {{1}}, ");
+  const [vars, setVars] = useState<{ field: DispatchTemplateField; example: string }[]>(seed.vars ?? [{ field: "first_name", example: "" }]);
+  const [footer, setFooter] = useState(seed.footer ?? "");
+  const [buttons, setButtons] = useState<ButtonDraft[]>(seed.buttons ?? [quickReply("Yes, interested"), quickReply("Not now")]);
   const [progress, setProgress] = useState<number | null>(null);
   const [showErrors, setShowErrors] = useState(false);
 
@@ -181,6 +240,33 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
     footer: footer || null,
     buttons: buttons.map(toButtonInput),
   };
+  // Template drafts (ENABLE_TEMPLATE_DRAFTS). Off: nothing is saved and the form works exactly as before.
+  const draftsOn = useTemplateDraftsEnabled();
+  const autosave = useDraftAutosave<MetaDraftState>({
+    enabled: draftsOn,
+    channel: "whatsapp",
+    draftId: draft?.id,
+    state: {
+      displayName,
+      name,
+      nameTouched,
+      language,
+      category,
+      headerType,
+      headerText,
+      // A file can't be kept in a draft; its name is, so resuming asks for it again.
+      headerFileName: file?.name ?? (headerType === seed.headerType ? (seed.headerFileName ?? null) : null),
+      body,
+      vars,
+      footer,
+      buttons,
+    },
+    name: displayName.trim() || input.name,
+  });
+  useEffect(() => {
+    onDraftStatus?.(autosave.status);
+    return () => onDraftStatus?.(IDLE_DRAFT_STATUS); // closed: no note on the next "New template"
+  }, [autosave.status, onDraftStatus]);
   const setButton = (i: number, patch: Partial<ButtonDraft>) => setButtons(buttons.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   const check = createMetaTemplateInput.safeParse(input);
   const mediaHeader = headerType === "IMAGE" || headerType === "VIDEO" || headerType === "DOCUMENT";
@@ -212,6 +298,7 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
     },
     onSettled: () => setProgress(null),
     onSuccess: (r) => {
+      void autosave.finish(); // the real template exists now: delete its draft (no-op with drafts off)
       toast.success(`Submitted to Meta — status ${r.meta.status.toLowerCase()}`, [
         "It is registered here already; the badge turns Verified once Meta approves it.",
       ]);
@@ -307,6 +394,9 @@ export function CreateInMetaForm({ onClose }: { onClose: () => void }) {
                 <p className="mt-1 text-xs text-slate-550">
                   {file ? `${file.name} · ${formatBytes(file.size)}` : HEADER_HINT[headerType]} — also used as the header when sending.
                 </p>
+                {!file && seed.headerFileName && headerType === seed.headerType && (
+                  <p className="mt-1 text-xs text-warn">Attach the file again: drafts don't keep files (it was {seed.headerFileName}).</p>
+                )}
               </div>
             )}
           </div>

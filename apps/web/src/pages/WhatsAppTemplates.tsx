@@ -18,6 +18,9 @@ import { MetaSyncModal, useMetaSyncCandidates } from "../components/WhatsAppTemp
 import { CreateInMetaForm } from "../components/WhatsAppTemplateCreate";
 import { useAuth } from "../lib/auth";
 import { useBranding } from "../lib/branding";
+import type { MetaDraftState } from "../components/WhatsAppTemplateCreate";
+import { TemplateDraftsList, draftsTabLabel, useDraftOpener, withDraftNote } from "../components/TemplateDrafts";
+import { useDraftList, useTemplateDraftsEnabled, type Draft, type DraftStatus } from "../lib/templateDrafts";
 
 interface WTemplate {
   id: string;
@@ -53,6 +56,19 @@ export function WhatsAppTemplatesPage() {
   const metaNew = useMetaSyncCandidates(isAdmin, { autoCheckMs });
   const newInMeta = (metaNew.data?.items ?? []).filter((c) => c.importable);
   const blockedInMeta = (metaNew.data?.items ?? []).filter((c) => !c.importable);
+  // Template drafts (ENABLE_TEMPLATE_DRAFTS, admins: Create in Meta only). Off: no Drafts tab, New template as before.
+  const draftsOn = useTemplateDraftsEnabled() && isAdmin;
+  const draftList = useDraftList("whatsapp", draftsOn);
+  const draftOpener = useDraftOpener<MetaDraftState>("whatsapp");
+  const [tab, setTab] = useState<"templates" | "drafts">("templates");
+  const [newDraft, setNewDraft] = useState<Draft<MetaDraftState> | null>(null);
+  const [draftLaunch, setDraftLaunch] = useState(0);
+  const openNew = (draft: Draft<MetaDraftState> | null) => {
+    setNewDraft(draft);
+    if (draft) setDraftLaunch((n) => n + 1); // a fresh dialog on the Create in Meta tab
+    setShowNew(true);
+  };
+  const startNew = async () => (draftsOn ? openNew(await draftOpener.startNew()) : setShowNew(true));
 
   const query = useQuery({
     queryKey: ["whatsapp-templates"],
@@ -98,13 +114,27 @@ export function WhatsAppTemplatesPage() {
                 Sync from Meta
               </button>
             )}
-            <button className="btn-primary" onClick={() => setShowNew(true)}>
+            <button className="btn-primary" onClick={() => void startNew()}>
               New template
             </button>
           </div>
         }
       />
 
+      {draftsOn && (
+        <Tabs
+          tabs={[
+            { value: "templates", label: "Templates" },
+            { value: "drafts", label: draftsTabLabel(draftList.data?.items.length) },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+      )}
+      {draftsOn && tab === "drafts" ? (
+        <TemplateDraftsList<MetaDraftState> channel="whatsapp" onOpen={openNew} />
+      ) : (
+      <>
       {(newInMeta.length > 0 || blockedInMeta.length > 0) && (
         <div className="mb-4 space-y-1 rounded-lg bg-accent-soft px-3 py-2 text-sm">
           {newInMeta.length > 0 && (
@@ -289,13 +319,15 @@ export function WhatsAppTemplatesPage() {
         )}
         </>
       )}
+      </>
+      )}
 
       <HeaderMediaModal
         template={headerFor}
         needs={headerFor ? (verify.byId.get(headerFor.id)?.headerNeedsParameter ?? null) : null}
         onClose={() => setHeaderFor(null)}
       />
-      <TemplateModal open={showNew} onClose={() => setShowNew(false)} canCreateInMeta={isAdmin} />
+      <TemplateModal key={newDraft ? `draft-${draftLaunch}` : "new"} open={showNew} onClose={() => setShowNew(false)} canCreateInMeta={isAdmin} draft={newDraft} />
       <MetaSyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
       <TemplateModal
         open={!!editing}
@@ -495,17 +527,21 @@ function TemplateModal({
   template,
   onClose,
   canCreateInMeta = false,
+  draft = null,
 }: {
   open: boolean;
   template?: WTemplate;
   onClose: () => void;
   /** Admins can build a template here and submit it to Meta; everyone can register an existing one. */
   canCreateInMeta?: boolean;
+  /** Template drafts (ENABLE_TEMPLATE_DRAFTS): open Create in Meta with this draft. */
+  draft?: Draft<MetaDraftState> | null;
 }) {
   const [mode, setMode] = useState<"create" | "register">("create");
+  const [draftStatus, setDraftStatus] = useState<DraftStatus | null>(null);
   const creating = !template && canCreateInMeta && mode === "create";
   return (
-    <Modal open={open} onClose={onClose} title={template ? "Edit template" : "New WhatsApp template"} wide={creating}>
+    <Modal open={open} onClose={onClose} title={withDraftNote(template ? "Edit template" : "New WhatsApp template", creating ? draftStatus : null)} wide={creating}>
       {open && !template && canCreateInMeta && (
         <Tabs
           tabs={[
@@ -518,7 +554,7 @@ function TemplateModal({
       )}
       {open ? (
         creating ? (
-          <CreateInMetaForm onClose={onClose} />
+          <CreateInMetaForm onClose={onClose} draft={draft} onDraftStatus={setDraftStatus} />
         ) : (
           <TemplateForm key={template?.id ?? "new"} template={template} onClose={onClose} />
         )

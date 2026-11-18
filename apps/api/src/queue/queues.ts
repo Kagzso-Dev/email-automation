@@ -26,6 +26,8 @@ export interface SendEmailJob {
     | { type: "campaign"; campaignId: string; runDate: string }
     | { type: "trigger"; triggerId: string; payload: Record<string, unknown> }
     | { type: "manual"; templateId: string };
+  /** Hard stop (ENABLE_HARD_STOP) only: when the campaign fan-out that queued this email started (ISO). */
+  dispatchedAt?: string;
 }
 
 export interface ContactImportJob {

@@ -3,6 +3,8 @@ import { logger } from "../logger.js";
 import { deliverEmail } from "../domain/delivery.js";
 import { manualKey } from "../domain/idempotency.js";
 import { pickDelayMs } from "../domain/manualSend.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
+import { claimEmailBatchItem } from "../domain/hardStop.js";
 import { DeferJobError } from "./engine.js";
 import { dailyCapReached, msUntilNextWindow } from "./dailyCap.js";
 import type { ManualBulkSendJob } from "./queues.js";
@@ -40,10 +42,20 @@ async function purgeBatchContacts(batchId: string): Promise<number> {
 }
 
 async function finish(batchId: string, purgeAfter: boolean): Promise<Record<string, number>> {
-  await prisma.manualSendBatch.update({
-    where: { id: batchId },
-    data: { status: "DONE", nextItemAt: null },
-  });
+  if (isHardStopEnabled()) {
+    // Only a batch still RUNNING becomes DONE. One a hard stop cancelled meanwhile stays CANCELLED; the stop settles
+    // the rest (queue/hardStopFinalizer.ts), so nothing below runs for it.
+    const { count } = await prisma.manualSendBatch.updateMany({
+      where: { id: batchId, status: "RUNNING" },
+      data: { status: "DONE", nextItemAt: null },
+    });
+    if (count === 0) return countByStatus(batchId);
+  } else {
+    await prisma.manualSendBatch.update({
+      where: { id: batchId },
+      data: { status: "DONE", nextItemAt: null },
+    });
+  }
   // A send interrupted mid-flight (worker restart) would otherwise stay SENDING for ever.
   // Marked FAILED once; never re-queued.
   await prisma.manualSendBatchItem.updateMany({
@@ -97,7 +109,13 @@ export async function processManualBulkSend(payload: Record<string, unknown>): P
     throw new DeferJobError(runAt);
   }
 
-  await prisma.manualSendBatchItem.update({ where: { id: item.id }, data: { status: "SENDING" } });
+  if (isHardStopEnabled()) {
+    // Hard stop check point: start the item only if the batch is still running and the item still PENDING. A stop
+    // (or another worker) that got there first wins; the next run re-reads the batch and stops.
+    if (!(await claimEmailBatchItem(batchId, item.id))) throw new DeferJobError(new Date(Date.now() + 1000));
+  } else {
+    await prisma.manualSendBatchItem.update({ where: { id: item.id }, data: { status: "SENDING" } });
+  }
 
   try {
     const outcome = await deliverEmail({
@@ -146,4 +164,17 @@ export async function processManualBulkSend(payload: Record<string, unknown>): P
   const runAt = new Date(Date.now() + pickDelayMs(batch.minDelaySec, batch.maxDelaySec));
   await prisma.manualSendBatch.update({ where: { id: batchId }, data: { nextItemAt: runAt } });
   throw new DeferJobError(runAt);
+}
+
+/**
+ * Hard stop (ENABLE_HARD_STOP): once the last item in progress at the stop has ended, a lead-gen batch still deletes
+ * the contacts it emailed successfully (item SENT), the same rule as a finished batch. Cancelled and unsent contacts
+ * are never deleted.
+ */
+export async function purgeAfterHardStop(batchId: string): Promise<number> {
+  const batch = await prisma.manualSendBatch.findUnique({ where: { id: batchId }, select: { purgeAfter: true } });
+  if (!batch?.purgeAfter) return 0;
+  const removed = await purgeBatchContacts(batchId);
+  logger.info({ batchId, removed }, "manual drip batch purged its contacts after a hard stop");
+  return removed;
 }

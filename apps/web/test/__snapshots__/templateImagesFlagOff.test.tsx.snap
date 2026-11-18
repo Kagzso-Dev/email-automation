@@ -1,0 +1,117 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Images section exactly as before (config endpoint fails) > renders the same Images section for a legacy single-image template 1`] = `"<div class="mb-3 border-t border-line pt-3"><label class="label">Images (optional)</label><p class="mb-2 text-xs text-slate-550">Embedded in the email. Each image is placed at its own placeholder — <span class="font-mono">{{image}}</span>, <span class="font-mono">{{image_2}}</span>, <span class="font-mono">{{image_3}}</span> … — otherwise they come last, after the message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).</p><div class="flex flex-col gap-2"><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/old.jpg" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/old.jpg"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div></div><button type="button" class="btn-ghost mt-2 text-xs">+ Add image</button></div>"`;
+
+exports[`Images section exactly as before (config endpoint fails) > renders the same Images section for a template with two images 1`] = `"<div class="mb-3 border-t border-line pt-3"><label class="label">Images (optional)</label><p class="mb-2 text-xs text-slate-550">Embedded in the email. Each image is placed at its own placeholder — <span class="font-mono">{{image}}</span>, <span class="font-mono">{{image_2}}</span>, <span class="font-mono">{{image_3}}</span> … — otherwise they come last, after the message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).</p><div class="flex flex-col gap-2"><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/a.jpg" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/a.jpg"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/b.png" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/b.png"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div></div><button type="button" class="btn-ghost mt-2 text-xs">+ Add image</button></div>"`;
+
+exports[`Images section exactly as before (config endpoint fails) > saves a pasted and an uploaded image as plain URLs, as before 1`] = `"<div class="mb-3 border-t border-line pt-3"><label class="label">Images (optional)</label><p class="mb-2 text-xs text-slate-550">Embedded in the email. Each image is placed at its own placeholder — <span class="font-mono">{{image}}</span>, <span class="font-mono">{{image_2}}</span>, <span class="font-mono">{{image_3}}</span> … — otherwise they come last, after the message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).</p><div class="flex flex-col gap-2"><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/a.jpg" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/a.jpg"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/b.png" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/b.png"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/pasted.gif" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/pasted.gif"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="http://localhost:4000/uploads/template-images/new-1.png" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="http://localhost:4000/uploads/template-images/new-1.png"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div></div><button type="button" class="btn-ghost mt-2 text-xs">+ Add image</button></div>"`;
+
+exports[`Images section exactly as before (config endpoint fails) > saves a pasted and an uploaded image as plain URLs, as before 2`] = `
+{
+  "bodyText": "Hi {{first_name}},
+
+{{image}}
+
+Thanks",
+  "imageUrl": null,
+  "images": [
+    "https://cdn.example.com/a.jpg",
+    "https://cdn.example.com/b.png",
+    "https://cdn.example.com/pasted.gif",
+    "http://localhost:4000/uploads/template-images/new-1.png",
+  ],
+  "kind": "LETTER",
+  "links": [],
+  "meeting": {},
+  "name": "Welcome",
+  "signature": "",
+  "subject": "Hi {{first_name}}",
+  "textBody": "",
+  "variables": [],
+  "videoUrl": null,
+  "videos": [],
+}
+`;
+
+exports[`Images section exactly as before (config endpoint fails) > saves the same payload when nothing is changed 1`] = `
+{
+  "bodyText": "Hi {{first_name}},
+
+{{image}}
+
+Thanks",
+  "imageUrl": null,
+  "images": [
+    "https://cdn.example.com/a.jpg",
+    "https://cdn.example.com/b.png",
+  ],
+  "kind": "LETTER",
+  "links": [],
+  "meeting": {},
+  "name": "Welcome",
+  "signature": "",
+  "subject": "Hi {{first_name}}",
+  "textBody": "",
+  "variables": [],
+  "videoUrl": null,
+  "videos": [],
+}
+`;
+
+exports[`Images section exactly as before (config says off) > renders the same Images section for a legacy single-image template 1`] = `"<div class="mb-3 border-t border-line pt-3"><label class="label">Images (optional)</label><p class="mb-2 text-xs text-slate-550">Embedded in the email. Each image is placed at its own placeholder — <span class="font-mono">{{image}}</span>, <span class="font-mono">{{image_2}}</span>, <span class="font-mono">{{image_3}}</span> … — otherwise they come last, after the message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).</p><div class="flex flex-col gap-2"><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/old.jpg" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/old.jpg"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div></div><button type="button" class="btn-ghost mt-2 text-xs">+ Add image</button></div>"`;
+
+exports[`Images section exactly as before (config says off) > renders the same Images section for a template with two images 1`] = `"<div class="mb-3 border-t border-line pt-3"><label class="label">Images (optional)</label><p class="mb-2 text-xs text-slate-550">Embedded in the email. Each image is placed at its own placeholder — <span class="font-mono">{{image}}</span>, <span class="font-mono">{{image_2}}</span>, <span class="font-mono">{{image_3}}</span> … — otherwise they come last, after the message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).</p><div class="flex flex-col gap-2"><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/a.jpg" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/a.jpg"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/b.png" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/b.png"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div></div><button type="button" class="btn-ghost mt-2 text-xs">+ Add image</button></div>"`;
+
+exports[`Images section exactly as before (config says off) > saves a pasted and an uploaded image as plain URLs, as before 1`] = `"<div class="mb-3 border-t border-line pt-3"><label class="label">Images (optional)</label><p class="mb-2 text-xs text-slate-550">Embedded in the email. Each image is placed at its own placeholder — <span class="font-mono">{{image}}</span>, <span class="font-mono">{{image_2}}</span>, <span class="font-mono">{{image_3}}</span> … — otherwise they come last, after the message, links and videos, in order. Paste a URL or upload (JPG, PNG, WebP, GIF · max 5 MB).</p><div class="flex flex-col gap-2"><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/a.jpg" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/a.jpg"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/b.png" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/b.png"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="https://cdn.example.com/pasted.gif" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="https://cdn.example.com/pasted.gif"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div><div class="rounded-lg border border-line p-2"><div class="flex gap-2"><img src="http://localhost:4000/uploads/template-images/new-1.png" alt="" class="h-10 w-10 shrink-0 rounded border border-line object-cover"><input class="input font-mono text-xs" placeholder="https://…/photo.jpg" value="http://localhost:4000/uploads/template-images/new-1.png"><label class="btn-ghost shrink-0 cursor-pointer whitespace-nowrap text-xs">Upload<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" class="hidden"></label><button type="button" aria-label="Remove image" class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-tint hover:text-crit"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></div></div></div><button type="button" class="btn-ghost mt-2 text-xs">+ Add image</button></div>"`;
+
+exports[`Images section exactly as before (config says off) > saves a pasted and an uploaded image as plain URLs, as before 2`] = `
+{
+  "bodyText": "Hi {{first_name}},
+
+{{image}}
+
+Thanks",
+  "imageUrl": null,
+  "images": [
+    "https://cdn.example.com/a.jpg",
+    "https://cdn.example.com/b.png",
+    "https://cdn.example.com/pasted.gif",
+    "http://localhost:4000/uploads/template-images/new-1.png",
+  ],
+  "kind": "LETTER",
+  "links": [],
+  "meeting": {},
+  "name": "Welcome",
+  "signature": "",
+  "subject": "Hi {{first_name}}",
+  "textBody": "",
+  "variables": [],
+  "videoUrl": null,
+  "videos": [],
+}
+`;
+
+exports[`Images section exactly as before (config says off) > saves the same payload when nothing is changed 1`] = `
+{
+  "bodyText": "Hi {{first_name}},
+
+{{image}}
+
+Thanks",
+  "imageUrl": null,
+  "images": [
+    "https://cdn.example.com/a.jpg",
+    "https://cdn.example.com/b.png",
+  ],
+  "kind": "LETTER",
+  "links": [],
+  "meeting": {},
+  "name": "Welcome",
+  "signature": "",
+  "subject": "Hi {{first_name}}",
+  "textBody": "",
+  "variables": [],
+  "videoUrl": null,
+  "videos": [],
+}
+`;

@@ -285,6 +285,7 @@ enum ManualBatchItemStatus {
   SENT
   FAILED
   SKIPPED
+  CANCELLED // Hard stop (ENABLE_HARD_STOP, migration 0038): not sent, the batch was stopped first
 }
 
 // A "send this template to N selected contacts, one at a time with a random gap"
@@ -422,6 +423,7 @@ enum WhatsAppSendStatus {
   READ
   FAILED
   SKIPPED
+  CANCELLED // Hard stop (ENABLE_HARD_STOP, migration 0038): not sent, the batch was stopped first
 }
 
 // One WhatsApp message. Also the send ledger (phone/name/business/status/times).
@@ -1192,4 +1194,98 @@ model UploadHistory {
   @@index([createdAt])
   @@index([excludedExpiresAt])
   @@map("upload_history")
+}
+
+// ---------------------------------------------------------------- Hard stop (ENABLE_HARD_STOP, migration 0038)
+// "Hard stop" on one send, or "Stop all running sends" (admin). Work already in progress (an email being sent, a
+// WhatsApp message being sent, a call dialing / ringing / connected) always finishes; everything not started is
+// cancelled. See apps/api/src/domain/hardStop.ts. New tables only; the one change to existing tables is the
+// CANCELLED value appended to ManualBatchItemStatus and WhatsAppSendStatus above.
+
+enum HardStopScope {
+  ALL // "Stop all running sends"
+  EMAIL_BATCH // ManualSendBatch
+  WHATSAPP_BATCH // WhatsAppSendBatch
+  AI_CALL_RUN // AiCallRun (any language)
+  CAMPAIGN // Campaign
+}
+
+enum HardStopStatus {
+  STOPPING // items in progress at the stop are still finishing
+  STOPPED // the last one ended
+}
+
+/// One press of Hard stop: the audit record. Never deleted by the app.
+model HardStop {
+  id                 String         @id @default(cuid())
+  scope              HardStopScope
+  targetId           String?        @db.VarChar(191) // null for ALL
+  // "<scope>:<targetId>" while STOPPING, null once STOPPED: one open stop per target, so a double press (or two
+  // admins at once) gets the same stop back. MySQL has no partial unique index (same trick as activePhone).
+  activeKey          String?        @unique @db.VarChar(191)
+  status             HardStopStatus @default(STOPPING)
+  reason             String         @db.VarChar(255) // "Hard stop by <email> at <time>", written on every cancelled row
+  byUserId           String         @db.VarChar(191)
+  byEmail            String         @db.VarChar(191)
+  // Last time the stop was applied (a second press applies it again). A queued email, retry or fan-out is covered
+  // when it was dispatched before this.
+  appliedAt          DateTime       @default(now())
+  inProgressAtStop   Int            @default(0)
+  cancelledItems     Int            @default(0)
+  cancelledFollowups Int            @default(0) // approved follow-ups + email retries
+  completedItems     Int? // filled when STOPPED
+  detail             Json? // per-section counts, paused campaigns / triggers (ALL only)
+  createdAt          DateTime       @default(now())
+  finishedAt         DateTime?
+  items              HardStopItem[]
+
+  @@index([status])
+  @@index([scope, targetId])
+  @@map("hard_stops")
+}
+
+/// What a stop touched: each cancelled item (with a contact snapshot for the CSV), each cancelled follow-up or
+/// retry, each item that was in progress at the stop, each stopped job, and (ALL only) each paused campaign or
+/// trigger. The rows the stop cancelled keep their own status and reason in their own tables.
+model HardStopItem {
+  id           String   @id @default(cuid())
+  stopId       String
+  channel      String   @db.VarChar(16) // email | whatsapp | calls
+  kind         String   @db.VarChar(24) // cancelled | retry | followup | in_progress | job | paused_campaign | paused_trigger
+  refTable     String   @db.VarChar(32) // ManualSendBatchItem, whatsapp_sends, ai_call_logs, Job, …
+  refId        String   @db.VarChar(191)
+  name         String?  @db.VarChar(191)
+  email        String?  @db.VarChar(191)
+  phone        String?  @db.VarChar(32)
+  businessName String?  @db.VarChar(191)
+  extra        Json? // gender, follow-up detail, template, batch / run / campaign id, attempts
+  createdAt    DateTime @default(now())
+  stop         HardStop @relation(fields: [stopId], references: [id], onDelete: Cascade)
+
+  @@unique([stopId, kind, refTable, refId])
+  @@index([stopId, kind])
+  @@map("hard_stop_items")
+}
+
+// ---------------------------------------------------------------- Template drafts (ENABLE_TEMPLATE_DRAFTS, migration 0039)
+// An unfinished "New template" form (Templates, or WhatsApp Templates → Create in Meta), saved so it can be resumed.
+// Never a template: nothing that sends, lists templates or talks to Meta reads this table. See
+// apps/api/src/domain/templateDrafts.ts. New table only; no foreign key (owner / editor are snapshots).
+
+/// Deleted when its template is created, when someone deletes it, or 30 days after it was last edited.
+model TemplateDraft {
+  id                String   @id @db.VarChar(64) // made by the browser, so a save can be retried
+  channel           String   @db.VarChar(16) // whatsapp | email
+  name              String?  @db.VarChar(255) // the form's name field; null = "Untitled draft"
+  state             Json // the whole form, as the form holds it (no template validation)
+  ownerId           String   @db.VarChar(191) // who created it; never changes
+  ownerEmail        String   @db.VarChar(191)
+  lastEditedById    String   @db.VarChar(191)
+  lastEditedByEmail String   @db.VarChar(191)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) // last edited: set by the API on every save
+
+  @@index([channel, updatedAt])
+  @@index([updatedAt])
+  @@map("template_drafts")
 }

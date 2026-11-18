@@ -4,6 +4,9 @@ import { api } from "../lib/api";
 import { Badge, campaignTone, ErrorNote, Spinner } from "../components/ui";
 import { describeCron, formatDateTime } from "../lib/schedule";
 import { AreaChart, ChartCard, Donut, Funnel, Legend, SERIES } from "../components/charts";
+import { useAuth } from "../lib/auth";
+import { useHardStopEnabled } from "../lib/hardStop";
+import { HardStopButton, HardStopTargetStatus } from "../components/HardStopButton";
 
 interface Campaign {
   id: string;
@@ -56,6 +59,7 @@ export function CampaignDetailPage() {
     mutationFn: () => api(`/api/campaigns/${id}/send-now`, { method: "POST" }),
     onSuccess: invalidate,
   });
+  const hardStop = useHardStopEnabled(); // ENABLE_HARD_STOP: off = this page exactly as before
 
   if (campaign.isLoading) return <Spinner />;
   if (campaign.error) return <ErrorNote error={campaign.error} />;
@@ -92,9 +96,15 @@ export function CampaignDetailPage() {
           <button className="btn-primary" onClick={() => sendNow.mutate()} disabled={sendNow.isPending}>
             Send now
           </button>
+          {hardStop && <CampaignHardStop id={c.id} status={c.status} />}
         </div>
       </div>
 
+      {hardStop && (
+        <div className="mb-4">
+          <HardStopTargetStatus scope="CAMPAIGN" targetId={c.id} />
+        </div>
+      )}
       {sendNow.error ? <div className="mb-4"><ErrorNote error={sendNow.error} /></div> : null}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
@@ -123,6 +133,26 @@ export function CampaignDetailPage() {
         <CampaignStats stats={stats.data} />
       ) : null}
     </div>
+  );
+}
+
+/** Hard stop (flag on, admins): shown while the campaign is scheduled, sending, or still has queued emails. */
+function CampaignHardStop({ id, status }: { id: string; status: string }) {
+  const { user } = useAuth();
+  const stoppable = useQuery({
+    queryKey: ["campaign-stoppable", id, status],
+    queryFn: () => api<{ stoppable: boolean }>(`/api/hard-stop/campaigns/${id}/stoppable`),
+    enabled: user?.role === "ADMIN",
+    refetchInterval: 5000,
+  });
+  if (user?.role !== "ADMIN" || !stoppable.data?.stoppable) return null;
+  return (
+    <HardStopButton
+      scope="CAMPAIGN"
+      targetId={id}
+      invalidate={[["campaign", id], ["campaigns"], ["campaign-stoppable", id]]}
+      className="btn-danger"
+    />
   );
 }
 

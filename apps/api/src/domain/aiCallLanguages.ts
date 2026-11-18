@@ -20,6 +20,7 @@ import {
   type AiCallLanguageInfo,
 } from "@dispatch/shared";
 import { isAiCallsConfigured, offeredAiCallLanguages } from "../config/aiCalls.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
 import { prisma } from "../prisma.js";
 import { voiceBackendSettingNames } from "../services/voiceBackend.js";
 import { getSetting, setSetting } from "./settings.js";
@@ -96,14 +97,30 @@ export function runLanguageWhere(language: AiCallLanguage): Prisma.AiCallRunWher
   return language === DEFAULT_AI_CALL_LANGUAGE ? { OR: [{ flow: { is: null } }, ofLanguage] } : ofLanguage;
 }
 
+/**
+ * Hard stop (ENABLE_HARD_STOP) only: a run also counts while one of its calls is still live, even after it was
+ * stopped or cancelled (that call runs to its natural end), so a second call can't start beside it. Flag off: only
+ * RUNNING counts, as before.
+ */
+const STILL_CALLING: Prisma.AiCallRunWhereInput = {
+  OR: [{ status: "RUNNING" }, { logs: { some: { status: { in: ["DIALING", "RINGING", "IN_PROGRESS"] } } } }],
+};
+
 /** The run of this language still dialling, if any. */
 export function runningRunOf(language: AiCallLanguage) {
+  if (isHardStopEnabled()) {
+    return prisma.aiCallRun.findFirst({ where: { AND: [STILL_CALLING, runLanguageWhere(language)] }, select: { id: true } });
+  }
   return prisma.aiCallRun.findFirst({ where: { status: "RUNNING", ...runLanguageWhere(language) }, select: { id: true } });
 }
 
 /** The run still dialling in any language, with its language, or null (one language calls at a time). */
 export async function runningRun(): Promise<{ runId: string; language: AiCallLanguage } | null> {
-  const run = await prisma.aiCallRun.findFirst({ where: { status: "RUNNING" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+  const run = await prisma.aiCallRun.findFirst({
+    where: isHardStopEnabled() ? STILL_CALLING : { status: "RUNNING" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
   return run ? { runId: run.id, language: await languageOfRun(run.id) } : null;
 }
 

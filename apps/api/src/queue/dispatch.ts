@@ -1,6 +1,8 @@
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 import { campaignKey, queueJobId } from "../domain/idempotency.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
+import { stopCoveringFanOut } from "../domain/hardStop.js";
 import { enqueueSend, type SendEmailJob } from "./queues.js";
 
 const BATCH = 500;
@@ -22,16 +24,34 @@ export async function fanOutCampaign(campaignId: string, runDate: string): Promi
     return 0;
   }
 
-  await prisma.campaign.update({
-    where: { id: campaignId },
-    data: { status: "SENDING", lastRunAt: new Date() },
-  });
+  // Hard stop (ENABLE_HARD_STOP): when this fan-out started, stamped on each email so a stop applied after it covers
+  // every email of this fan-out, including a chunk enqueued while the stop was being pressed.
+  const hardStop = isHardStopEnabled();
+  const dispatchedAt = new Date();
+  if (hardStop) {
+    // Only while still scheduled / sending: a stop that paused it first wins.
+    const { count } = await prisma.campaign.updateMany({
+      where: { id: campaignId, status: { in: ["SCHEDULED", "SENDING"] } },
+      data: { status: "SENDING", lastRunAt: dispatchedAt },
+    });
+    if (count === 0) return 0;
+  } else {
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: "SENDING", lastRunAt: new Date() },
+    });
+  }
 
   const runDay = new Date(runDate);
   let cursor: string | undefined;
   let total = 0;
 
   for (;;) {
+    // Hard stop check point before each chunk: a stopped fan-out enqueues nothing more.
+    if (hardStop && (await stopCoveringFanOut(campaignId, dispatchedAt))) {
+      logger.info({ campaignId, enqueued: total }, "fan-out stopped by a hard stop");
+      return total;
+    }
     const members = await prisma.listMembership.findMany({
       where: { listId: campaign.listId },
       select: { contactId: true },
@@ -47,7 +67,7 @@ export async function fanOutCampaign(campaignId: string, runDate: string): Promi
       const key = campaignKey(campaignId, m.contactId, runDay);
       const source: SendEmailJob["source"] = { type: "campaign", campaignId, runDate };
       await enqueueSend(
-        { idempotencyKey: key, contactId: m.contactId, source },
+        { idempotencyKey: key, contactId: m.contactId, source, ...(hardStop ? { dispatchedAt: dispatchedAt.toISOString() } : {}) },
         { dedupeKey: queueJobId(key) },
       );
     }
@@ -56,10 +76,18 @@ export async function fanOutCampaign(campaignId: string, runDate: string): Promi
     if (members.length < BATCH) break;
   }
 
-  await prisma.campaign.update({
-    where: { id: campaignId },
-    data: { status: campaign.scheduleType === "ONCE" ? "SENT" : "SCHEDULED" },
-  });
+  if (hardStop) {
+    // Only while still SENDING, so a fan-out never overwrites the PAUSED a hard stop set.
+    await prisma.campaign.updateMany({
+      where: { id: campaignId, status: "SENDING" },
+      data: { status: campaign.scheduleType === "ONCE" ? "SENT" : "SCHEDULED" },
+    });
+  } else {
+    await prisma.campaign.update({
+      where: { id: campaignId },
+      data: { status: campaign.scheduleType === "ONCE" ? "SENT" : "SCHEDULED" },
+    });
+  }
 
   logger.info({ campaignId, enqueued: total }, "campaign fanned out");
   return total;

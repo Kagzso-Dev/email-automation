@@ -13,6 +13,8 @@ import { processWhatsAppMediaDownload } from "./whatsappMediaDownload.js";
 import { processDataQuality } from "./dataQuality.js";
 import { fanOutCampaign } from "./dispatch.js";
 import { processContactImport } from "./contactImport.js";
+import { isHardStopEnabled } from "../config/hardStop.js";
+import { cancelEmailJobAtCheckPoint, stopCoveringEmailJob } from "../domain/hardStop.js";
 
 /* ----------------------------------------------------- send-email */
 
@@ -23,7 +25,13 @@ const sendEmailWorker = new QueueWorker({
   minIntervalMs: Math.ceil(1000 / Math.max(1, env.SEND_RATE_PER_SEC)),
   backoffMs: env.SEND_BACKOFF_MS,
   pollMs: 1000,
-  processor: async (payload) => {
+  processor: async (payload, job) => {
+    if (isHardStopEnabled()) {
+      // Hard stop check point, before every attempt (first send or retry): a stop of this email's campaign, or Stop
+      // all, applied after it was dispatched means it is not sent.
+      const stop = await stopCoveringEmailJob(job.id, payload);
+      if (stop) return cancelEmailJobAtCheckPoint(stop, job, payload);
+    }
     if (await dailyCapReached()) {
       const runAt = new Date(Date.now() + msUntilNextWindow());
       logger.warn({ runAt }, "daily cap reached — deferring send to next window");

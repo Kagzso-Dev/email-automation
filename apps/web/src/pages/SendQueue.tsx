@@ -12,6 +12,9 @@ import { AiCallFollowupsQueue } from "../components/AiCallFollowupsQueue";
 import { QueueActions } from "../components/QueueActions";
 import { DeleteHistoryButton } from "../components/DeleteHistoryButton";
 import { useScrolledShadow } from "../lib/useScrolledShadow";
+import { useAuth } from "../lib/auth";
+import { useHardStopEnabled } from "../lib/hardStop";
+import { HardStopButton, HardStopTargetStatus, StopAllRunningSends } from "../components/HardStopButton";
 
 /**
  * Send Queue — batch history for the two send channels, each on its own tab.
@@ -61,6 +64,7 @@ export function SendQueuePage() {
   // "AI Call follow-ups" (approval queue) — admins only, while ENABLE_AI_CALLS is on.
   const aiCalls = useAiCallsConfig();
   const showAi = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
+  const hardStop = useHardStopEnabled(); // ENABLE_HARD_STOP: off = this page exactly as before
   const [tab, setTab] = useState<QueueTab>(() => {
     try {
       const saved = localStorage.getItem(TAB_KEY);
@@ -91,6 +95,7 @@ export function SendQueuePage() {
         title="Send Queue"
         subtitle="Track sent batches — which recipients are still sending, done, or failed. Email and WhatsApp are kept separate."
       />
+      {hardStop && <StopAllForAdmins />}
       <Tabs
         tabs={[
           { value: "email", label: "Email" },
@@ -107,6 +112,23 @@ export function SendQueuePage() {
       ) : (
         <EmailQueue {...viewProps("email")} />
       )}
+    </div>
+  );
+}
+
+/** Hard stop (flag on): "Stop all running sends", admins only. */
+function StopAllForAdmins() {
+  const { user } = useAuth();
+  return user?.role === "ADMIN" ? <StopAllRunningSends /> : null;
+}
+
+/** Hard stop (flag on): a stopped batch's status and cancelled-rows CSV, above its recipients. */
+function HardStopDetailStatus({ scope, id }: { scope: "EMAIL_BATCH" | "WHATSAPP_BATCH"; id: string }) {
+  const hardStop = useHardStopEnabled();
+  if (!hardStop) return null;
+  return (
+    <div className="mb-3">
+      <HardStopTargetStatus scope={scope} targetId={id} />
     </div>
   );
 }
@@ -244,7 +266,7 @@ function DownloadCsvButton({
 
 /* ================================================================== EMAIL TAB */
 
-type EmailItemStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "SKIPPED";
+type EmailItemStatus = "PENDING" | "SENDING" | "SENT" | "FAILED" | "SKIPPED" | "CANCELLED"; // CANCELLED: hard stop only
 
 interface EmailBatchRow {
   id: string;
@@ -282,11 +304,13 @@ const emailItemTone: Record<EmailItemStatus, BadgeTone> = {
   SENT: "ok",
   FAILED: "crit",
   SKIPPED: "warn",
+  CANCELLED: "neutral",
 };
 
 function EmailQueue({ view, setView }: QueueViewProps) {
   const status = view.status as "" | BatchStatus;
   const [expanded, setExpanded] = useState<string | null>(null);
+  const hardStop = useHardStopEnabled();
 
   const q = useQuery({
     queryKey: ["email-batches", status],
@@ -344,6 +368,7 @@ function EmailQueue({ view, setView }: QueueViewProps) {
                   <td className="px-4 py-2.5 text-slate-550">{b.total}</td>
                   <td className="px-4 py-2.5">
                     <Badge tone={batchTone[b.status]}>{b.status}</Badge>
+                    {hardStop && b.status === "CANCELLED" && <HardStopTargetStatus scope="EMAIL_BATCH" targetId={b.id} compact />}
                   </td>
                   <td className="px-4 py-2.5 font-mono text-ok">{b.sent}</td>
                   <td className="px-4 py-2.5 font-mono text-crit">{b.failed}</td>
@@ -352,6 +377,14 @@ function EmailQueue({ view, setView }: QueueViewProps) {
                     {b.completedAt ? formatDateTime(b.completedAt) : "—"}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                    {hardStop && b.status === "RUNNING" && (
+                      <HardStopButton
+                        scope="EMAIL_BATCH"
+                        targetId={b.id}
+                        className="btn-ghost px-2 py-1.5 text-crit"
+                        invalidate={[["email-batches"], ["email-batch", b.id]]}
+                      />
+                    )}
                     <DownloadCsvButton
                       filename={`email-batch-${b.id.slice(0, 8)}.csv`}
                       buildCsv={async () => {
@@ -418,11 +451,13 @@ function EmailBatchDetail({ id }: { id: string }) {
   if (q.error || !q.data) return <ErrorNote error={q.error ?? new Error("Batch not found.")} />;
 
   const v = q.data;
-  const done = v.counts.SENT + v.counts.FAILED + v.counts.SKIPPED;
+  const cancelled = v.counts.CANCELLED ?? 0; // only present after a hard stop
+  const done = v.counts.SENT + v.counts.FAILED + v.counts.SKIPPED + cancelled;
   const pct = v.total ? Math.round((done / v.total) * 100) : 100;
 
   return (
     <div>
+      {v.status === "CANCELLED" && <HardStopDetailStatus scope="EMAIL_BATCH" id={id} />}
       <ProgressBar pct={pct} barClass="bg-gradient-accent" />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-slate-550">
         <span>
@@ -434,6 +469,11 @@ function EmailBatchDetail({ id }: { id: string }) {
         <span>
           <b className="text-warn">{v.counts.SKIPPED}</b> skipped
         </span>
+        {cancelled > 0 && (
+          <span>
+            <b className="text-ink">{cancelled}</b> cancelled
+          </span>
+        )}
         {v.counts.PENDING + v.counts.SENDING > 0 && (
           <span>
             <b className="text-ink">{v.counts.PENDING + v.counts.SENDING}</b> to go
@@ -488,7 +528,7 @@ function EmailBatchDetail({ id }: { id: string }) {
 
 /* =============================================================== WHATSAPP TAB */
 
-type WaItemStatus = "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" | "SKIPPED";
+type WaItemStatus = "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" | "SKIPPED" | "CANCELLED"; // CANCELLED: hard stop only
 
 interface WaBatchRow {
   id: string;
@@ -528,11 +568,13 @@ const waItemTone: Record<WaItemStatus, BadgeTone> = {
   READ: "ok",
   FAILED: "crit",
   SKIPPED: "warn",
+  CANCELLED: "neutral",
 };
 
 function WhatsAppQueue({ view, setView }: QueueViewProps) {
   const status = view.status as "" | BatchStatus;
   const [expanded, setExpanded] = useState<string | null>(null);
+  const hardStop = useHardStopEnabled();
 
   const q = useQuery({
     queryKey: ["whatsapp-batches", status],
@@ -590,6 +632,7 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
                   <td className="px-4 py-2.5 text-slate-550">{b.total}</td>
                   <td className="px-4 py-2.5">
                     <Badge tone={batchTone[b.status]}>{b.status}</Badge>
+                    {hardStop && b.status === "CANCELLED" && <HardStopTargetStatus scope="WHATSAPP_BATCH" targetId={b.id} compact />}
                   </td>
                   <td className="px-4 py-2.5 font-mono text-ok">{b.sent}</td>
                   <td className="px-4 py-2.5 font-mono text-crit">{b.failed}</td>
@@ -598,6 +641,14 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
                     {b.completedAt ? formatDateTime(b.completedAt) : "—"}
                   </td>
                   <td className="whitespace-nowrap px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                    {hardStop && b.status === "RUNNING" && (
+                      <HardStopButton
+                        scope="WHATSAPP_BATCH"
+                        targetId={b.id}
+                        className="btn-ghost px-2 py-1.5 text-crit"
+                        invalidate={[["whatsapp-batches"], ["whatsapp-batch", b.id]]}
+                      />
+                    )}
                     <DownloadCsvButton
                       filename={`whatsapp-batch-${b.id.slice(0, 8)}.csv`}
                       buildCsv={async () => {
@@ -664,11 +715,13 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
   if (q.error || !q.data) return <ErrorNote error={q.error ?? new Error("Batch not found.")} />;
 
   const v = q.data;
-  const done = v.counts.SENT + v.counts.DELIVERED + v.counts.READ + v.counts.FAILED + v.counts.SKIPPED;
+  const cancelled = v.counts.CANCELLED ?? 0; // only present after a hard stop
+  const done = v.counts.SENT + v.counts.DELIVERED + v.counts.READ + v.counts.FAILED + v.counts.SKIPPED + cancelled;
   const pct = v.total ? Math.round((done / v.total) * 100) : 100;
 
   return (
     <div>
+      {v.status === "CANCELLED" && <HardStopDetailStatus scope="WHATSAPP_BATCH" id={id} />}
       <ProgressBar pct={pct} barClass="bg-wa" />
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs text-slate-550">
         <span>
@@ -680,6 +733,11 @@ function WhatsAppBatchDetail({ id }: { id: string }) {
         <span>
           <b className="text-warn">{v.counts.SKIPPED}</b> skipped
         </span>
+        {cancelled > 0 && (
+          <span>
+            <b className="text-ink">{cancelled}</b> cancelled
+          </span>
+        )}
         {v.counts.QUEUED + v.counts.SENDING > 0 && (
           <span>
             <b className="text-ink">{v.counts.QUEUED + v.counts.SENDING}</b> to go

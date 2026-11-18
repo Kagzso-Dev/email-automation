@@ -36,6 +36,8 @@
     "callflow:seed": "tsx prisma/seedCallFlowLanguages.ts --apply",
     "outreach:templates:plan": "tsx prisma/importOutreachTemplates.ts",
     "outreach:templates": "tsx prisma/importOutreachTemplates.ts --apply",
+    "images:strip-sizes:plan": "tsx prisma/stripImageSizes.ts",
+    "images:strip-sizes": "tsx prisma/stripImageSizes.ts --apply",
     "voice:lang:plan": "node scripts/voice-lang-env.mjs",
     "voice:lang:init": "node scripts/voice-lang-env.mjs --apply",
     "seed": "npm run db:seed",
