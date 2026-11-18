@@ -194,14 +194,19 @@ export function CollapsibleNavGroup({
         )}
       >
         <span className="truncate">{label}</span>
-        <Icon
-          name="chevron-down"
-          size={12}
-          className={cx(
-            "shrink-0 transition-transform duration-300 ease-in-out-soft motion-reduce:transition-none",
-            open && "rotate-180",
-          )}
-        />
+        {/* Red arrow that keeps bobbing (outer span) and turns 180° when the section opens (the icon).
+            Two elements because both moves use `transform`. Reduced motion stops the bob (global rule). */}
+        <span className="flex shrink-0 animate-arrow-nudge text-crit" aria-hidden="true">
+          <Icon
+            name="chevron-down"
+            size={14}
+            strokeWidth={2.25}
+            className={cx(
+              "transition-transform duration-300 ease-in-out-soft motion-reduce:transition-none",
+              open && "rotate-180",
+            )}
+          />
+        </span>
       </button>
       {/* Height animates via the grid row (0fr ↔ 1fr), with a fade; folded links are invisible, so they
           can't be tabbed to or read out. */}

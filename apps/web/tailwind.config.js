@@ -112,6 +112,11 @@ export default {
           "55%": { opacity: "1", transform: "translateY(1px) rotate(4deg)" },
           "100%": { transform: "translateY(0) rotate(0)" },
         },
+        // Sidebar language-section arrow: a gentle up/down bob that loops.
+        "arrow-nudge": {
+          "0%, 100%": { transform: "translateY(-1px)" },
+          "50%": { transform: "translateY(2px)" },
+        },
       },
       animation: {
         shimmer: "shimmer 1.4s infinite",
@@ -122,6 +127,7 @@ export default {
         "toast-in": "toast-in 340ms var(--ease-out)",
         "page-in": "page-in 250ms var(--ease-out) backwards",
         "mail-pop": "mail-pop 400ms var(--ease-out) 90ms both",
+        "arrow-nudge": "arrow-nudge 1.4s var(--ease-standard) infinite",
       },
     },
   },

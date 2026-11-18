@@ -8,6 +8,12 @@ import { CollapsibleNavGroup, Layout } from "../src/components/Layout";
 // heading, on its own, remembered per browser; the page you're on is never folded away. Every other section
 // keeps its plain heading. lib/api is mocked: nothing reaches the API.
 
+const EN_TA = [
+  { code: "en", name: "English", configured: true, enabled: true },
+  { code: "ta", name: "Tamil", configured: true, enabled: true },
+];
+let languages: Array<{ code: string; name: string; configured: boolean; enabled: boolean }> = EN_TA;
+
 vi.mock("../src/lib/auth", () => ({
   useAuth: () => ({ user: { role: "ADMIN", email: "a@example.com" }, loading: false, logout: () => undefined }),
 }));
@@ -24,10 +30,7 @@ vi.mock("../src/lib/api", async (importOriginal) => {
           configured: true,
           canStart: true,
           flowEditor: true,
-          languages: [
-            { code: "en", name: "English", configured: true, enabled: true },
-            { code: "ta", name: "Tamil", configured: true, enabled: true },
-          ],
+          languages,
         };
       if (path === "/api/whatsapp/inbox/unread-count") return { messages: 0, conversations: 0 };
       if (path === "/api/import-filter/config") return { enabled: false };
@@ -38,7 +41,10 @@ vi.mock("../src/lib/api", async (importOriginal) => {
 
 const KEY = "dispatch:sidebar-groups-open";
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  languages = EN_TA;
+});
 afterEach(() => cleanup());
 
 function renderAt(path: string) {
@@ -110,6 +116,30 @@ describe("sidebar: language sections fold", () => {
     renderAt("/ta/call-flows");
     expect((await toggle("Calls · Tamil")).getAttribute("aria-expanded")).toBe("true");
     expect(folded(await toggle("Calls · English"))).toBe(true); // "/call-flows" isn't "/ta/call-flows"
+  });
+
+  it("every switched-on language gets the same foldable section with the red, moving arrow", async () => {
+    languages = [
+      { code: "en", name: "English", configured: true, enabled: true },
+      { code: "ta", name: "Tamil", configured: true, enabled: true },
+      { code: "hi", name: "Hindi", configured: false, enabled: true }, // pages even before its backend is set up
+      { code: "kn", name: "Kannada", configured: true, enabled: false }, // switched off in Settings: no section
+      { code: "te", name: "Telugu", configured: true, enabled: true },
+    ];
+    renderAt("/");
+    await toggle("Calls · Telugu");
+    const toggles = menu().getAllByRole("button");
+    expect(toggles.map((b) => b.textContent)).toEqual(["Calls · English", "Calls · Tamil", "Calls · Hindi", "Calls · Telugu"]);
+    for (const b of toggles) {
+      expect(b.getAttribute("aria-expanded")).toBe("true");
+      const arrow = b.querySelector("span[aria-hidden='true']")!;
+      expect(arrow.className.split(" ")).toEqual(expect.arrayContaining(["text-crit", "animate-arrow-nudge"]));
+    }
+    expect(within(region(toggles[3]!)).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual([
+      "/te/ai-call-customers",
+      "/te/call-flows",
+      "/te/ai-agents",
+    ]);
   });
 
   it("unreadable storage just means the defaults", async () => {
