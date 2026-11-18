@@ -45,6 +45,7 @@ import { TrainingFromCallButton } from "./TrainingFromCall";
 import { ImportCountsSummary, OverLimitNote } from "./ImportSummary";
 import { CallInsightsLine, InterestBadge } from "./CallInsights";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
+import { SectionHardStopBar } from "./HardStopButton";
 import { useImportFilterStep } from "../lib/importFilter";
 import { VoicecallImportFilter } from "./ImportFilterFlows";
 
@@ -173,6 +174,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           </div>
         }
       />
+      <SectionHardStopBar section="CALLS" language={language} />
 
       <AiCallLanguageNotice>You can already add and import this language's customers; calling them starts working once it is.</AiCallLanguageNotice>
       <RunningCallsNote />

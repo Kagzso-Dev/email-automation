@@ -14,7 +14,7 @@ import { DeleteHistoryButton } from "../components/DeleteHistoryButton";
 import { useScrolledShadow } from "../lib/useScrolledShadow";
 import { useAuth } from "../lib/auth";
 import { useHardStopEnabled } from "../lib/hardStop";
-import { HardStopButton, HardStopTargetStatus, StopAllRunningSends } from "../components/HardStopButton";
+import { HardStopButton, HardStopTargetStatus, SectionHardStopBar, StopAllRunningSends } from "../components/HardStopButton";
 
 /**
  * Send Queue — batch history for the two send channels, each on its own tab.
@@ -332,6 +332,7 @@ function EmailQueue({ view, setView }: QueueViewProps) {
         onChange={(v) => setView({ status: v, page: 1 })}
         action={<QueueActions upload="email" history="email" />}
       />
+      <SectionHardStopBar section="EMAIL" />
       {q.isLoading ? (
         <ScrollTable head={HEAD}>
           <SkeletonRows cols={HEAD.length} />
@@ -596,6 +597,7 @@ function WhatsAppQueue({ view, setView }: QueueViewProps) {
         onChange={(v) => setView({ status: v, page: 1 })}
         action={<QueueActions upload="whatsapp" history="whatsapp" />}
       />
+      <SectionHardStopBar section="WHATSAPP" />
       {q.isLoading ? (
         <ScrollTable head={HEAD}>
           <SkeletonRows cols={HEAD.length} />

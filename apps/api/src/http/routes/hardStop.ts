@@ -8,6 +8,10 @@
 //   POST /api/hard-stop/ai-call-runs/:id            ADMIN, EDITOR: one AI call run (any language)
 //   POST /api/hard-stop/campaigns/:id               ADMIN (same as Pause)
 //   POST /api/hard-stop/all                         ADMIN: "Stop all running sends"
+//   POST /api/hard-stop/sections/email              ADMIN, EDITOR: everything running in Email only
+//   POST /api/hard-stop/sections/whatsapp           ADMIN, EDITOR: every running WhatsApp send only
+//   POST /api/hard-stop/sections/calls/:lang        ADMIN, EDITOR: the calls of one language only (en, ta, …)
+//   GET  /api/hard-stop/latest-section?scope=EMAIL|WHATSAPP|CALLS&language=ta   { stop }: that section's newest stop
 //   GET  /api/hard-stop/campaigns/:id/stoppable     { stoppable }: anything running or scheduled for it
 //   GET  /api/hard-stop/latest?scope=…&targetId=…   { stop }: the newest stop that covered that send (or null)
 //   GET  /api/hard-stop/latest-all                  ADMIN: { stop }: the newest Stop all (or null)
@@ -24,7 +28,16 @@ import { HARD_STOP_CSV_CHANNELS, idParam, type HardStopResult } from "@dispatch/
 import type { HardStopScope } from "@prisma/client";
 import { isHardStopEnabled } from "../../config/hardStop.js";
 import { logger } from "../../logger.js";
-import { getHardStopView, HardStopError, hardStopCsv, isCampaignStoppable, latestStopAllId, latestStopIdFor, pressHardStop } from "../../domain/hardStop.js";
+import {
+  getHardStopView,
+  HardStopError,
+  hardStopCsv,
+  isCampaignStoppable,
+  latestSectionStopId,
+  latestStopAllId,
+  latestStopIdFor,
+  pressHardStop,
+} from "../../domain/hardStop.js";
 import { finalizeHardStop } from "../../queue/hardStopFinalizer.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
 import { AppError, notFound, wrap } from "../errors.js";
@@ -33,6 +46,7 @@ export const hardStopRouter = Router();
 hardStopRouter.use(authRequired);
 
 const flagOn: RequestHandler = (_req, _res, next) => next(isHardStopEnabled() ? undefined : notFound("Hard stop"));
+const langParam = z.object({ lang: z.string().min(2).max(8) });
 
 const pressLimiter = rateLimit({
   windowMs: 60_000,
@@ -61,12 +75,19 @@ async function viewOf(stopId: string) {
   return getHardStopView(stopId);
 }
 
+/** The send's id from the path, none (Stop all, Email / WhatsApp sections) or the language (calls section). */
+function targetOf(scope: HardStopScope, params: unknown): string | null {
+  if (scope === "ALL" || scope === "EMAIL" || scope === "WHATSAPP") return null;
+  if (scope === "CALLS") return langParam.parse(params).lang;
+  return idParam.parse(params).id;
+}
+
 function press(scope: HardStopScope, roles: ("ADMIN" | "EDITOR")[]) {
   return [
     requireRole(...roles),
     pressLimiter,
     wrap(async (req, res) => {
-      const targetId = scope === "ALL" ? null : idParam.parse(req.params).id;
+      const targetId = targetOf(scope, req.params);
       try {
         const { stopId, created } = await pressHardStop(scope, targetId, { id: req.user!.id, email: req.user!.email });
         const stop = await viewOf(stopId);
@@ -84,6 +105,21 @@ hardStopRouter.post("/whatsapp-batches/:id", ...press("WHATSAPP_BATCH", ["ADMIN"
 hardStopRouter.post("/ai-call-runs/:id", ...press("AI_CALL_RUN", ["ADMIN", "EDITOR"]));
 hardStopRouter.post("/campaigns/:id", ...press("CAMPAIGN", ["ADMIN"]));
 hardStopRouter.post("/all", ...press("ALL", ["ADMIN"]));
+// One section's button: only that section (another section, and another language's calls, are never touched).
+hardStopRouter.post("/sections/email", ...press("EMAIL", ["ADMIN", "EDITOR"]));
+hardStopRouter.post("/sections/whatsapp", ...press("WHATSAPP", ["ADMIN", "EDITOR"]));
+hardStopRouter.post("/sections/calls/:lang", ...press("CALLS", ["ADMIN", "EDITOR"]));
+
+const sectionQuery = z.object({ scope: z.enum(["EMAIL", "WHATSAPP", "CALLS"]), language: z.string().max(8).optional() });
+
+hardStopRouter.get(
+  "/latest-section",
+  wrap(async (req, res) => {
+    const { scope, language } = sectionQuery.parse(req.query);
+    const id = await latestSectionStopId(scope, language ?? null);
+    res.json({ stop: id ? await viewOf(id) : null });
+  }),
+);
 
 hardStopRouter.get(
   "/campaigns/:id/stoppable",

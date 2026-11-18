@@ -47,6 +47,7 @@ import {
 import { PageHeader } from "../components/Layout";
 import { RunningCallsNote } from "../components/RunningCallsNote";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
+import { SectionHardStopBar } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { Icon } from "../components/icons";
@@ -135,6 +136,7 @@ export function CallFlowsPage() {
           </button>
         }
       />
+      <SectionHardStopBar section="CALLS" language={language} />
       <p className="-mt-2 mb-4 max-w-3xl text-sm text-slate-550">
         {isEnglish(language) ? (
           <>

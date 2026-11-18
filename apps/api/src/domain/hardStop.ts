@@ -24,12 +24,12 @@
 
 import { randomUUID } from "node:crypto";
 import { Prisma, type HardStop, type HardStopScope } from "@prisma/client";
-import type { HardStopCsvChannel, HardStopView } from "@dispatch/shared";
+import { isAiCallLanguage, type AiCallLanguage, type HardStopCsvChannel, type HardStopView } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
 import { logger } from "../logger.js";
 import { QUEUE } from "../queue/queues.js";
 import { csvCell } from "./csv.js";
-import { languageName, languageOfRun } from "./aiCallLanguages.js";
+import { languageName, languageOfRun, runLanguageWhere } from "./aiCallLanguages.js";
 import { syncCustomerFromLog } from "./aiCallCustomerSync.js";
 import { addCustomerEvent } from "./aiCallFollowups.js";
 
@@ -47,6 +47,9 @@ export interface HardStopActor {
   id: string;
   email: string;
 }
+
+/** Stops that cover every email (queued, retries, fan-out, contacts import): Stop all and the Email section's button. */
+const EMAIL_WIDE: HardStopScope[] = ["ALL", "EMAIL"];
 
 /** A call dialing, ringing or connected: in progress, it always runs to its natural end. */
 const IN_FLIGHT_CALL = ["DIALING", "RINGING", "IN_PROGRESS"] as const;
@@ -401,9 +404,14 @@ async function campaignsWithQueuedEmails(): Promise<string[]> {
   return [...new Set(jobs.map((j) => j.dedupeKey?.split("_")[1]).filter((x): x is string => !!x))];
 }
 
-async function applyAll(stop: HardStop): Promise<void> {
+/**
+ * The Email section (its own button, or part of Stop all): campaigns, triggers, email drips, queued emails and retries,
+ * and a running contacts import.
+ */
+async function applyEmailSection(stop: HardStop): Promise<void> {
   // 1. Nothing new starts by itself: scheduled / sending campaigns are paused and active triggers switched off first
-  //    (an admin turns them back on with the existing Schedule button and trigger switch). Stop all only.
+  //    (an admin turns them back on with the existing Schedule button and trigger switch). A single campaign's stop
+  //    never does this.
   const campaigns = await prisma.campaign.findMany({ where: { status: { in: ["SCHEDULED", "SENDING"] } }, select: { id: true } });
   for (const id of new Set([...campaigns.map((c) => c.id), ...(await campaignsWithQueuedEmails())])) {
     await applyCampaign(stop, id, { recordPaused: true });
@@ -416,34 +424,48 @@ async function applyAll(stop: HardStop): Promise<void> {
   }
   await record(stop.id, pausedTriggers);
 
-  // 2. Every running drip and call run, in every language.
+  // 2. Every running email drip.
   for (const b of await prisma.manualSendBatch.findMany({ where: { status: "RUNNING" }, select: { id: true } })) await applyEmailBatch(stop, b.id);
-  for (const b of await prisma.whatsAppSendBatch.findMany({ where: { status: "RUNNING" }, select: { id: true } })) await applyWhatsAppBatch(stop, b.id);
-  for (const r of await prisma.aiCallRun.findMany({ where: { status: "RUNNING" }, select: { id: true } })) {
-    await applyAiCallRun(stop, r.id, { followups: false });
-  }
 
   // 3. Every other queued email (trigger and one-off sends) and every queued retry.
   await cancelEmailJobs(stop, {});
 
-  // 4. Approved call-again follow-ups waiting for their time (drafts waiting for approval are kept).
-  await cancelApprovedFollowups(stop, {});
+  // 4. In progress: emails being sent, a fan-out part way, a contacts import (it stops after the batch being written).
+  await recordActiveJobs(stop, [QUEUE.sendEmail, QUEUE.csvImport, QUEUE.campaignDispatch], "email");
+}
 
-  // 5. In progress elsewhere: emails being sent, a follow-up turning into its call run, a contacts import.
-  const active = await prisma.job.findMany({
-    where: { status: "ACTIVE", queue: { in: [QUEUE.sendEmail, QUEUE.aiCallFollowup, QUEUE.csvImport, QUEUE.campaignDispatch] } },
-    select: { id: true, queue: true, dedupeKey: true },
-  });
+/** The WhatsApp section: every running WhatsApp drip (approved WhatsApp follow-ups are drips already). */
+async function applyWhatsAppSection(stop: HardStop): Promise<void> {
+  for (const b of await prisma.whatsAppSendBatch.findMany({ where: { status: "RUNNING" }, select: { id: true } })) await applyWhatsAppBatch(stop, b.id);
+}
+
+/**
+ * The calls of one language (its own button; null = every language, for Stop all): its running call runs and its
+ * approved call-again follow-ups waiting for their time (drafts waiting for approval are kept). Another language's
+ * runs and follow-ups are never touched.
+ */
+async function applyCallsSection(stop: HardStop, language: AiCallLanguage | null): Promise<void> {
+  const runs = await prisma.aiCallRun.findMany({ where: { status: "RUNNING", ...(language ? runLanguageWhere(language) : {}) }, select: { id: true } });
+  for (const r of runs) await applyAiCallRun(stop, r.id, { followups: false });
+  // A follow-up's language is its customer's list.
+  await cancelApprovedFollowups(stop, language ? { customer: { is: { language } } } : {});
+  // A follow-up turning into its call run right now is in progress (Stop all only: a job doesn't say its language).
+  if (!language) await recordActiveJobs(stop, [QUEUE.aiCallFollowup], "calls");
+}
+
+async function recordActiveJobs(stop: HardStop, queues: string[], channel: string): Promise<void> {
+  const active = await prisma.job.findMany({ where: { status: "ACTIVE", queue: { in: queues } }, select: { id: true, queue: true, dedupeKey: true } });
   await record(
     stop.id,
-    active.map((j): Rec => ({
-      channel: j.queue === QUEUE.aiCallFollowup ? "calls" : "email",
-      kind: "in_progress",
-      refTable: "Job",
-      refId: j.id,
-      extra: { queue: j.queue, dedupeKey: j.dedupeKey },
-    })),
+    active.map((j): Rec => ({ channel, kind: "in_progress", refTable: "Job", refId: j.id, extra: { queue: j.queue, dedupeKey: j.dedupeKey } })),
   );
+}
+
+/** Stop all running sends: every section, every language. */
+async function applyAll(stop: HardStop): Promise<void> {
+  await applyEmailSection(stop);
+  await applyWhatsAppSection(stop);
+  await applyCallsSection(stop, null);
 }
 
 async function apply(stop: HardStop): Promise<void> {
@@ -459,6 +481,12 @@ async function apply(stop: HardStop): Promise<void> {
       return applyCampaign(stop, stop.targetId!, { recordPaused: false });
     case "ALL":
       return applyAll(stop);
+    case "EMAIL":
+      return applyEmailSection(stop);
+    case "WHATSAPP":
+      return applyWhatsAppSection(stop);
+    case "CALLS":
+      return applyCallsSection(stop, stop.targetId as AiCallLanguage);
   }
 }
 
@@ -510,7 +538,12 @@ async function assertStoppable(scope: HardStopScope, targetId: string | null): P
       if (!(await campaignRunning(targetId!))) throw new HardStopError(409, "Nothing is running or scheduled for this campaign");
       return;
     case "ALL":
-      return; // always allowed: it also pauses campaigns and switches triggers off
+    case "EMAIL":
+    case "WHATSAPP":
+      return; // always allowed (Stop all and the Email button also pause campaigns and switch triggers off)
+    case "CALLS":
+      if (!targetId || !isAiCallLanguage(targetId)) throw new HardStopError(404, "Unknown call language");
+      return;
   }
 }
 
@@ -607,7 +640,7 @@ export async function stopCoveringEmailJob(jobId: string, payload: Record<string
   return prisma.hardStop.findFirst({
     where: {
       appliedAt: { gt: since },
-      OR: [{ scope: "ALL" }, ...(campaignId ? [{ scope: "CAMPAIGN" as const, targetId: campaignId }] : [])],
+      OR: [{ scope: { in: EMAIL_WIDE } }, ...(campaignId ? [{ scope: "CAMPAIGN" as const, targetId: campaignId }] : [])],
     },
     orderBy: { appliedAt: "desc" },
   });
@@ -629,17 +662,17 @@ export async function cancelEmailJobAtCheckPoint(
   return { cancelled: stop.reason, stopId: stop.id };
 }
 
-/** Campaign fan-out: a stop for this campaign (or Stop all) applied after this fan-out started. */
+/** Campaign fan-out: a stop for this campaign (or the Email button, or Stop all) applied after this fan-out started. */
 export function stopCoveringFanOut(campaignId: string, dispatchedAt: Date): Promise<HardStop | null> {
   return prisma.hardStop.findFirst({
-    where: { appliedAt: { gt: dispatchedAt }, OR: [{ scope: "ALL" }, { scope: "CAMPAIGN", targetId: campaignId }] },
+    where: { appliedAt: { gt: dispatchedAt }, OR: [{ scope: { in: EMAIL_WIDE } }, { scope: "CAMPAIGN", targetId: campaignId }] },
     orderBy: { appliedAt: "desc" },
   });
 }
 
-/** Contacts import: a Stop all applied after the import started. */
+/** Contacts import: a Stop all or Email-section stop applied after the import started. */
 export function stopAllSince(since: Date): Promise<HardStop | null> {
-  return prisma.hardStop.findFirst({ where: { scope: "ALL", appliedAt: { gt: since } }, orderBy: { appliedAt: "desc" } });
+  return prisma.hardStop.findFirst({ where: { scope: { in: EMAIL_WIDE }, appliedAt: { gt: since } }, orderBy: { appliedAt: "desc" } });
 }
 
 /** The rows a stopped contacts import did not write: recorded for the email CSV (a later import). */
@@ -758,7 +791,7 @@ export async function settleStuckInProgress(stopId: string): Promise<number> {
  * were in progress.
  */
 export async function sweepCoveredEmailJobs(stop: HardStop): Promise<void> {
-  if (stop.scope === "ALL") await cancelEmailJobs(stop, {}, { coveredOnly: true });
+  if (EMAIL_WIDE.includes(stop.scope)) await cancelEmailJobs(stop, {}, { coveredOnly: true });
   if (stop.scope === "CAMPAIGN") await cancelEmailJobs(stop, { dedupeKey: { startsWith: `campaign_${stop.targetId}_` } }, { coveredOnly: true });
 }
 
@@ -829,30 +862,41 @@ export async function getHardStopView(stopId: string): Promise<HardStopView | nu
   };
 }
 
-const JOB_TABLE: Record<Exclude<HardStopScope, "ALL">, string> = {
+/** A stop of one send (a batch, a call run, a campaign). */
+export type HardStopJobScope = "EMAIL_BATCH" | "WHATSAPP_BATCH" | "AI_CALL_RUN" | "CAMPAIGN";
+/** A section's button: Email, WhatsApp, or the calls of one language. */
+export type HardStopSectionScope = "EMAIL" | "WHATSAPP" | "CALLS";
+
+const JOB_TABLE: Record<HardStopJobScope, string> = {
   EMAIL_BATCH: "ManualSendBatch",
   WHATSAPP_BATCH: "WhatsAppSendBatch",
   AI_CALL_RUN: "ai_call_runs",
   CAMPAIGN: "Campaign",
 };
 
-/** The newest stop that covered this send: its own, or a Stop all that stopped it. */
-export async function latestStopIdFor(scope: Exclude<HardStopScope, "ALL">, targetId: string): Promise<string | null> {
-  const [own, viaAll] = await Promise.all([
+/** The newest stop that covered this send: its own, or a Stop all / section stop that stopped it. */
+export async function latestStopIdFor(scope: HardStopJobScope, targetId: string): Promise<string | null> {
+  const [own, viaWider] = await Promise.all([
     prisma.hardStop.findFirst({ where: { scope, targetId }, orderBy: { createdAt: "desc" }, select: { id: true, createdAt: true } }),
     prisma.hardStopItem.findFirst({
-      where: { kind: "job", refTable: JOB_TABLE[scope], refId: targetId, stop: { scope: "ALL" } },
+      where: { kind: "job", refTable: JOB_TABLE[scope], refId: targetId, stop: { scope: { in: ["ALL", "EMAIL", "WHATSAPP", "CALLS"] } } },
       orderBy: { createdAt: "desc" },
       select: { stopId: true, createdAt: true },
     }),
   ]);
-  if (own && viaAll) return own.createdAt >= viaAll.createdAt ? own.id : viaAll.stopId;
-  return own?.id ?? viaAll?.stopId ?? null;
+  if (own && viaWider) return own.createdAt >= viaWider.createdAt ? own.id : viaWider.stopId;
+  return own?.id ?? viaWider?.stopId ?? null;
 }
 
 /** The newest Stop all (for the Send Queue header), if any. */
 export async function latestStopAllId(): Promise<string | null> {
   return (await prisma.hardStop.findFirst({ where: { scope: "ALL" }, orderBy: { createdAt: "desc" }, select: { id: true } }))?.id ?? null;
+}
+
+/** The newest stop of one section's button (CALLS: of that language), if any. */
+export async function latestSectionStopId(scope: HardStopSectionScope, language: string | null): Promise<string | null> {
+  const targetId = scope === "CALLS" ? language : null;
+  return (await prisma.hardStop.findFirst({ where: { scope, targetId }, orderBy: { createdAt: "desc" }, select: { id: true } }))?.id ?? null;
 }
 
 /* ------------------------------------------------------------------ cancelled rows CSV */

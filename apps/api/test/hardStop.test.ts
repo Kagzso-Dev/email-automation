@@ -409,6 +409,83 @@ describe("email retries, campaign fan-out and Stop all", () => {
   });
 });
 
+/* ------------------------------------------------------------------ a section's own button */
+
+describe("a section's Hard stop (Email, WhatsApp, the calls of one language) stops only that section", () => {
+  /** One running send of every kind, English and Tamil calls, and follow-ups in both languages. */
+  function everything() {
+    const email = emailBatch(2);
+    const wa = waBatch(2);
+    hs.seed("aiCallRun", { id: "runEn", mode: "SELECTED", status: "RUNNING", gapSeconds: 0, maxCalls: 1, total: 1 });
+    hs.seed("aiCallLog", { id: "en1", runId: "runEn", position: 0, phone: "+919000000101", status: "QUEUED" });
+    hs.seed("callFlow", { id: "flowTa", language: "ta" });
+    hs.seed("callFlowVersion", { id: "fvTa", flowId: "flowTa" });
+    hs.seed("aiCallRun", { id: "runTa", mode: "SELECTED", status: "RUNNING", gapSeconds: 0, maxCalls: 1, total: 1 });
+    hs.seed("aiCallRunFlow", { runId: "runTa", flowVersionId: "fvTa" });
+    hs.seed("aiCallLog", { id: "ta1", runId: "runTa", position: 0, phone: "+919000000102", status: "QUEUED" });
+    hs.seed("aiCallCustomer", { id: "custEn", customerName: "E", gender: "male", phone: "+919000000201", language: "en" });
+    hs.seed("aiCallCustomer", { id: "custTa", customerName: "T", gender: "male", phone: "+919000000202", language: "ta" });
+    hs.seed("aiCallFollowup", { id: "fuEn", channel: "CALL", status: "APPROVED", customerId: "custEn", aiCallRunId: null });
+    hs.seed("aiCallFollowup", { id: "fuTa", channel: "CALL", status: "APPROVED", customerId: "custTa", aiCallRunId: null });
+    hs.seed("campaign", { id: "k1", name: "K", status: "SCHEDULED", scheduleType: "ONCE", listId: "L", templateId: "t1" });
+    hs.seed("trigger", { id: "tr1", name: "Signup", active: true });
+    return { email, wa };
+  }
+  const state = () => ({
+    email: hs.T("manualSendBatch")[0]!.status,
+    wa: hs.T("whatsAppSendBatch")[0]!.status,
+    runEn: hs.T("aiCallRun").find((r) => r.id === "runEn")!.status,
+    runTa: hs.T("aiCallRun").find((r) => r.id === "runTa")!.status,
+    fuEn: hs.T("aiCallFollowup").find((f) => f.id === "fuEn")!.status,
+    fuTa: hs.T("aiCallFollowup").find((f) => f.id === "fuTa")!.status,
+    campaign: hs.T("campaign")[0]!.status,
+    trigger: hs.T("trigger")[0]!.active,
+  });
+  const untouched = { email: "RUNNING", wa: "RUNNING", runEn: "RUNNING", runTa: "RUNNING", fuEn: "APPROVED", fuTa: "APPROVED", campaign: "SCHEDULED", trigger: true };
+
+  it("WhatsApp: only WhatsApp sends", async () => {
+    everything();
+    const { stopId } = await pressHardStop("WHATSAPP", null, ADMIN);
+    expect(state()).toEqual({ ...untouched, wa: "CANCELLED" });
+    expect(status("whatsAppSend")).toEqual({ w1: "CANCELLED", w2: "CANCELLED" });
+    expect(await getHardStopView(stopId)).toMatchObject({ scope: "WHATSAPP", cancelled: 2 });
+  });
+
+  it("Email: email drips, campaigns (paused), triggers (switched off) and queued emails; nothing else", async () => {
+    everything();
+    hs.seed("job", { queue: "send-email", payload: { idempotencyKey: "trigger:tr1:c1:x", contactId: "c1", source: { type: "trigger", triggerId: "tr1", payload: {} } }, dedupeKey: "trigger_tr1_c1_x" });
+    const { stopId } = await pressHardStop("EMAIL", null, ADMIN);
+    expect(state()).toEqual({ ...untouched, email: "CANCELLED", campaign: "PAUSED", trigger: false });
+    expect(hs.T("job").filter((j) => j.queue === "send-email")).toEqual([]);
+    // Its check points cover email: a retry or a late fan-out chunk dispatched before it is not sent.
+    const late = { idempotencyKey: "campaign:k1:c2:d", contactId: "c2", source: { type: "campaign", campaignId: "k1" }, dispatchedAt: new Date(Date.now() - 1000).toISOString() };
+    expect((await stopCoveringEmailJob("any", late))?.id).toBe(stopId);
+  });
+
+  it("Calls · Tamil: only Tamil runs and Tamil follow-ups; English calls continue", async () => {
+    everything();
+    const { stopId } = await pressHardStop("CALLS", "ta", ADMIN);
+    expect(state()).toEqual({ ...untouched, runTa: "CANCELLED", fuTa: "CANCELLED" });
+    expect(status("aiCallLog")).toEqual({ en1: "QUEUED", ta1: "CANCELLED" });
+    expect(await getHardStopView(stopId)).toMatchObject({ scope: "CALLS", targetId: "ta", cancelled: 1, followupsCancelled: 1 });
+  });
+
+  it("Calls · English: only English runs (those without a flow too) and English follow-ups", async () => {
+    everything();
+    await pressHardStop("CALLS", "en", ADMIN);
+    expect(state()).toEqual({ ...untouched, runEn: "CANCELLED", fuEn: "CANCELLED" });
+  });
+
+  it("each language has its own open stop; an unknown language is refused", async () => {
+    everything();
+    const ta = await pressHardStop("CALLS", "ta", ADMIN);
+    const en = await pressHardStop("CALLS", "en", ADMIN);
+    expect(en.stopId).not.toBe(ta.stopId);
+    expect((await pressHardStop("CALLS", "ta", ADMIN)).stopId).toBe(ta.stopId); // same open stop again
+    await expect(pressHardStop("CALLS", "xx", ADMIN)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 /* ------------------------------------------------------------------ idempotency, audit, CSV */
 
 describe("idempotency, audit and the cancelled-rows CSV", () => {

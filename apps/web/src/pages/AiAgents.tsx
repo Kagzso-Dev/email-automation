@@ -9,6 +9,7 @@ import { AiAgentCall } from "../components/AiAgentCall";
 import { AiCallLanguageNotice } from "../components/AiCallLanguageNotice";
 import { useConfirm } from "../components/confirm";
 import { Badge, EmptyState, ErrorNote, Spinner, Tabs } from "../components/ui";
+import { SectionHardStopBar } from "../components/HardStopButton";
 import { useAiCallsConfig } from "../lib/aiCalls";
 import { titleFor, useAiCallLanguage } from "../lib/aiCallLanguage";
 import { api } from "../lib/api";
@@ -68,6 +69,7 @@ export function AiAgentsPage() {
           </button>
         }
       />
+      <SectionHardStopBar section="CALLS" language={language} />
       <AiCallLanguageNotice />
       {!aiAgentLanguageSupported(language) && (
         <p className="mb-3 rounded-lg border border-warn-line bg-warn-soft px-3 py-2 text-sm">

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { PageHeader } from "../components/Layout";
 import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
+import { SectionHardStopBar } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
 import { useToast } from "../components/toast";
 import { SendWhatsApp } from "../components/SendWhatsApp";
@@ -283,6 +284,7 @@ export function ContactsPage() {
           </div>
         }
       />
+      <SectionHardStopBar section="EMAIL" />
 
       {importMut.isPending && <div className="mb-3 text-sm text-slate-550">Uploading file…</div>}
       {importJob && (

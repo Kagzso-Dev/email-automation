@@ -30,6 +30,9 @@ const RELATIONS: Record<string, Record<string, Relation>> = {
   hardStopItem: { stop: { model: "hardStop", kind: "one", fk: "stopId" } },
   aiCallRun: { logs: { model: "aiCallLog", kind: "many", fk: "runId" }, flow: { model: "aiCallRunFlow", kind: "one", fk: "runId", back: true } },
   aiCallFollowup: { customer: { model: "aiCallCustomer", kind: "one", fk: "customerId" } },
+  // A run's language: run → its pinned flow version → that flow (domain/aiCallLanguages runLanguageWhere).
+  aiCallRunFlow: { flowVersion: { model: "callFlowVersion", kind: "one", fk: "flowVersionId" } },
+  callFlowVersion: { flow: { model: "callFlow", kind: "one", fk: "flowId" } },
   aiCallCustomerCall: { customer: { model: "aiCallCustomer", kind: "one", fk: "customerId" } },
 };
 

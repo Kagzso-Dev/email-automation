@@ -59,6 +59,8 @@ describe("flag off (default): exactly as before", () => {
     expect(await (await get("/api/hard-stop/config")).json()).toEqual({ enabled: false });
     expect((await post("/api/hard-stop/email-batches/b1")).status).toBe(404);
     expect((await post("/api/hard-stop/all", "ADMIN")).status).toBe(404);
+    expect((await post("/api/hard-stop/sections/whatsapp", "ADMIN")).status).toBe(404);
+    expect((await post("/api/hard-stop/sections/calls/ta", "ADMIN")).status).toBe(404);
     expect((await get("/api/hard-stop/anything")).status).toBe(404);
     expect((await get("/api/hard-stop/latest?scope=EMAIL_BATCH&targetId=b1")).status).toBe(404);
     expect(hs.T("hardStop")).toEqual([]);
@@ -127,6 +129,20 @@ describe("flag on", () => {
     expect(lines[0]).toBe("email,first_name,last_name,phone,business,cancelled_from,reason");
     expect(lines.slice(1).map((l) => l.split(",")[0])).toEqual(["c2@x.test", "c3@x.test"]); // never the one in progress
     expect((await get(`/api/hard-stop/${stop.id}/cancelled.csv?channel=fax`)).status).toBe(400);
+  });
+
+  it("section buttons: Admin and Editor may press them; an unknown language is a 404; the latest is readable", async () => {
+    emailBatch();
+    const wa = (await (await post("/api/hard-stop/sections/whatsapp", "EDITOR")).json()) as HardStopResult;
+    expect(wa.stop).toMatchObject({ scope: "WHATSAPP", targetId: null, byEmail: "editor@test" });
+    expect((await post("/api/hard-stop/sections/calls/ta", "EDITOR")).status).toBe(200);
+    expect((await post("/api/hard-stop/sections/email", "ADMIN")).status).toBe(200);
+    expect((await post("/api/hard-stop/sections/calls/xx", "EDITOR")).status).toBe(404);
+    const latest = (await (await get("/api/hard-stop/latest-section?scope=CALLS&language=ta")).json()) as { stop: { scope: string; targetId: string } };
+    expect(latest.stop).toMatchObject({ scope: "CALLS", targetId: "ta" });
+    expect(((await (await get("/api/hard-stop/latest-section?scope=CALLS&language=hi")).json()) as { stop: unknown }).stop).toBeNull();
+    // The email button stopped the email send (WhatsApp's did not).
+    expect(hs.T("manualSendBatch")[0]!.status).toBe("CANCELLED");
   });
 
   it("the confirmation text is the one agreed, word for word", () => {

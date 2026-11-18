@@ -4,10 +4,11 @@
 // exactly as before.
 
 import { useQuery } from "@tanstack/react-query";
-import type { HardStopCsvChannel, HardStopScope, HardStopView } from "@dispatch/shared";
+import type { HardStopCsvChannel, HardStopScope, HardStopSection, HardStopView } from "@dispatch/shared";
 import { api, apiResponse } from "./api";
 
-export type HardStopTargetScope = Exclude<HardStopScope, "ALL">;
+/** A stop of one send (its row, its call run, its campaign). */
+export type HardStopTargetScope = "EMAIL_BATCH" | "WHATSAPP_BATCH" | "AI_CALL_RUN" | "CAMPAIGN";
 
 const CONFIG_KEY = ["hard-stop-config"] as const;
 
@@ -28,6 +29,10 @@ const PRESS_PATH: Record<HardStopScope, (id: string | null) => string> = {
   AI_CALL_RUN: (id) => `/api/hard-stop/ai-call-runs/${id}`,
   CAMPAIGN: (id) => `/api/hard-stop/campaigns/${id}`,
   ALL: () => "/api/hard-stop/all",
+  // A section's button; for CALLS the id is the language (en, ta, …).
+  EMAIL: () => "/api/hard-stop/sections/email",
+  WHATSAPP: () => "/api/hard-stop/sections/whatsapp",
+  CALLS: (lang) => `/api/hard-stop/sections/calls/${lang}`,
 };
 
 export function hardStopPath(scope: HardStopScope, targetId: string | null): string {
@@ -47,6 +52,16 @@ export function useLatestHardStop(scope: HardStopTargetScope, targetId: string, 
     queryKey: ["hard-stop-latest", scope, targetId],
     queryFn: () => api<{ stop: HardStopView | null }>(`/api/hard-stop/latest?scope=${scope}&targetId=${encodeURIComponent(targetId)}`),
     enabled,
+    refetchInterval: pollWhileStopping,
+  });
+}
+
+/** The newest stop of one section's button (CALLS: of that language), or null. */
+export function useLatestSectionStop(section: HardStopSection, language: string | null) {
+  return useQuery({
+    queryKey: ["hard-stop-latest-section", section, language],
+    queryFn: () =>
+      api<{ stop: HardStopView | null }>(`/api/hard-stop/latest-section?scope=${section}${section === "CALLS" && language ? `&language=${language}` : ""}`),
     refetchInterval: pollWhileStopping,
   });
 }

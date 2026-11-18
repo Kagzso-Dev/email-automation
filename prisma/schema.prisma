@@ -1208,6 +1208,10 @@ enum HardStopScope {
   WHATSAPP_BATCH // WhatsAppSendBatch
   AI_CALL_RUN // AiCallRun (any language)
   CAMPAIGN // Campaign
+  // One section's button (migration 0040): everything running in that section only.
+  EMAIL // email drips, campaigns, trigger / one-off emails, a running contacts import
+  WHATSAPP // WhatsApp drips
+  CALLS // AI calls of one language (targetId = the language code) and its call-again follow-ups
 }
 
 enum HardStopStatus {

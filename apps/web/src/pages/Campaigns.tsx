@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { PageHeader } from "../components/Layout";
 import { Badge, campaignTone, EmptyState, ErrorNote, Modal, Spinner, Table } from "../components/ui";
+import { SectionHardStopBar } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
 import { describeError, useToast } from "../components/toast";
 import { CampaignAssistant } from "../components/CampaignAssistant";
@@ -92,6 +93,7 @@ export function CampaignsPage() {
           </button>
         }
       />
+      <SectionHardStopBar section="EMAIL" />
       {isLoading ? (
         <Spinner />
       ) : error ? (

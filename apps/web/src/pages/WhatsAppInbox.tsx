@@ -10,6 +10,7 @@ import { PageHeader } from "../components/Layout";
 import { WhatsAppMedia } from "../components/WhatsAppMedia";
 import { useFillHeight } from "../components/QueueTable";
 import { Badge, EmptyState, ErrorNote } from "../components/ui";
+import { SectionHardStopBar } from "../components/HardStopButton";
 import { Icon } from "../components/icons";
 
 /**
@@ -107,6 +108,7 @@ export function WhatsAppInboxPage() {
         title="WhatsApp Inbox"
         subtitle="Messages customers sent you, with their photos, videos, voice notes and documents. Reply within 24 hours of their last message."
       />
+      <SectionHardStopBar section="WHATSAPP" />
       {nothingYet ? (
         <EmptyState icon="inbox" title="No messages yet">
           Customer replies arrive here once the Meta webhook is connected (WhatsApp → Configuration in the Meta app,

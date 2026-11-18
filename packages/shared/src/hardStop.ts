@@ -6,8 +6,10 @@
 export const HARD_STOP_CONFIRM_TEXT =
   "Items already in progress (calls, messages, emails) will finish. Everything not started will be cancelled, including retries and follow-ups. This cannot be undone.";
 
-export const HARD_STOP_SCOPES = ["ALL", "EMAIL_BATCH", "WHATSAPP_BATCH", "AI_CALL_RUN", "CAMPAIGN"] as const;
+/** ALL = Stop all; *_BATCH / AI_CALL_RUN / CAMPAIGN = one send; EMAIL / WHATSAPP / CALLS (one language) = a section's button. */
+export const HARD_STOP_SCOPES = ["ALL", "EMAIL_BATCH", "WHATSAPP_BATCH", "AI_CALL_RUN", "CAMPAIGN", "EMAIL", "WHATSAPP", "CALLS"] as const;
 export type HardStopScope = (typeof HARD_STOP_SCOPES)[number];
+export type HardStopSection = "EMAIL" | "WHATSAPP" | "CALLS";
 
 /** One file per channel in the cancelled-rows download, with the columns that channel's import accepts. */
 export const HARD_STOP_CSV_CHANNELS = ["email", "whatsapp", "calls"] as const;
