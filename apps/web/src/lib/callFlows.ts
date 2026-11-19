@@ -74,6 +74,10 @@ export interface VoiceOption {
   name: string;
   gender?: string;
   language?: string;
+  /** A Sarvam cloned voice (the backend's SARVAM_TTS_VOICE_<LANG>_*), not a stock Bulbul speaker. */
+  cloned?: boolean;
+  /** A pool ("cloned_male"): one of these voices, picked once when each call starts. */
+  pool?: string[];
 }
 
 export interface CallFlowPreview {

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import call_context, get_logger
-from app.core.voices import offered_voice
+from app.core.voices import is_voice_pool, offered_voice, resolve_voice
 from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import FINAL_CALL_STATUSES, LOCKED_OUTCOMES, Call, CallOutcome, CallStatus, utcnow
@@ -690,6 +690,7 @@ async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], p
     tts = providers.tts_for_agent_voice(picked_voice) if picked_voice else providers.tts_for_voice(voice_id)
     if agent_voice:
         tts = provider_registry.with_agent_voice(tts, agent_pace)
+    tts = provider_registry.with_clone_fallback(tts)
     try:
         mulaw = await asyncio.wait_for(synthesize_line(tts, text, pauses, pace), timeout=15)
     except Exception as exc:  # live TTS still works; never fail the call over this
@@ -842,6 +843,15 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
             flow_event = ("flow:selected", {**resolved.info, "agent_id": agent.id, "time_limit": time_limit})
 
+    # A voice pool ("cloned_male": either cloned male voice) becomes ONE voice here, once: it is saved on the call and
+    # every line (greeting pre-render, replies, fixed lines) uses it - the voice never changes mid-call.
+    pooled_voice = resolve_voice(flow_voice) if is_voice_pool(flow_voice) else None
+    if pooled_voice:
+        log.info("Voice %s: this call uses %s", flow_voice, pooled_voice)
+        flow_voice = pooled_voice
+        if flow_vars.get("flow_agent_voice"):
+            flow_vars["flow_agent_voice"] = pooled_voice
+
     existing = await repo.get_contact_by_phone(db, req.phone_number)
     if existing is not None and existing.dnd:
         raise CallError(409, "Contact is marked Do-Not-Disturb; call not placed")
@@ -886,7 +896,7 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         if agent_picked_voice:
             voice_id = agent_picked_voice
         elif not rotation:
-            voice_id = None
+            voice_id = pooled_voice  # None (as before) unless the flow picked a pool
         elif cfg.voice_rotation_mode == "concurrent":
             # Ignore calls stuck in a live status (e.g. a missed hangup webhook) after the max duration.
             since = utcnow() - timedelta(seconds=cfg.MAX_CALL_DURATION_SECONDS + 300)
@@ -1320,6 +1330,8 @@ class CallSession:
         self.tts = self.providers.tts_for_agent_voice(picked) if picked else self.providers.tts_for_voice(ctx.voice_id)
         if self.agent_voice:
             self.tts = provider_registry.with_agent_voice(self.tts, agent_voice_pace(ctx.variables))
+        # A cloned voice (SARVAM_TTS_VOICE_<LANG>_*): this call's own fallback to a stock voice of its gender on a Sarvam error.
+        self.tts = provider_registry.with_clone_fallback(self.tts)
         self.stt = stt_for_call(self.providers.stt, ctx.variables, cfg)
         # Which LLM chain / STT / TTS / voice this call uses (never a key): one line per call for the logs.
         log.info("Call providers: %s", provider_registry.describe_call(self.providers, self.stt, self.tts))

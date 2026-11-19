@@ -479,6 +479,54 @@ class FallbackTTS(TTSProvider):
             return await self.fallback.synthesize_preview(text)  # type: ignore[attr-defined]
 
 
+class ClonedVoiceFallback(FallbackTTS):
+    """One call's cloned voice (SARVAM_TTS_VOICE_<LANG>_*) backed by a stock voice of the same gender
+    (SARVAM_TTS_FALLBACK_VOICE_*): a request the cloned voice fails before any audio is said again with the stock
+    voice, and the rest of the call stays on it, so the customer hears at most one switch. Made per call
+    (with_clone_fallback): one failed call never moves other calls off the cloned voice."""
+
+    def __init__(self, primary: TTSProvider, fallback: TTSProvider, sticky: bool = True):  # always sticky
+        super().__init__(primary, fallback, sticky=True)
+
+    def _warn(self, what: str, exc: TTSError) -> None:
+        self._on_fallback = True
+        log.warning("CLONED VOICE FALLBACK: %s with cloned voice %s failed (%s%s: %s) - this call continues in the stock "
+                    "voice %s", what, getattr(self.primary, "voice_id", "?"), exc.kind,
+                    f" {exc.status_code}" if exc.status_code else "", str(exc)[:200],
+                    getattr(self.fallback, "voice_id", "?"))
+
+    async def synthesize(self, text: str, pace: Optional[float] = None) -> bytes:
+        if not self._on_fallback:
+            try:
+                return await self.primary.synthesize(text, pace=pace)
+            except TTSError as exc:
+                self._warn("one-shot synthesis", exc)
+        return await self.fallback.synthesize(text, pace=pace)
+
+    async def open_stream(self, pace: Optional[float] = None) -> TTSStream:
+        if not self._on_fallback:
+            try:
+                return await self.primary.open_stream(pace=pace)
+            except TTSError as exc:
+                self._warn("opening the stream", exc)
+        return await self.fallback.open_stream(pace=pace)
+
+
+def with_clone_fallback(tts: TTSProvider) -> TTSProvider:
+    """A call's TTS: a cloned voice gets a stock voice of its gender (cfg.fallback_speaker: ishita / ratan by default;
+    same settings, key and connection pool) as its fallback; any other TTS is returned unchanged. A stream that fails
+    after opening (before any audio) is said again through synthesize() by the call
+    (CallSession._recover_tts_failure), which falls back here."""
+    if isinstance(tts, ClonedVoiceFallback):
+        return tts
+    if isinstance(tts, FallbackTTS):
+        return FallbackTTS(with_clone_fallback(tts.primary), with_clone_fallback(tts.fallback), sticky=tts.sticky)
+    if isinstance(tts, SarvamTTS) and tts.cloned:
+        stock = tts.cfg.fallback_speaker(tts.cfg.cloned_voice_gender(tts.voice_id))
+        return ClonedVoiceFallback(tts, SarvamTTS(tts.cfg, voice_id=stock, client=tts._client, exact_voice=True))
+    return tts
+
+
 def agent_voice_settings(cfg: Settings, pace: Optional[float] = None) -> Dict[str, Any]:
     """The Autonomous AI Agent voice profile as Sarvam TTS settings (AGENT_TTS_*, clamped to Sarvam's ranges).
     pace: the agent's own voice speed, instead of AGENT_TTS_PACE."""
@@ -494,7 +542,7 @@ def with_agent_voice(tts: TTSProvider, pace: Optional[float] = None) -> TTSProvi
     pace (or the agent's own `pace`), temperature and synthesis chunk size for every request and stream; a fallback
     voice, once used, stays for the rest of the call. Any other provider (e.g. a test double) is returned unchanged."""
     if isinstance(tts, FallbackTTS):
-        return FallbackTTS(with_agent_voice(tts.primary, pace), with_agent_voice(tts.fallback, pace), sticky=True)
+        return type(tts)(with_agent_voice(tts.primary, pace), with_agent_voice(tts.fallback, pace), sticky=True)
     if isinstance(tts, SarvamTTS):
         return type(tts)(tts.cfg.model_copy(update=agent_voice_settings(tts.cfg, pace)), voice_id=tts.voice_id,
                          client=tts._client, exact_voice=True)
@@ -539,7 +587,7 @@ def _tts_view(tts: TTSProvider) -> Dict[str, Any]:
     cfg = getattr(tts, "cfg", None)
     view: Dict[str, Any] = {"provider": getattr(tts, "name", type(tts).__name__)}
     if cfg is not None:
-        view["model"] = cfg.SARVAM_TTS_MODEL
+        view["model"] = "voice-clone" if getattr(tts, "cloned", False) else cfg.SARVAM_TTS_MODEL
     if getattr(tts, "voice_id", None):
         view["voice"] = tts.voice_id
     if cfg is not None and hasattr(tts, "_voice_settings"):

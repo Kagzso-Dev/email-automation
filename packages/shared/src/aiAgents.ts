@@ -68,7 +68,10 @@ const MAX_DURATION_RULE = `Enter whole seconds from ${AI_AGENT_DURATION_LIMITS.m
 export const AI_AGENT_VOICE_GENDERS = ["female", "male"] as const;
 export type AiAgentVoiceGender = (typeof AI_AGENT_VOICE_GENDERS)[number];
 export const AI_AGENT_VOICE_GENDER_LABELS: Record<AiAgentVoiceGender, string> = { female: "Female", male: "Male" };
-/** The voice a new agent starts with, per language (none = the voice backend's default voice, as before). */
+/**
+ * The voice a new agent starts with, per language (none = the voice backend's default voice, as before). The female
+ * cloned voice the language's backend offers (SARVAM_TTS_VOICE_<LANG>_FEMALE, `cloned: true` in its list) comes first.
+ */
 export const AI_AGENT_DEFAULT_VOICE: Partial<Record<AiCallLanguage, string>> = { ta: "roopa" };
 /**
  * How fast the agent speaks (Settings → AI Voice, autonomous agents): the text-to-speech pace of every line of its
@@ -85,8 +88,11 @@ export const AI_AGENT_VOICE_SPEEDS = [
 /** The speeds a voice takes: Sarvam's pace range, which the published flow (voice_pace) and Listen check as well. */
 export const AI_AGENT_VOICE_SPEED_LIMITS = { min: 0.5, max: 2 } as const;
 const VOICE_SPEED_RULE = `Enter a speed from ${AI_AGENT_VOICE_SPEED_LIMITS.min.toFixed(1)} to ${AI_AGENT_VOICE_SPEED_LIMITS.max.toFixed(1)}`;
-/** A Sarvam Bulbul speaker id as the voice backend lists it (app/core/voices.py _VOICE_ID_RE). */
-export const AI_AGENT_VOICE_ID_RE = /^[a-z][a-z0-9_]{0,63}$/;
+/**
+ * A voice id as the voice backend lists it: a Sarvam Bulbul speaker (app/core/voices.py _VOICE_ID_RE) or a Sarvam cloned
+ * voice "svc-<uuid>" (app/core/config.py CLONED_VOICE_RE). 64 characters at most (ai_agents.voiceId).
+ */
+export const AI_AGENT_VOICE_ID_RE = /^(?:[a-z][a-z0-9_]{0,63}|svc-[a-z0-9][a-z0-9-]{0,59})$/;
 export const AI_AGENT_INSTRUCTIONS_MAX = 4000;
 export const AI_AGENT_OBJECTIVE_MAX = 500;
 

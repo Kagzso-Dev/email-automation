@@ -4,6 +4,7 @@
 import { useState } from "react";
 import {
   AI_AGENT_DEFAULT_VOICE,
+  AI_AGENT_DEFAULTS,
   AI_AGENT_VOICE_GENDER_LABELS,
   AI_AGENT_VOICE_GENDERS,
   AI_AGENT_VOICE_SPEED_LIMITS,
@@ -26,6 +27,18 @@ import { VoicePicker } from "./VoicePicker";
 import { ErrorNote, Spinner } from "./ui";
 
 const isGender = (g: string | undefined): g is AiAgentVoiceGender => g === "female" || g === "male";
+
+/**
+ * The voice a new agent of this language starts with: the backend's female cloned voice (SARVAM_TTS_VOICE_<LANG>_FEMALE),
+ * else AI_AGENT_DEFAULT_VOICE (Roopa for Tamil) when offered. Undefined while the voices are unknown, or neither is offered.
+ * Picking "Male" then starts from the backend's first male voice: its cloned male pool / voices come first in its list.
+ */
+export function agentDefaultVoice(language: AiCallLanguage, voices: VoiceOption[] | undefined): string | undefined {
+  const clone = voices?.find((v) => v.cloned && !v.pool && v.gender === "female");
+  if (clone) return clone.id;
+  const preferred = AI_AGENT_DEFAULT_VOICE[language];
+  return preferred && voices?.some((v) => v.id === preferred) ? preferred : undefined;
+}
 
 /**
  * How fast the voice speaks: a level, or any speed typed in the box. What's typed stays as typed while the form holds
@@ -221,8 +234,8 @@ export function AiAgentVoice({
   }
 
   const all = catalog.data?.voices ?? [];
-  const preferred = AI_AGENT_DEFAULT_VOICE[language];
-  // The language's default voice first (Roopa for Tamil), then the backend's order.
+  const preferred = agentDefaultVoice(language, all);
+  // The language's default voice first (its cloned voice, else Roopa for Tamil), then the backend's order.
   const ofGender = (g: AiAgentVoiceGender): VoiceOption[] =>
     all.filter((v) => v.gender === g).sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred));
   const current = all.find((v) => v.id === value);
@@ -286,6 +299,14 @@ export function AiAgentVoice({
                 : undefined
           }
         />
+      )}
+      {current?.gender === "male" && (
+        <p className="text-xs text-warn" role="note">
+          A male voice still introduces itself as <strong>{executiveName.trim() || "the AI executive name"}</strong>. If that is a
+          female name (like the default {AI_AGENT_DEFAULTS.executiveName}), change “AI executive name” to a male name before publishing. The
+          published prompt tells the AI its voice is male; Tamil first-person verbs such as பேசுறேன் and சொல்றேன் are the same for a man
+          or a woman.
+        </p>
       )}
       <VoiceSpeed speed={speed} onChange={onSpeedChange} error={speedError} />
       {reply}

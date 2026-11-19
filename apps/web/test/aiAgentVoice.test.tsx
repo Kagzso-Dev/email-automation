@@ -20,16 +20,18 @@ const VOICES = [TA("ishita", "Ishita", "female"), TA("roopa", "Roopa", "female")
 
 const sent: { url: string; method: string; body: Record<string, unknown> }[] = [];
 let serverMax: number | undefined; // the voice backend's MAX_CALL_DURATION_SECONDS, as its catalog reports it
+let catalogVoices: ReturnType<typeof TA>[] = VOICES; // the list the Tamil backend serves in a test
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 beforeEach(() => {
   sent.length = 0;
   serverMax = undefined;
+  catalogVoices = VOICES;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: { method?: string; body?: string } = {}) => {
       if (init.body) sent.push({ url, method: init.method ?? "GET", body: JSON.parse(init.body) });
-      if (url.startsWith("/api/call-flows/builtin")) return json({ flows: {}, locked_blocks: {}, variables: [], limits: serverMax ? { max_duration_sec: serverMax } : {}, voices: VOICES, default_voice: "ishita", language: "ta" });
+      if (url.startsWith("/api/call-flows/builtin")) return json({ flows: {}, locked_blocks: {}, variables: [], limits: serverMax ? { max_duration_sec: serverMax } : {}, voices: catalogVoices, default_voice: "ishita", language: "ta" });
       if (url.startsWith("/api/call-flows")) return json({ items: [] });
       if (url.startsWith("/api/ai-agents/library")) return json([]);
       if (url === "/api/voices/preview") return new Response(new Uint8Array([82, 73, 70, 70]), { headers: { "Content-Type": "audio/wav" } });
@@ -136,6 +138,82 @@ describe("Settings → AI Voice", () => {
     await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
     const { body } = sent.find((s) => s.url === "/api/ai-agents")!;
     expect(body).toMatchObject({ language: "ta", agent: { voiceId: "shubh", contactGender: "female" } });
+  });
+
+  describe("cloned voices (the backend's SARVAM_TTS_VOICE_TA_*, labelled Custom)", () => {
+    const clone = (id: string, name: string, gender: string, pool?: string[]) => ({ ...TA(id, name, gender), cloned: true, ...(pool ? { pool } : {}) });
+    const F = "svc-00000000-0000-4000-8000-0000000000a1";
+    const M1 = "svc-00000000-0000-4000-8000-0000000000b1";
+    const M2 = "svc-00000000-0000-4000-8000-0000000000b2";
+    // As production's Tamil backend lists its stock voices: 4 female and 6 male.
+    const STOCK = [
+      ...["Roopa", "Ishita", "Ritu", "Simran"].map((n) => TA(n.toLowerCase(), n, "female")),
+      ...["Shubh", "Ratan", "Rohan", "Aditya", "Rahul", "Anand"].map((n) => TA(n.toLowerCase(), n, "male")),
+    ];
+    const CLONES = [clone(F, "Kgazso Tamil", "female"), clone(M1, "Kgazso Male 1", "male"), clone(M2, "Kgazso Male 2", "male")];
+
+    it("they join the gender tabs (Female 5, Male 8) with a Custom label; a new agent starts on the female one", async () => {
+      catalogVoices = [...CLONES, ...STOCK];
+      form();
+      await waitFor(() => expect(checked()).toEqual(["Kgazso TamilCustomTamil (India) · female · default"]));
+      expect(genderButton("Female").textContent).toBe("Female(5)");
+      expect(genderButton("Male").textContent).toBe("Male(8)");
+      expect(names()).toEqual([
+        "Kgazso TamilCustomTamil (India) · female · default",
+        "RoopaTamil (India) · female",
+        "IshitaTamil (India) · female",
+        "RituTamil (India) · female",
+        "SimranTamil (India) · female",
+      ]); // only the cloned voice is labelled Custom
+      fireEvent.click(genderButton("Male"));
+      expect(names().slice(0, 3)).toEqual([
+        "Kgazso Male 1CustomTamil (India) · male",
+        "Kgazso Male 2CustomTamil (India) · male",
+        "ShubhTamil (India) · male",
+      ]);
+      expect(names()).toHaveLength(8);
+    });
+
+    it("Listen plays the cloned voice with the page's line and speed; picking it saves its id on the agent", async () => {
+      catalogVoices = [...CLONES, ...STOCK];
+      form();
+      await waitFor(() => expect(names()).toHaveLength(5));
+      fireEvent.click(genderButton("Male"));
+      fireEvent.click(screen.getByRole("button", { name: "Listen to Kgazso Male 2" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/voices/preview")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/voices/preview")!.body).toMatchObject({ voice_id: M2, language: "ta", pace: 0.9 });
+      fireEvent.click(within(voiceList()).getAllByRole("radio")[1]!); // Kgazso Male 2
+      fill("Agent name (for your list)", "ABC Hospital — Arun");
+      fill("Calling objective", "Introduce AI for hospitals.");
+      fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ language: "ta", agent: { voiceId: M2 } });
+    });
+
+    it("a male voice warns that the AI still introduces itself by the executive name (e.g. Sara)", async () => {
+      catalogVoices = [...CLONES, ...STOCK];
+      form();
+      await waitFor(() => expect(names()).toHaveLength(5));
+      fill("AI executive name", "Sara");
+      expect(screen.queryByText(/A male voice still introduces itself as/)).toBeNull(); // female voice: no warning
+      fireEvent.click(genderButton("Male"));
+      const note = screen.getByText(/A male voice still introduces itself as/);
+      expect(note.textContent).toContain("Sara");
+      expect(note.textContent).toContain("change “AI executive name” to a male name");
+    });
+
+    it("with SARVAM_TTS_VOICE_TA_MALE_EITHER, “Either male (per call)” is offered first and saved as the pool", async () => {
+      catalogVoices = [CLONES[0]!, clone("cloned_male", "Either male (per call)", "male", [M1, M2]), ...CLONES.slice(1), ...STOCK];
+      form();
+      await waitFor(() => expect(names()).toHaveLength(5));
+      fireEvent.click(genderButton("Male"));
+      expect(checked()).toEqual(["Either male (per call)CustomTamil (India) · male"]);
+      fill("Agent name (for your list)", "ABC Hospital — Arun");
+      fill("Calling objective", "Introduce AI for hospitals.");
+      fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ agent: { voiceId: "cloned_male" } });
+    });
   });
 
   it("editing restores the saved voice (Ritu), and a male voice opens on Male", async () => {

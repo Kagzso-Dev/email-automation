@@ -149,9 +149,19 @@ vi.mock("../src/http/routes/aiCalls.js", async (orig) => ({
 // The voices each fake backend offers (GET /api/flows/builtin → voices), as app/core/voices.py lists them. Tamil
 // as configured: the four female voices, Shubh (male, from Sarvam's docs) and an untagged voice (no gender).
 const FEMALE = ["roopa", "ritu", "simran", "ishita"].map((id) => ({ id, name: id[0]!.toUpperCase() + id.slice(1), gender: "female" }));
+// Tamil cloned voices first (SARVAM_TTS_VOICE_TA_FEMALE / _MALE_1 / _MALE_2), with "cloned_male" = either male one.
+const TA_F = "svc-00000000-0000-4000-8000-0000000000a1";
+const TA_M1 = "svc-00000000-0000-4000-8000-0000000000b1";
+const TA_M2 = "svc-00000000-0000-4000-8000-0000000000b2";
+const CLONES = [
+  { id: TA_F, name: "Cloned female", gender: "female", cloned: true },
+  { id: "cloned_male", name: "Cloned male (either, per call)", gender: "male", cloned: true, pool: [TA_M1, TA_M2] },
+  { id: TA_M1, name: "Cloned male 1", gender: "male", cloned: true },
+  { id: TA_M2, name: "Cloned male 2", gender: "male", cloned: true },
+];
 const FAKE_VOICES: Record<string, { id: string; name: string; gender?: string; language: string }[]> = {
   en: FEMALE.map((v) => ({ ...v, language: "English (India)" })),
-  ta: [...FEMALE, { id: "shubh", name: "Shubh", gender: "male" }, { id: "priya", name: "Priya" }].map((v) => ({ ...v, language: "Tamil (India)" })),
+  ta: [...CLONES, ...FEMALE, { id: "shubh", name: "Shubh", gender: "male" }, { id: "priya", name: "Priya" }].map((v) => ({ ...v, language: "Tamil (India)" })),
 };
 let server: Server;
 let voice: Server;
@@ -820,8 +830,14 @@ describe("AI Voice (Settings → AI Voice): the AI's own voice, independent of t
     ["simran", "female"],
     ["ishita", "female"],
     ["shubh", "male"],
-  ] as const)("Tamil %s (%s): the published flow speaks with that voice", async (voiceId, gender) => {
-    const a = await createAgent("ta", { ...AGENT, voiceId });
+    [TA_F, "female"],
+    ["cloned_male", "male"],
+    [TA_M1, "male"],
+    [TA_M2.toUpperCase().replace("SVC-", "svc-"), "male"],
+  ] as const)("Tamil %s (%s): the published flow speaks with that voice", async (picked, gender) => {
+    const voiceId = picked.toLowerCase();
+    const a = await createAgent("ta", { ...AGENT, voiceId: picked });
+    expect(a).toMatchObject({ voiceId, voiceGender: gender });
     const def = await publishLive(a.id);
     expect(def.voice_id).toBe(voiceId);
     expect(voiceBlock(def)).toContain(`Your voice is a ${gender} voice.`);

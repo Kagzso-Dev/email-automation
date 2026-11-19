@@ -175,6 +175,21 @@ Text to speech uses the same `SARVAM_API_KEY` as STT.
 
 The backend asks Sarvam for 16-bit PCM at 8000 Hz and converts it to μ-law, which is what the Plivo stream plays.
 
+**Cloned voices (Sarvam Instant Voice Cloning, beta).** A cloned voice is not a Bulbul speaker: Sarvam's
+`/text-to-speech` `speaker` field only takes its stock names, so cloned voices go through `POST /voices/clone` and
+`wss://api.sarvam.ai/voices/clone/ws` with a `voice_id` (no model, no temperature; the pace still applies).
+
+1. Copy each voice's id (`svc-…`) from Sarvam's Voice Library into the backend of its language:
+   `SARVAM_TTS_VOICE_EN_FEMALE` in `.env`; `SARVAM_TTS_VOICE_TA_FEMALE`, `SARVAM_TTS_VOICE_TA_MALE_1`,
+   `SARVAM_TTS_VOICE_TA_MALE_2` in `.env.ta`; the name each shows in `…_NAME`. Keep `SARVAM_TTS_VOICE_ROTATION=` empty.
+2. Restart that backend. Its voice list (Call Flows, AI Agents → AI Voice) starts with these voices under their
+   gender, labelled "Custom". The female voice is the default. `SARVAM_TTS_VOICE_TA_MALE_EITHER=true` adds "Either
+   male (per call)": one of the two male voices, picked when a call starts and kept for the whole call.
+3. If Sarvam refuses a cloned voice, that call continues in `SARVAM_TTS_FALLBACK_VOICE_FEMALE` (ishita) or
+   `SARVAM_TTS_FALLBACK_VOICE_MALE` (ratan), logged as `CLONED VOICE FALLBACK`.
+4. Listen before going live: `python -m scripts.voice_samples --cloned` lists the sample requests and their cost;
+   add `--yes` to send them (WAVs in `samples/cloned_voices/`).
+
 ## 9. LLM setup
 
 **Gemini (default):**

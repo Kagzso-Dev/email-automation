@@ -6,8 +6,9 @@ tracebacks. Use `.get_secret_value()` only at the point of use.
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,6 +46,25 @@ LANGUAGE_NAMES = {
     "en": "English", "ta": "Tamil", "hi": "Hindi", "te": "Telugu", "kn": "Kannada", "ml": "Malayalam",
     "mr": "Marathi", "gu": "Gujarati", "bn": "Bengali", "pa": "Punjabi", "od": "Odia",
 }
+
+# A Sarvam Instant Voice Cloning voice id ("svc-<uuid>"), lowercase. 64 chars at most (ai_agents.voiceId is VARCHAR(64)).
+CLONED_VOICE_RE = re.compile(r"^svc-[a-z0-9][a-z0-9-]{0,59}$")
+# A stock Bulbul v3 speaker name (the fallback voices).
+STOCK_SPEAKER_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+# The cloned-voice settings each backend language reads, in list order: (slot, setting). The slot's first word is the
+# voice's gender (female / male), set here once - Sarvam stores no gender for a cloned voice.
+CLONED_VOICE_SLOTS = {
+    "en": (("female", "SARVAM_TTS_VOICE_EN_FEMALE"),),
+    "ta": (("female", "SARVAM_TTS_VOICE_TA_FEMALE"), ("male_1", "SARVAM_TTS_VOICE_TA_MALE_1"),
+           ("male_2", "SARVAM_TTS_VOICE_TA_MALE_2")),
+}
+
+
+def cloned_voice_id(raw: Optional[str]) -> Optional[str]:
+    """A setting's cloned voice id ("svc-...", lowercased), else None (empty or not a cloned voice id)."""
+    voice_id = (raw or "").strip().lower()
+    return voice_id if CLONED_VOICE_RE.match(voice_id) else None
 
 
 class Settings(BaseSettings):
@@ -142,6 +162,30 @@ class Settings(BaseSettings):
     # live call already has it; then the first rotation voice not in use. "round_robin" = each
     # new call takes the next voice in the list.
     VOICE_ROTATION_MODE: str = "concurrent"
+    # Cloned voices (Sarvam Instant Voice Cloning, beta): saved voice ids (svc-<uuid>, from Sarvam's Voice Library).
+    # Each backend reads only its CALL_LANGUAGE's settings (CLONED_VOICE_SLOTS): English *_EN_*, Tamil *_TA_*; other
+    # languages ignore them. Each is listed first in the backend's voices with its gender, so a Call Flow or an AI
+    # Agent can pick it; two of one gender also add "Cloned male (either)" - one of them, picked once when the call
+    # starts. The female one (else the first) is the backend's default voice. A failed request is said again in the
+    # stock fallback voice of the same gender (SARVAM_TTS_FALLBACK_VOICE_*) for the rest of that call.
+    # Cloned voices take the pace but not the temperature (Sarvam's clone API has none). All empty = as before.
+    SARVAM_TTS_VOICE_EN_FEMALE: str = ""
+    SARVAM_TTS_VOICE_TA_FEMALE: str = ""
+    SARVAM_TTS_VOICE_TA_MALE_1: str = ""
+    SARVAM_TTS_VOICE_TA_MALE_2: str = ""
+    # The name each one shows in the voice pickers (max 40 characters; empty = "Cloned female", "Cloned male 1" ...).
+    SARVAM_TTS_VOICE_EN_FEMALE_NAME: str = ""
+    SARVAM_TTS_VOICE_TA_FEMALE_NAME: str = ""
+    SARVAM_TTS_VOICE_TA_MALE_1_NAME: str = ""
+    SARVAM_TTS_VOICE_TA_MALE_2_NAME: str = ""
+    # true = also offer "Either male (per call)": one of the two Tamil male clones, picked once when each call starts.
+    SARVAM_TTS_VOICE_TA_MALE_EITHER: bool = False
+    # Stock Bulbul v3 voices a failed cloned voice falls back to, by gender. Sarvam's Bulbul v3 best practices
+    # (checked 2026-11-18) recommend ishita (female) and ratan (male) for both English and Tamil. Empty or not a
+    # speaker name = SARVAM_TTS_SPEAKER's stock voice.
+    SARVAM_TTS_FALLBACK_VOICE_FEMALE: str = "ishita"
+    SARVAM_TTS_FALLBACK_VOICE_MALE: str = "ratan"
+    SARVAM_TTS_CLONE_WS_URL: str = "wss://api.sarvam.ai/voices/clone/ws"
 
     # --- LLM ---
     LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | sarvam | ollama | openai_compatible | anthropic
@@ -618,11 +662,50 @@ class Settings(BaseSettings):
         return bool(self.TWILIO_ACCOUNT_SID and self.TWILIO_AUTH_TOKEN.get_secret_value() and self.TWILIO_FROM_NUMBER)
 
     @property
-    def tts_speaker(self) -> str:
-        """The main voice: SARVAM_TTS_SPEAKER when this backend offers it, else DEFAULT_VOICE (app/core/voices.py)."""
-        from app.core.voices import voice_or_default
+    def cloned_voices(self) -> List[Tuple[str, str, str]]:
+        """(slot, voice id, gender) of each cloned voice set for this backend's language, in CLONED_VOICE_SLOTS order
+        (an id set twice counts once)."""
+        out: List[Tuple[str, str, str]] = []
+        for slot, setting in CLONED_VOICE_SLOTS.get(self.call_language, ()):
+            voice_id = cloned_voice_id(getattr(self, setting))
+            if voice_id and all(v != voice_id for _, v, _ in out):
+                out.append((slot, voice_id, slot.split("_")[0]))
+        return out
 
-        return voice_or_default(self.SARVAM_TTS_SPEAKER)
+    def cloned_voice_gender(self, voice_id: Optional[str]) -> str:
+        """female / male for one of this backend's cloned voices, else ""."""
+        return next((g for _, v, g in self.cloned_voices if v == voice_id), "")
+
+    def cloned_voice_name(self, slot: str) -> str:
+        """A cloned voice's picker name (SARVAM_TTS_VOICE_<LANG>_<SLOT>_NAME, max 40 characters), else "Cloned <slot>"."""
+        setting = dict(CLONED_VOICE_SLOTS.get(self.call_language, ())).get(slot, "")
+        name = " ".join(str(getattr(self, f"{setting}_NAME", "") or "").split())[:40].strip()
+        return name or "Cloned " + slot.replace("_", " ")
+
+    def cloned_either(self, gender: str) -> bool:
+        """Offer "Either <gender> (per call)" for this backend's cloned voices of that gender (Tamil male only)."""
+        return self.call_language == "ta" and gender == "male" and bool(self.SARVAM_TTS_VOICE_TA_MALE_EITHER)
+
+    def fallback_speaker(self, gender: str) -> str:
+        """The stock voice a failed cloned voice of this gender falls back to (SARVAM_TTS_FALLBACK_VOICE_*)."""
+        name = {"female": self.SARVAM_TTS_FALLBACK_VOICE_FEMALE, "male": self.SARVAM_TTS_FALLBACK_VOICE_MALE}.get(gender, "")
+        name = (name or "").strip().lower()
+        return name if STOCK_SPEAKER_RE.match(name) else self.stock_speaker
+
+    @property
+    def tts_speaker(self) -> str:
+        """The main voice: the female cloned voice (else the first cloned voice) when set, else stock_speaker."""
+        clones = self.cloned_voices
+        female = [v for _, v, g in clones if g == "female"]
+        return female[0] if female else clones[0][1] if clones else self.stock_speaker
+
+    @property
+    def stock_speaker(self) -> str:
+        """SARVAM_TTS_SPEAKER when this backend offers it, else its default stock voice (app/core/voices.py). Also the
+        fallback of a cloned voice when SARVAM_TTS_FALLBACK_VOICE_* for its gender is empty (fallback_speaker)."""
+        from app.core.voices import stock_voice_or_default
+
+        return stock_voice_or_default(self.SARVAM_TTS_SPEAKER)
 
     @property
     def voice_rotation(self) -> list:

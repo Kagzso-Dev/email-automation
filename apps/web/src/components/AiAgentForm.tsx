@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AI_AGENT_DEFAULT_VOICE,
@@ -22,7 +22,7 @@ import { api } from "../lib/api";
 import { useAiCallLanguage } from "../lib/aiCallLanguage";
 import { AGENT_QUERY_KEYS } from "../lib/aiAgents";
 import { useCallFlowCatalog, useCallFlows } from "../lib/callFlows";
-import { AiAgentVoice } from "./AiAgentVoice";
+import { agentDefaultVoice, AiAgentVoice } from "./AiAgentVoice";
 import { PhoneInput, phoneInputOk } from "./PhoneInput";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
@@ -90,6 +90,14 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   const flows = useCallFlows(true, language);
   const [f, setF] = useState<Form>(() => initial(agent, autonomousOk, language));
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((p) => ({ ...p, [k]: v }));
+  // A new agent starts with its language's default voice as the voice backend lists it: the backend's female cloned
+  // voice (SARVAM_TTS_VOICE_<LANG>_FEMALE) once the voices are known, unless a voice was already picked here.
+  const offeredVoices = useCallFlowCatalog(language).data?.voices;
+  const startVoice = agent ? undefined : agentDefaultVoice(language, offeredVoices);
+  const voicePicked = useRef(false);
+  useEffect(() => {
+    if (startVoice && !voicePicked.current) setF((p) => (p.voiceId === startVoice ? p : { ...p, voiceId: startVoice }));
+  }, [startVoice]);
 
   const published = (flows.data?.items ?? []).filter((x) => x.published);
 
@@ -229,7 +237,10 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
             <AiAgentVoice
               language={language}
               value={f.voiceId}
-              onChange={(v) => set("voiceId", v)}
+              onChange={(v) => {
+                voicePicked.current = true;
+                set("voiceId", v);
+              }}
               speed={f.voiceSpeed}
               onSpeedChange={(v) => set("voiceSpeed", v)}
               speedError={fieldError("voiceSpeed")}

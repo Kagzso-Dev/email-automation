@@ -209,7 +209,17 @@ export function VoicePicker({
               <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
                 <input type="radio" name="flow-voice" className="mt-0.5 shrink-0" checked={on} onChange={() => onChange(v.id)} />
                 <span className="min-w-0">
-                  <span className="block truncate font-medium" title={v.name}>{v.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate font-medium" title={v.name}>{v.name}</span>
+                    {v.cloned && (
+                      <span
+                        className="shrink-0 rounded border border-accent/40 bg-tint px-1 text-[10px] font-semibold uppercase leading-4 text-accent"
+                        title="Your own cloned voice (Sarvam voice cloning)"
+                      >
+                        Custom
+                      </span>
+                    )}
+                  </span>
                   <span className="block truncate text-xs text-slate-550" title={meta}>
                     {[v.language, v.gender].filter(Boolean).join(" · ")}
                     {v.id === defaultVoice ? " · default" : ""}
