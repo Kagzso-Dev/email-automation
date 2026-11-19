@@ -29,10 +29,23 @@ def brand_spoken(language: Optional[str]) -> str:
 _BRAND_WEBSITE = re.compile(r"(?:https?://)?(?:www\.)?(?:kagz?so|kexo|கெக்ஸோ|केक्सो|ಕೆಕ್ಸೋ)\.com", re.IGNORECASE)
 
 
+# Tamil calls: one spoken spelling of the company name's other words, whoever wrote them and however ("Technology
+# Services" from the published greeting, or the LLM's own Tamil-letter spellings). 2026-11-19: one call said
+# சர்விஸஸ், another சர்வீசஸ். Only the words of the company name; speech only (transcripts keep the real text).
+_TAMIL_COMPANY_WORDS = (
+    (re.compile(r"\btechnolog(?:y|ies)\b|டெக்ன[ாோ]?லஜ[ிீ]", re.IGNORECASE), "டெக்னாலஜி"),
+    (re.compile(r"\bservices\b|சர்வ[ிீ][ஸச]ஸ்", re.IGNORECASE), "சர்வீசஸ்"),
+)
+
+
 def apply_pronunciations(text: str, language: Optional[str]) -> str:
     spoken = brand_spoken(language)
     text = _BRAND_WEBSITE.sub(f"{spoken} dot com", text)
-    return _BRAND_TAMIL.sub(spoken, _BRAND_LATIN.sub(spoken, text))
+    text = _BRAND_TAMIL.sub(spoken, _BRAND_LATIN.sub(spoken, text))
+    if (language or "").split("-")[0].lower() == "ta":
+        for pattern, word in _TAMIL_COMPANY_WORDS:
+            text = pattern.sub(word, text)
+    return text
 
 
 class TTSError(Exception):

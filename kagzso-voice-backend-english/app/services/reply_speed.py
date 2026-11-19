@@ -95,9 +95,17 @@ _COURTESY = {"sir", "madam", "mam", "maam", "ma", "ji", "சார்", "மே�
 _PHRASES = {"நான் தான்", "நான்தான்", "naan dhaan", "naan than", "naan thaan", "that s me", "it s me", "this is me",
             "मैं ही हूँ", "मैं ही हूं", "मैं बोल रहा हूँ", "मैं बोल रही हूँ", "main hi hoon", "నేనే మాట్లాడుతున్నాను"}
 _PERMISSION_PHRASES = {"ठीक है", "ठीक हैं", "theek hai", "thik hai"}
+# A Tamil "Hello?" / "can you hear me?" said over the agent checks the line, as English "hello" / "can you hear me"
+# do (call_service._FILLER_WORDS): never an interruption. Sarvam's Tamil STT writes "Hello" in Tamil letters, so
+# before this a "ஹலோ" over the opening cut it off and started it again (2026-11-19, a cloned-voice Tamil call).
+TAMIL_LINE_CHECKS = frozenset({
+    "ஹலோ", "ஹல்லோ", "ஹாலோ", "ஹலோவ்", "ஹெலோ", "ஹெல்லோ", "ஹாய்", "ஹாய",
+    "கேக்குதா", "கேட்குதா", "கேக்குதுங்களா", "கேட்குதுங்களா", "கேக்குறீங்களா", "கேட்கிறதா",
+})
 # INDIC_WORD_SPLIT: Tamil / Hindi / Telugu / Kannada backchannels said over the agent ("ஆமா", "சரிங்க",
-# "ம்", "हाँ जी") - the non-English words of the yes / courtesy / hum lists above and in voice focus.
-INDIC_BACKCHANNELS = frozenset(w for w in _PERMISSION_YES | _COURTESY | vf.LONE_FILLERS if not w.isascii())
+# "ம்", "हाँ जी", "ஹலோ") - the non-English words of the yes / courtesy / hum / line-check lists above and in voice focus.
+INDIC_BACKCHANNELS = frozenset(w for w in _PERMISSION_YES | _COURTESY | vf.LONE_FILLERS | TAMIL_LINE_CHECKS
+                               if not w.isascii())
 
 
 def clear_yes(text: str, kind: str) -> bool:

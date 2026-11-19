@@ -220,7 +220,9 @@ def test_silent_pickup_and_silence_are_said_by_the_ai_in_its_own_words(client, a
             time.sleep(0.05)
     # Each moment was the LLM's own reply to a one-off instruction (never stored as the customer's words).
     asked = [m[-1]["content"] for m in fakes.llm.seen_messages]
-    assert asked == [cs.AGENT_GREETING_INSTRUCTION, cs.AGENT_SILENCE_REPROMPT_INSTRUCTION, cs.AGENT_SILENCE_CLOSE_INSTRUCTION]
+    # The opening instruction carries the call language's word order (Tamil: the verb last); English: as before.
+    assert asked == [cs.agent_greeting_instruction(lang), cs.AGENT_SILENCE_REPROMPT_INSTRUCTION, cs.AGENT_SILENCE_CLOSE_INSTRUCTION]
+    assert (asked[0] == cs.AGENT_GREETING_INSTRUCTION) is (lang != "ta")
     lines = _agent_lines(sync_engine, call_id)
     assert lines == said
     assert flow["silence"]["reprompt"] not in lines and flow["silence"]["closing"] not in lines  # no fixed lines

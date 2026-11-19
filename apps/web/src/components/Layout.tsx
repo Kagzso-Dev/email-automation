@@ -521,8 +521,13 @@ export function Layout({ children }: { children: ReactNode }) {
           key={(current.language === "en" ? "" : `${current.language}:`) + current.path.split("/")[1]}
           className={cx(
             "page-enter mx-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8",
-            // Voice Call Flows needs room for list + editor + live preview; every other page keeps 1120px.
-            current.path.startsWith("/call-flows") ? "max-w-[1400px]" : "max-w-[1120px]",
+            // Voice Call Flows needs room for list + editor + live preview; Send Queue's table gets 1200px of content
+            // (1264px less the 32px side padding); every other page keeps 1120px.
+            current.path.startsWith("/call-flows")
+              ? "max-w-[1400px]"
+              : current.path.startsWith("/send-queue")
+                ? "max-w-[1264px]"
+                : "max-w-[1120px]",
           )}
         >
           {children}

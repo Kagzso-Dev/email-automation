@@ -18,13 +18,13 @@ const CHANNEL_TEXT: Record<HistoryChannel, { label: string; field: string; histo
  * channel's history only, and download the never-used rows (plus a report of the
  * already-used ones). Read-only — nothing in the app changes.
  */
-export function FilterNewDataButton({ channel }: { channel: HistoryChannel }) {
+export function FilterNewDataButton({ channel, className = "" }: { channel: HistoryChannel; className?: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <button
         type="button"
-        className="btn-primary queue-action"
+        className={`btn-primary queue-action ${className}`}
         title="Upload a file to filter out data that was already sent"
         onClick={() => setOpen(true)}
       >

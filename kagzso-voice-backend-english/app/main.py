@@ -24,6 +24,14 @@ from app.websocket import plivo_stream, twilio_stream
 configure_logging(settings.LOG_LEVEL, settings.secret_values())
 log = get_logger("app")
 
+# Call-behaviour switches logged at start ("Call settings"): never a key or a secret.
+CALL_FLAGS = (
+    "INDIC_WORD_SPLIT", "BARGE_EARLY_STOP", "NOISE_SAFE_STATE", "GREETING_DELAY_MS", "GREETING_PRERENDER",
+    "AGENT_FIXED_GREETING", "SARVAM_TTS_CLONE_STREAM", "SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS", "BARGE_IN_MIN_SPEECH_MS",
+    "VOICE_FOCUS_LEVEL", "VOICE_FOCUS_MODE", "STT_STREAMING", "ADAPTIVE_EOS", "TTS_WARM_STREAM", "PROVIDER_PREWARM",
+    "SARVAM_TTS_VOICE_ROTATION",
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -70,6 +78,8 @@ async def lifespan(app: FastAPI):
             log.warning("CALL_RECORDING_ENABLED is on but RECORDINGS_DIR is empty: recordings will fail")
 
     log.info("%s started (env=%s, llm=%s)", settings.APP_NAME, settings.APP_ENV, settings.LLM_PROVIDER)
+    # What this process actually runs with (the .env is read only at start): one line to check against the file.
+    log.info("Call settings (%s): %s", settings.call_language, " ".join(f"{k}={getattr(settings, k)}" for k in CALL_FLAGS))
     yield
 
     if retention is not None:

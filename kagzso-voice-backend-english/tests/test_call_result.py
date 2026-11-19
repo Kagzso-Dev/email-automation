@@ -4,6 +4,7 @@ finalized by settle_unfinalized_call after its hangup, and a cloned voice whose 
 moves the rest of the call to its stock voice. Nothing is dialled; Dispatch callbacks are captured, never sent."""
 import asyncio
 import logging
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -165,74 +166,229 @@ def test_an_unanswered_call_needs_no_safety_net(client, auth, monkeypatch):
     assert scheduled == []  # its outcome (no_answer) comes with the hangup
 
 
-# ------------------------------------------------------------------ a cloned voice's stream fails before any audio
+# ------------------------------------------------------------------ a cloned voice's stream: silent, failing or speaking
 class _Stream(TTSStream):
-    def __init__(self, name, chunks=(), fail=None):
-        self.name, self.chunks, self.fail, self.sent = name, list(chunks), fail, []
+    """A fake provider stream: records what it was sent and, once the input has ended, plays one chunk per text
+    (speaks=True); or stays silent until closed; or fails before any audio (fail) or after it (fail_after)."""
+
+    def __init__(self, name, speaks=True, fail=None, fail_after=None, send_fail=None):
+        self.name, self.speaks, self.fail, self.fail_after, self.send_fail = name, speaks, fail, fail_after, send_fail
+        self.ops, self.closed = [], False
+        self._ended = asyncio.Event()
 
     async def send_text(self, text_):
-        self.sent.append(text_)
+        if self.send_fail:
+            raise self.send_fail
+        self.ops.append(("text", text_))
+
+    async def flush(self):
+        self.ops.append(("flush", None))
 
     async def end_input(self):
-        pass
+        self.ops.append(("end", None))
+        self._ended.set()
 
     async def audio(self):
-        for c in self.chunks:
-            yield c
         if self.fail:
             raise self.fail
+        if not self.speaks:
+            while not self.closed:
+                await asyncio.sleep(0.01)
+            return
+        await self._ended.wait()
+        for kind, text_ in self.ops:
+            if kind == "text":
+                yield f"{self.name}:{text_}".encode()
+        if self.fail_after:
+            raise self.fail_after
 
     async def cancel(self):
-        pass
+        self.closed = True
 
     async def aclose(self):
-        pass
+        self.closed = True
+
+
+def _clone_call(monkeypatch, clone: _Stream, limit=0.2, **cfg):
+    """A cloned male voice's TTS for one call, with fake provider streams; returns (tts, stock streams opened)."""
+    tts = provider_registry.with_clone_fallback(SarvamTTS(_cfg("ta", SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS=limit, **cfg),
+                                                          voice_id=TA_M1, exact_voice=True))
+    stocks = []
+
+    async def clone_stream(pace=None):
+        return clone
+
+    async def stock_stream(pace=None):
+        stocks.append(_Stream("stock"))
+        return stocks[-1]
+
+    monkeypatch.setattr(tts.primary, "open_stream", clone_stream)
+    monkeypatch.setattr(tts.fallback, "open_stream", stock_stream)
+    return tts, stocks
+
+
+async def _reply(stream, pause=0.0, flush_first=True):
+    """One reply as a live agent call sends it: first sentence (flushed), the rest, the end; audio read meanwhile."""
+    heard = asyncio.ensure_future(_drain(stream))
+    await stream.send_text("வணக்கம் சார்.")
+    if flush_first:
+        await stream.flush()
+    await asyncio.sleep(pause)
+    await stream.send_text("நான் கெக்ஸோ-ல இருந்து பேசுறேன்.")
+    await stream.end_input()
+    return await asyncio.wait_for(heard, 5)
 
 
 async def _drain(stream):
     return [c async for c in stream.audio()]
 
 
-async def test_a_cloned_stream_that_fails_before_audio_moves_the_call_to_the_stock_voice(monkeypatch, caplog):
-    tts = provider_registry.with_clone_fallback(SarvamTTS(_cfg("ta"), voice_id=TA_M1, exact_voice=True))
-    opened = []
+SENT = [("text", "வணக்கம் சார்."), ("flush", None), ("text", "நான் கெக்ஸோ-ல இருந்து பேசுறேன்."), ("end", None)]
+HEARD_STOCK = ["stock:வணக்கம் சார்.".encode(), "stock:நான் கெக்ஸோ-ல இருந்து பேசுறேன்.".encode()]
 
-    async def clone_stream(pace=None):
-        opened.append("clone")
-        return _Stream("clone", fail=TTSError("timeout", "Sarvam TTS stopped sending audio"))
 
-    async def stock_stream(pace=None):
-        opened.append("stock")
-        return _Stream("stock", chunks=[b"\x7f" * 160])
+async def test_a_silent_cloned_stream_hands_the_reply_to_the_stock_voice_after_the_limit(monkeypatch, caplog):
+    clone = _Stream("clone", speaks=False)  # as Sarvam's clone socket did on 2026-11-19: no audio at all
+    tts, stocks = _clone_call(monkeypatch, clone)
+    stream = await tts.open_stream()
+    started = time.monotonic()
+    with caplog.at_level(logging.WARNING):
+        heard = await _reply(stream, pause=0.4)  # the rest comes after the switch: it goes to the stock voice
+    assert heard == HEARD_STOCK  # the whole reply, once, in the stock voice: no error, no repeat
+    assert stocks[0].ops == SENT and clone.ops == SENT[:2]
+    assert time.monotonic() - started < 1.5  # 0.2 s limit, not Sarvam's 10 s
+    await asyncio.sleep(0.05)
+    assert clone.closed and tts._on_fallback and not stream.is_open()
+    assert "CLONED VOICE FALLBACK: no audio within 0.2s of the text with cloned voice " + TA_M1 in caplog.text
+    assert "stock voice ratan" in caplog.text
+    assert await _reply(await tts.open_stream()) == HEARD_STOCK and len(stocks) == 2  # the next reply: stock at once
 
-    async def stock_line(text_, pace=None):
-        return b"stock-audio"
 
-    monkeypatch.setattr(tts.primary, "open_stream", clone_stream)
-    monkeypatch.setattr(tts.fallback, "open_stream", stock_stream)
-    monkeypatch.setattr(tts.fallback, "synthesize", stock_line)
-    first = await tts.open_stream()
-    await first.send_text("வணக்கம் சார்")
-    assert first.sent == ["வணக்கம் சார்"] and first.name == "clone"  # the provider's stream, unchanged
-    with caplog.at_level(logging.WARNING), pytest.raises(TTSError):
-        await _drain(first)  # the call sees the error and recovers ...
-    assert "CLONED VOICE FALLBACK: streaming with cloned voice " + TA_M1 in caplog.text and "stock voice ratan" in caplog.text
-    assert await tts.synthesize("வணக்கம் சார்") == b"stock-audio"  # ... in the stock voice, not the clone again
-    assert not first.is_open()  # a warm cloned stream is not reused
-    second = await tts.open_stream()
-    assert await _drain(second) == [b"\x7f" * 160]
-    assert opened == ["clone", "stock"]
+@pytest.mark.parametrize("clone", [
+    _Stream("clone", fail=TTSError("provider", "Sarvam voice clone stream closed before any audio")),
+    _Stream("clone", send_fail=TTSError("provider", "Sarvam TTS stream is closed")),
+], ids=["closed before audio", "refused a message"])
+async def test_a_failing_cloned_stream_hands_the_reply_over_without_an_error(monkeypatch, caplog, clone):
+    tts, stocks = _clone_call(monkeypatch, clone, limit=5.0)
+    with caplog.at_level(logging.WARNING):
+        heard = await _reply(await tts.open_stream())
+    assert heard == HEARD_STOCK and stocks[0].ops == SENT
+    assert "CLONED VOICE FALLBACK: streaming with cloned voice" in caplog.text
+
+
+async def test_a_cloned_stream_that_speaks_in_time_keeps_the_cloned_voice(monkeypatch):
+    clone = _Stream("clone")
+    tts, stocks = _clone_call(monkeypatch, clone, limit=5.0)
+    heard = await _reply(await tts.open_stream())
+    assert heard == [b"clone:" + s.encode() for k, s in SENT if k == "text"] and stocks == [] and not tts._on_fallback
 
 
 async def test_a_cloned_stream_that_fails_after_audio_keeps_the_cloned_voice(monkeypatch):
-    tts = provider_registry.with_clone_fallback(SarvamTTS(_cfg("ta"), voice_id=TA_M1, exact_voice=True))
-
-    async def clone_stream(pace=None):
-        return _Stream("clone", chunks=[b"\x01" * 160], fail=TTSError("provider", "dropped"))
-
-    monkeypatch.setattr(tts.primary, "open_stream", clone_stream)
-    stream = await tts.open_stream()
+    clone = _Stream("clone", fail_after=TTSError("provider", "dropped"))
+    tts, stocks = _clone_call(monkeypatch, clone)
     with pytest.raises(TTSError):
-        await _drain(stream)
-    assert not tts._on_fallback  # the clone already spoke this reply: never two voices for one reply
-    assert (await tts.open_stream()).name == "clone"
+        await _reply(await tts.open_stream())
+    assert not tts._on_fallback and stocks == []  # the clone already spoke this reply: never two voices in one reply
+
+
+async def test_the_limit_counts_from_when_the_text_is_due(monkeypatch):
+    # A Call Flow sends no flush after its first sentence: under Sarvam's buffer it is not due before the end.
+    clone = _Stream("clone", speaks=False)
+    tts, stocks = _clone_call(monkeypatch, clone, SARVAM_TTS_MIN_BUFFER_CHARS=200)
+    stream = await tts.open_stream()
+    heard = asyncio.ensure_future(_drain(stream))
+    await stream.send_text("வணக்கம் சார்.")
+    await asyncio.sleep(0.4)  # past the limit, but nothing was due yet
+    assert stocks == []
+    await stream.end_input()  # now it is due
+    assert await asyncio.wait_for(heard, 5) == HEARD_STOCK[:1] and stocks[0].ops == [("text", "வணக்கம் சார்."), ("end", None)]
+
+
+async def test_limit_zero_waits_for_the_provider_as_before(monkeypatch):
+    clone = _Stream("clone", speaks=False)
+    tts, stocks = _clone_call(monkeypatch, clone, limit=0)
+    stream = await tts.open_stream()
+    heard = asyncio.ensure_future(_drain(stream))
+    await stream.send_text("வணக்கம் சார்.")
+    await stream.end_input()
+    await asyncio.sleep(0.4)
+    assert stocks == [] and not heard.done()
+    await stream.aclose()
+    assert await asyncio.wait_for(heard, 5) == []
+
+
+# ------------------------------------------------------------------ a cloned voice speaks through REST, sentence by sentence
+async def test_a_cloned_voice_streams_through_rest_sentence_by_sentence_by_default(monkeypatch):
+    """SARVAM_TTS_CLONE_STREAM=rest (default): no socket. Each sentence is synthesized as soon as it is sent, in
+    parallel, and played in order; the first one plays as soon as its audio arrives."""
+    from app.services.sarvam_tts import CloneSentenceStream, SarvamStream
+
+    tts = SarvamTTS(_cfg("ta"), voice_id=TA_M1, exact_voice=True)
+    made, started = [], {}
+
+    async def synthesize(text_, pace=None):
+        started[text_] = time.monotonic()
+        made.append((text_, pace))
+        await asyncio.sleep(0.3 if text_.startswith("வணக்கம்") else 0.05)  # the first sentence is the slow one
+        return f"audio:{text_}".encode()
+
+    async def no_socket(*a, **k):
+        raise AssertionError("no websocket for a cloned voice in rest mode")
+
+    monkeypatch.setattr(tts, "synthesize", synthesize)
+    monkeypatch.setattr(SarvamStream, "connect", no_socket)
+    stream = await tts.open_stream(pace=0.9)
+    assert isinstance(stream, CloneSentenceStream)
+    t0 = time.monotonic()
+    heard = asyncio.ensure_future(_drain(stream))
+    await stream.send_text("வணக்கம் சார்.")
+    await stream.flush()  # nothing to do: each sentence is already on its way
+    await stream.send_text("நான் கெக்ஸோ-ல இருந்து பேசுறேன்.")
+    await stream.end_input()
+    chunks = await asyncio.wait_for(heard, 5)
+    assert chunks == ["audio:வணக்கம் சார்.".encode(), "audio:நான் கெக்ஸோ-ல இருந்து பேசுறேன்.".encode()]  # in order
+    assert made == [("வணக்கம் சார்.", 0.9), ("நான் கெக்ஸோ-ல இருந்து பேசுறேன்.", 0.9)]
+    assert started["நான் கெக்ஸோ-ல இருந்து பேசுறேன்."] - t0 < 0.2  # made while the first was still being made
+    websocket = SarvamTTS(_cfg("ta", SARVAM_TTS_CLONE_STREAM="websocket"), voice_id=TA_M1, exact_voice=True)
+    with pytest.raises(AssertionError, match="no websocket"):
+        await websocket.open_stream()  # the socket only when asked for
+    assert provider_registry._tts_view(tts)["clone_stream"] == "rest"
+
+
+async def test_a_rest_clone_slower_than_the_limit_hands_the_reply_to_the_stock_voice(monkeypatch, caplog):
+    tts = provider_registry.with_clone_fallback(SarvamTTS(_cfg("ta", SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS=0.2),
+                                                          voice_id=TA_M1, exact_voice=True))
+    stocks = []
+
+    async def slow(text_, pace=None):
+        await asyncio.sleep(5)
+        return b"late"
+
+    async def stock_stream(pace=None):
+        stocks.append(_Stream("stock"))
+        return stocks[-1]
+
+    monkeypatch.setattr(tts.primary, "synthesize", slow)
+    monkeypatch.setattr(tts.fallback, "open_stream", stock_stream)
+    started = time.monotonic()
+    with caplog.at_level(logging.WARNING):
+        heard = await _reply(await tts.open_stream())
+    assert heard == HEARD_STOCK and stocks[0].ops == SENT
+    assert time.monotonic() - started < 1.5
+    assert "CLONED VOICE FALLBACK: no audio within 0.2s" in caplog.text
+
+
+async def test_a_rest_clone_error_hands_the_reply_to_the_stock_voice(monkeypatch):
+    tts = provider_registry.with_clone_fallback(SarvamTTS(_cfg("ta"), voice_id=TA_M1, exact_voice=True))
+    stocks = []
+
+    async def refused(text_, pace=None):
+        raise TTSError("rate_limit", "Sarvam TTS rate limit hit (429)", 429)
+
+    async def stock_stream(pace=None):
+        stocks.append(_Stream("stock"))
+        return stocks[-1]
+
+    monkeypatch.setattr(tts.primary, "synthesize", refused)
+    monkeypatch.setattr(tts.fallback, "open_stream", stock_stream)
+    assert await _reply(await tts.open_stream()) == HEARD_STOCK and tts._on_fallback

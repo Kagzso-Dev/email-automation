@@ -188,7 +188,16 @@ The backend asks Sarvam for 16-bit PCM at 8000 Hz and converts it to μ-law, whi
    male (per call)": one of the two male voices, picked when a call starts and kept for the whole call.
 3. If Sarvam refuses a cloned voice, that call continues in `SARVAM_TTS_FALLBACK_VOICE_FEMALE` (ishita) or
    `SARVAM_TTS_FALLBACK_VOICE_MALE` (ratan), logged as `CLONED VOICE FALLBACK`. A refused request counts, and so
-   does a live stream that fails before its first audio (closed, or silent for 10 s).
+   does a live stream that fails before its first audio: closed, or silent for `SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS`
+   (2 s) after its text was due. The reply then goes on at once in the stock voice: the text already sent is spoken
+   by it, with no error and nothing repeated.
+   Live replies in a cloned voice go through the REST clone API by default (`SARVAM_TTS_CLONE_STREAM=rest`): each
+   sentence is synthesized as soon as the LLM writes it, sentences in parallel, played in order. Measured 2026-11-19
+   (Tamil, 8 kHz, 44 characters): Sarvam's clone socket (beta) cut a reply off after 2.7 of its 4 s when the reply had
+   a second flush (every agent reply flushes its first sentence) and once sent no audio for 10 s; with one flush it
+   worked (first audio 0.6 s). REST: 1.1 s for the first sentence. Stock Bulbul socket: first audio 0.3 s.
+   `SARVAM_TTS_CLONE_STREAM=websocket` uses the socket again. REST is one request per sentence (Sarvam's limit: 60 a
+   minute per account).
 4. Listen before going live: `python -m scripts.voice_samples --cloned` lists the sample requests and their cost;
    add `--yes` to send them (WAVs in `samples/cloned_voices/`).
 
@@ -396,6 +405,11 @@ WS /ws/plivo/media   "start" event (callId, streamId)                    status:
   - `created`, `initiating`, `ringing`, `answered`, `connected` and `completed` / `failed` / `busy` / `no_answer` / `cancelled` are stored in `calls.status` and in `call_events`.
   - The conversational states (`listening`, `processing`, `speaking`) change several times a second, so they're kept in process memory (`app/services/session_store.py`) and dropped when the call ends. Barge-ins are recorded as `call_events`.
   - Because live call state is per-process, run a **single** uvicorn worker.
+- **An agent's greeting (`AGENT_FIXED_GREETING`):** on a backend with it set, an Autonomous AI Agent's call opens with
+  its published greeting word for word, the one fixed line of the call: rendered while the phone rings, played as soon
+  as the call connects (or at once as the answer to a "Hello?"). The LLM is told it was said and leads from there.
+  Off = the LLM writes the opening after the answer. A greeting word ("ஹலோ", "ஹாய்", "Hello சார்") said over the
+  opening never cuts or restarts it (`INDIC_WORD_SPLIT`), and `BARGE_EARLY_STOP` never cuts the opening on voice alone.
 - **Outcomes:**
   - Values: `interested`, `not_interested`, `callback_requested`, `do_not_call`, `wrong_person`, `busy`, `voicemail`, `no_answer`, `call_failed`, `completed`, `unknown`, `hung_up_early`, `voice_error`.
   - Busy, no-answer and failed calls get their outcome from Plivo's hangup callback; voicemail from machine detection.

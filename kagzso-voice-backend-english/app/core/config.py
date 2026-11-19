@@ -195,6 +195,17 @@ class Settings(BaseSettings):
     SARVAM_TTS_FALLBACK_VOICE_FEMALE: str = "ishita"
     SARVAM_TTS_FALLBACK_VOICE_MALE: str = "ratan"
     SARVAM_TTS_CLONE_WS_URL: str = "wss://api.sarvam.ai/voices/clone/ws"
+    # A cloned voice's live stream with no audio this many seconds after its text was due to be spoken (a flush, the
+    # end of the reply, or SARVAM_TTS_MIN_BUFFER_CHARS of text): the reply carries on in the stock fallback voice of
+    # the same gender at once - the text already sent is spoken by it - and so does the rest of the call ("CLONED
+    # VOICE FALLBACK" in the log). 0 = off: wait for Sarvam's own 10 s limit, as before.
+    SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS: float = 2.0
+    # How a cloned voice speaks a live reply. "rest" (default): each sentence through Sarvam's REST clone API as soon
+    # as it is written, all at once, played in order. "websocket": Sarvam's clone socket (beta) - measured 2026-11-19:
+    # one flush per reply worked (first audio 0.6 s), but a reply with a second flush (every agent reply flushes its
+    # first sentence) was cut off mid-reply when Sarvam dropped the connection, and once sent no audio for 10 s.
+    # Stock voices always stream on Bulbul's socket.
+    SARVAM_TTS_CLONE_STREAM: str = "rest"
 
     # --- LLM ---
     LLM_PROVIDER: str = "gemini"  # gemini | openai | groq | sarvam | ollama | openai_compatible | anthropic
@@ -305,6 +316,12 @@ class Settings(BaseSettings):
     GREETING_PRERENDER: bool = True
     # Wait before a pre-rendered greeting when the customer hasn't spoken yet.
     GREETING_PRERENDERED_DELAY_MS: int = 300
+    # Autonomous AI Agents: open the call with the agent's greeting as published (AI Agents compile it per language,
+    # e.g. Tamil "வணக்கம் {{title}}. நான் <name>, <company>-ல இருந்து பேசறேன்."), word for word - the one fixed line of
+    # the call. It is rendered while the phone rings (GREETING_PRERENDER) and plays GREETING_PRERENDERED_DELAY_MS after
+    # the call connects, or at once as the answer when the customer speaks first ("Hello?"). Everything after it is the
+    # LLM's own. Off = as before: the LLM writes the opening after the answer.
+    AGENT_FIXED_GREETING: bool = False
     # Also synthesize the fixed lines (couldn't-hear-you, silence re-prompt / closing, identity
     # re-ask) once when the call connects, so they play without a TTS round-trip. Same voice
     # and settings; ~4 short extra TTS requests per answered call.

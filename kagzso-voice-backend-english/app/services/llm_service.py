@@ -515,6 +515,23 @@ CUSTOMER_BUSINESS_ASK_RULES = """
 - If their reply does not answer it, for example they only say yes or go ahead, do not ask it again and never say you did not hear them: say in a few words why you are calling and carry on.
 - Listen to the answer, then adapt the rest of the conversation to that business: think about the work that takes such a business the most time, and show how AI automation or software could help with it, using only the approved information.
 - If they would rather not say, or avoid the question, accept it gracefully, do not ask again and carry on with the calling objective in general terms."""
+
+# An agent's call that opened with its published greeting (voice backend AGENT_FIXED_GREETING): the prompt's OPENING
+# section says the agent opens in its own words, so it is told the greeting is already said.
+AGENT_FIXED_GREETING_RULE = (
+    "\n- This call opened with your greeting, said for you exactly as it is published: it is your first line in the "
+    "conversation. Never greet or introduce yourself again. Carry on from what the customer says."
+)
+
+# After the brand rule, per language: the rest of a company name stays as given. A Tamil call once said
+# "கெக்ஸோ டெக்னாலஜி சர்விஸஸ்" - the model spelt the English words in Tamil letters, each call its own way
+# (சர்விஸஸ் / சர்வீசஸ்) - against the code-mixed rule (English words in English letters).
+BRAND_REST_RULES = {
+    "ta": (" Only that one word changes: write the rest of a company name exactly as it is given, in English letters, "
+           "never spelt out in Tamil letters. (Its Tamil pronunciation is fixed by the system, so every call says it the "
+           "same way.)"),
+}
+
 # Instead of the rules above while the AI has said nothing yet on the call.
 CUSTOMER_BUSINESS_OPENING_RULE = """
 - This is your opening reply, so do not ask about their business yet: greet them and say in a few words what your company helps businesses with, as a statement. Never ask whether they have a moment or whether it is a good time. Ask about their business in your next reply."""
@@ -603,7 +620,7 @@ def build_system_prompt(
     brand = (
         f"\n- Our company name is spelled Kagzso but pronounced \"Kexo\". "
         f"Whenever you say it, write it exactly as {brand_spoken(lang)}."
-    )
+    ) + BRAND_REST_RULES.get((lang or "").split("-")[0].lower(), "")
     if guided:
         followup = ("\n- Never say yourself that the team will contact the customer: the system's closing line says "
                     "it when that is configured.")
@@ -616,6 +633,8 @@ def build_system_prompt(
         followup = "\n- Team follow-up is NOT configured: never say that the team will contact the customer."
     if natural:
         who = (AGENT_OPEN_IDENTITY_RULES + AGENT_ADDRESS_RULES) if safe["customer_name"] else NO_NAME_RULE
+        if variables.get("flow_fixed_greeting") == "true":  # AGENT_FIXED_GREETING: the system said the greeting
+            who += AGENT_FIXED_GREETING_RULE
     elif agent and safe["customer_name"]:
         who = AGENT_IDENTITY_RULES + AGENT_ADDRESS_RULES
     else:

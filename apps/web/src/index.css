@@ -204,6 +204,13 @@
   .btn-danger {
     @apply btn border-crit-line bg-crit-soft text-crit hover:border-crit/40 hover:bg-crit-line/50;
   }
+  /* Borderless 32px icon button (table row actions); pair it with <Tooltip> and an aria-label. */
+  .btn-icon {
+    @apply inline-grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-550 hover:bg-surface-muted hover:text-ink disabled:pointer-events-none disabled:opacity-40;
+    transition:
+      color var(--motion-fast) var(--ease-standard),
+      background-color var(--motion-fast) var(--ease-standard);
+  }
   /* WhatsApp send action — keeps the brand green; navy text for AA contrast. */
   .btn-whatsapp {
     @apply btn bg-wa font-semibold text-ink hover:bg-wa-ink;
@@ -369,17 +376,8 @@
     opacity: 1;
   }
 
-  /* Send Queue toolbar: Status filter left, action group right; wraps to two rows on phones. */
-  .queue-toolbar {
-    @apply mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between;
-  }
-  .queue-toolbar-filter {
-    @apply flex min-w-0 flex-1 items-center gap-2;
-  }
-  .queue-actions {
-    @apply grid grid-cols-1 gap-2.5 min-[440px]:grid-cols-2 sm:flex sm:shrink-0 sm:items-center;
-  }
-  /* Both action buttons: 40px, 12px radius, lift on hover, soft cyan focus ring. */
+  /* Send Queue header buttons (Upload new file, Download all history, More): 40px, 12px radius, lift on hover,
+     soft cyan focus ring. */
   .queue-action {
     @apply h-10 whitespace-nowrap px-4;
   }

@@ -195,7 +195,7 @@ async def test_cloned_preview_is_a_browser_wav():
         assert w.getframerate() == 22050 and w.getnframes() == 100
 
 
-# ------------------------------------------------------------------ WebSocket
+# ------------------------------------------------------------------ WebSocket (SARVAM_TTS_CLONE_STREAM=websocket)
 async def test_cloned_websocket_stream(monkeypatch):
     from websockets.asyncio.server import serve
 
@@ -216,7 +216,7 @@ async def test_cloned_websocket_stream(monkeypatch):
     async with serve(handler, "127.0.0.1", 0) as server:
         port = server.sockets[0].getsockname()[1]
         monkeypatch.setattr(settings, "SARVAM_TTS_CLONE_WS_URL", f"ws://127.0.0.1:{port}/voices/clone/ws")
-        stream = await SarvamTTS(_cfg("ta")).open_stream(pace=0.9)
+        stream = await SarvamTTS(_cfg("ta", SARVAM_TTS_CLONE_STREAM="websocket")).open_stream(pace=0.9)
         await stream.send_text("எங்க shop-ல billing software already இருக்கு")
         await stream.end_input()
         chunks = [c async for c in stream.audio()]
@@ -244,7 +244,7 @@ async def test_cloned_stream_closed_before_audio_is_an_error(monkeypatch):
         port = server.sockets[0].getsockname()[1]
         monkeypatch.setattr(settings, "SARVAM_TTS_CLONE_WS_URL", f"ws://127.0.0.1:{port}/voices/clone/ws")
         monkeypatch.setattr(settings, "SARVAM_TTS_WS_URL", f"ws://127.0.0.1:{port}/text-to-speech/ws")
-        stream = await SarvamTTS(_cfg("ta")).open_stream()
+        stream = await SarvamTTS(_cfg("ta", SARVAM_TTS_CLONE_STREAM="websocket")).open_stream()
         with pytest.raises(TTSError, match="closed before any audio"):
             [c async for c in stream.audio()]
         await stream.aclose()

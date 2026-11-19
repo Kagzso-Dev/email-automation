@@ -7,7 +7,7 @@ import { downloadHistoryExport, useHistoryExportCount, type HistoryExportChannel
  * Send Queue status row → "Download all history": the complete history of this
  * tab's channel as one CSV, regardless of the Status filter, page or page size.
  */
-export function DownloadAllHistoryButton({ channel }: { channel: HistoryExportChannel }) {
+export function DownloadAllHistoryButton({ channel, className = "" }: { channel: HistoryExportChannel; className?: string }) {
   const toast = useToast();
   const count = useHistoryExportCount(channel);
   const [busy, setBusy] = useState(false);
@@ -16,7 +16,7 @@ export function DownloadAllHistoryButton({ channel }: { channel: HistoryExportCh
   return (
     <button
       type="button"
-      className="btn-ghost queue-action"
+      className={`btn-ghost queue-action ${className}`}
       disabled={busy || empty}
       aria-busy={busy}
       aria-label={busy ? "Preparing history download" : "Download all history"}

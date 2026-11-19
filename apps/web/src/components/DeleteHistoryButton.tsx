@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { useConfirm } from "./confirm";
 import { Icon } from "./icons";
 import { useToast } from "./toast";
+import { Tooltip } from "./Tooltip";
 
 /**
  * Send Queue → the Delete button on each row (Email batch, WhatsApp batch, AI Call follow-up).
@@ -37,19 +38,22 @@ export function DeleteHistoryButton({
 
   const label = `Delete ${what}`;
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={blockedReason ?? label}
-      className="btn-ghost px-2 py-1.5 hover:text-crit"
-      disabled={!!blockedReason || del.isPending}
-      onClick={async (e) => {
-        e.stopPropagation();
-        const ok = await confirm({ title: `Delete ${what}?`, body, confirmText: "Delete", tone: "danger" });
-        if (ok) del.mutate();
-      }}
-    >
-      <Icon name="trash" size={14} className={del.isPending ? "animate-pulse" : undefined} />
-    </button>
+    // Styled tooltip: the delete label, or why it's disabled (also linked for screen readers then).
+    <Tooltip label={blockedReason ?? "Delete"} describe={!!blockedReason}>
+      <button
+        type="button"
+        aria-label={label}
+        title={blockedReason ?? undefined}
+        className="btn-icon hover:bg-crit-soft hover:text-crit"
+        disabled={!!blockedReason || del.isPending}
+        onClick={async (e) => {
+          e.stopPropagation();
+          const ok = await confirm({ title: `Delete ${what}?`, body, confirmText: "Delete", tone: "danger" });
+          if (ok) del.mutate();
+        }}
+      >
+        <Icon name="trash" size={16} className={del.isPending ? "animate-pulse" : undefined} />
+      </button>
+    </Tooltip>
   );
 }

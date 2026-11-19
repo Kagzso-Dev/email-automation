@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useScrolledShadow } from "../lib/useScrolledShadow";
 
 /**
  * Send Queue building blocks shared by the Email, WhatsApp and AI Call
- * follow-ups tabs: a table that scrolls inside its own box (sized to the space
- * left on screen, so the page itself doesn't scroll) with a sticky header row,
- * and a compact pagination bar in the style of the WhatsApp Contacts pager.
+ * follow-ups tabs: a card whose table scrolls inside its own box (sized to the
+ * space left on screen, so the page itself doesn't scroll) with a sticky header
+ * row, and the pagination bar as the card's footer.
  */
 
-/** Space kept below the table: the pagination bar plus the page's bottom padding. */
+/** The table card: 16px radius, soft border and shadow. Also used for the empty / no-match states. */
+export const QUEUE_CARD = "overflow-hidden rounded-xl border border-line/70 bg-surface shadow-card";
+
+/** Space kept below the table: the card's pagination footer plus the page's bottom padding. */
 const RESERVED_BELOW = 124;
 const MIN_HEIGHT = 240;
 
@@ -35,12 +39,18 @@ export function ScrollTable({
   children,
   scrollKey,
   minWidth = "44rem",
+  footer,
+  label,
 }: {
   head: ReactNode[];
   children: ReactNode;
   /** When this changes (page, page size, filter), the box scrolls back to the top. */
   scrollKey?: string;
   minWidth?: string;
+  /** Under the table, inside the card (the pagination bar). */
+  footer?: ReactNode;
+  /** The table's caption for screen readers, e.g. "Email batches". */
+  label?: string;
 }) {
   const box = useRef<HTMLDivElement | null>(null);
   const maxHeight = useFillHeight(box);
@@ -56,27 +66,34 @@ export function ScrollTable({
     if (box.current) box.current.scrollTop = 0;
   }, [scrollKey]);
   return (
-    <div
-      ref={setBox}
-      className="scroll-shadow scroll-thin -mx-4 overflow-auto overscroll-contain rounded-xl border-y border-line/70 bg-surface shadow-card sm:mx-0 sm:rounded-xl sm:border-x"
-      style={{ maxHeight: maxHeight ?? undefined, scrollBehavior: "smooth" }}
-    >
-      <table className="table-soft w-full text-sm" style={{ minWidth }}>
-        <thead>
-          <tr className="text-left">
-            {head.map((h, i) => (
-              <th
-                key={i}
-                // Sticky header: own background + a drawn bottom rule (borders don't stick with the cell).
-                className="sticky top-0 z-10 px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-550 shadow-[inset_0_-1px_0_rgb(var(--c-line))]"
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>{children}</tbody>
-      </table>
+    <div className={QUEUE_CARD}>
+      <div
+        ref={setBox}
+        // Scrolls both ways: down inside the card, sideways on small screens (the page itself never scrolls sideways).
+        className="scroll-shadow scroll-thin overflow-auto overscroll-contain"
+        style={{ maxHeight: maxHeight ?? undefined, scrollBehavior: "smooth" }}
+      >
+        <table className="table-soft w-full text-sm" style={{ minWidth }}>
+          {label ? <caption className="sr-only">{label}</caption> : null}
+          <thead>
+            <tr className="text-left">
+              {head.map((h, i) => (
+                <th
+                  key={i}
+                  scope="col"
+                  // Sticky header: own background + a drawn bottom rule (borders don't stick with the cell).
+                  // text-slate-550 (not the table's slate-500) keeps the labels above 4.5:1 on the header tint.
+                  className="sticky top-0 z-10 whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-slate-550 shadow-[inset_0_-1px_0_rgb(var(--c-line))]"
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>{children}</tbody>
+        </table>
+      </div>
+      {footer ? <div className="border-t border-line-subtle px-4 py-3">{footer}</div> : null}
     </div>
   );
 }
@@ -119,15 +136,19 @@ export function QueuePagination({
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-550">
-      <span>
-        Showing {from}–{to} of {total} {noun}
-      </span>
-      <div className="flex items-center gap-2">
-        <label className="flex items-center gap-1.5 text-xs">
-          <span className="hidden sm:inline">Per page</span>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm text-slate-550">
+      <p aria-live="polite">
+        Showing{" "}
+        <span className="font-medium tabular-nums text-ink">
+          {from}–{to}
+        </span>{" "}
+        of <span className="font-medium tabular-nums text-ink">{total}</span> {noun}
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-xs">
+          Per page
           <select
-            className="input w-auto py-1.5"
+            className="input h-9 w-auto rounded-[10px] py-0"
             aria-label="Rows per page"
             value={pageSize}
             onChange={(e) => onPageSize(Number(e.target.value))}
@@ -139,15 +160,19 @@ export function QueuePagination({
             ))}
           </select>
         </label>
-        <button className="btn-ghost" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-          Prev
-        </button>
-        <span className="px-2 py-2 font-mono text-xs tabular-nums text-ink">
-          {page} / {pages}
-        </span>
-        <button className="btn-ghost" disabled={page >= pages} onClick={() => onPage(page + 1)}>
-          Next
-        </button>
+        <nav aria-label="Pages" className="flex items-center gap-1.5">
+          <button type="button" className="btn-ghost h-9 gap-1 px-2.5" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+            <ChevronLeft size={16} aria-hidden="true" />
+            Prev
+          </button>
+          <span className="min-w-[3.25rem] text-center font-mono text-xs tabular-nums text-ink">
+            {page} / {pages}
+          </span>
+          <button type="button" className="btn-ghost h-9 gap-1 px-2.5" disabled={page >= pages} onClick={() => onPage(page + 1)}>
+            Next
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </nav>
       </div>
     </div>
   );

@@ -1,0 +1,91 @@
+---
+config:
+  layout: elk
+  theme: default
+  flowchart:
+    htmlLabels: true
+---
+%% SYS — System Overview: how the Kagzso Orchestrator ("Dispatch") fits together.
+%% Source of truth: apps/api/src/http/app.ts, apps/api/src/worker.ts, apps/api/src/queue/workers.ts,
+%% kagzso-voice-backend-english/app/main.py, deploy/ecosystem.config.cjs
+flowchart TD
+  subgraph UI["User / UI - React SPA (apps/web)"]
+    direction TB
+    U1["Login page - JWT session"]
+    U2["Main: Dashboard, Data Quality (ADMIN)"]
+    U3["Email: Email Contacts, Email Templates, Campaigns, Triggers"]
+    U4["WhatsApp: WhatsApp Contacts, WhatsApp Templates, WhatsApp Inbox"]
+    U5["Calls - English / Tamil / other languages: Voicecall Contact, Voice Call Flows, AI Agents"]
+    U6["System: Send Queue, Upload History, AI Providers, Settings, Hard stop"]
+  end
+
+  subgraph BE["Orchestrator Backend - Node 20 / Express / Prisma"]
+    direction TB
+    API["API process (PM2 kagzso_orchestrator) - authRequired + requireRole guards"]
+    WRK["Worker process (PM2 kagzso_orchestrator_worker) - 9 MySQL-backed queues"]
+    SCH["Scheduler tick every 15 s - due campaigns -> campaign-dispatch"]
+    HSF["Hard-stop finalizer every 15 s (ENABLE_HARD_STOP)"]
+    WHW["POST /api/webhooks/whatsapp - Meta HMAC X-Hub-Signature-256"]
+    WHA["POST /api/webhooks/ai-calls - HMAC X-Kagzso-Signature"]
+    WHT["POST /api/webhooks/trigger/:eventKey - API key"]
+    TRK["/api/track/open, /api/track/click, /api/unsubscribe/:token"]
+  end
+
+  subgraph VB["Voice Backend - Python FastAPI, one process per language (PM2 kagzso_orchestrator_voice[_lang])"]
+    direction TB
+    V1["POST /api/calls/outbound (X-API-Key)"]
+    V2["Plivo / Twilio webhooks + media WebSocket"]
+    V3["CallSession: STT -> LLM -> TTS turns, do-not-call detection"]
+    V4["finalize_conversation: LLM outcome + summary"]
+  end
+
+  subgraph DB["Database"]
+    direction TB
+    MY[("MySQL 'dispatch' - Prisma schema: contacts, templates, ledgers, Job queue, AI call tables, hard_stops")]
+    VDB[("Voice backend MySQL - agents, contacts.dnd, calls, call_events, transcripts, call_recordings")]
+  end
+
+  subgraph EXT["External Services"]
+    direction TB
+    SMTP["SMTP server (Settings -> Email or .env) / mock outbox"]
+    META["Meta WhatsApp Cloud API - graph.facebook.com"]
+    TEL["Plivo or Twilio telephony"]
+    SAR["Sarvam AI - STT / TTS / cloned voices"]
+    LLM["LLM chain - Gemini / Groq / OpenAI / Anthropic / Ollama / Sarvam"]
+    DQ["Data Quality AI - Ollama / Groq / Gemini"]
+    EXTSYS["External system calling trigger webhook"]
+    SEN["Sentry (optional, SENTRY_DSN)"]
+  end
+
+  U1 --> API
+  U2 --> API
+  U3 --> API
+  U4 --> API
+  U5 --> API
+  U6 --> API
+  API -->|"read / write + enqueue Job rows"| MY
+  SCH --> MY
+  HSF --> MY
+  WRK -->|"poll + claim Job rows"| MY
+  WRK -->|"send-email, manual-bulk-send"| SMTP
+  WRK -->|"whatsapp-bulk-send, media download"| META
+  API -->|"template sync / create, inbox reply"| META
+  META -->|"statuses + inbound messages"| WHW
+  WHW --> MY
+  EXTSYS --> WHT
+  WHT --> MY
+  TRK --> MY
+  WRK -->|"ai-call-run: place call, poll GET /api/calls/:id"| V1
+  V1 --> TEL
+  TEL -->|"answer / status webhooks, audio stream"| V2
+  V2 --> V3
+  V3 --> SAR
+  V3 --> LLM
+  V3 --> V4
+  V4 --> VDB
+  V1 --> VDB
+  V4 -->|"signed status callback"| WHA
+  WHA --> MY
+  WRK -->|"data-quality scoring"| DQ
+  API -.-> SEN
+  WRK -.-> SEN

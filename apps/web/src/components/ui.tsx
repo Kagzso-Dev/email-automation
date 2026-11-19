@@ -147,15 +147,24 @@ export function Modal({
   );
 }
 
-/** Underline-style tab bar. Purely visual — the caller owns the active state. */
+/**
+ * Underline-style tab bar. Purely visual — the caller owns the active state.
+ * Opt-in with `idPrefix` (other pages keep their markup exactly as before): each tab gets an id
+ * (`<prefix>-tab-<value>`) pointing at the panel `<prefix>-panel`, and the ARIA tabs keyboard model — Tab reaches
+ * the active tab only; ←/→ and Home/End move between tabs and select them.
+ */
 export function Tabs<T extends string>({
   tabs,
   value,
   onChange,
+  idPrefix,
+  ariaLabel,
 }: {
   tabs: { value: T; label: ReactNode }[];
   value: T;
   onChange: (v: T) => void;
+  idPrefix?: string;
+  ariaLabel?: string;
 }) {
   // Gradient indicator that slides under the active tab (measured, transform-only animation).
   const bar = useRef<HTMLDivElement>(null);
@@ -169,16 +178,35 @@ export function Tabs<T extends string>({
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [value, tabs.length]);
+  const activeIndex = Math.max(0, tabs.findIndex((t) => t.value === value));
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if (!idPrefix) return;
+    const last = tabs.length - 1;
+    const next =
+      e.key === "ArrowRight" ? (activeIndex + 1) % tabs.length
+      : e.key === "ArrowLeft" ? (activeIndex - 1 + tabs.length) % tabs.length
+      : e.key === "Home" ? 0
+      : e.key === "End" ? last
+      : -1;
+    const tab = tabs[next];
+    if (!tab) return;
+    e.preventDefault();
+    onChange(tab.value);
+    bar.current?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  }
   return (
-    <div ref={bar} className="relative mb-5 flex gap-1 border-b border-line" role="tablist">
-      {tabs.map((t) => {
+    <div ref={bar} className="relative mb-5 flex gap-1 border-b border-line" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
+      {tabs.map((t, i) => {
         const active = t.value === value;
         return (
           <button
             key={t.value}
             type="button"
             role="tab"
+            id={idPrefix ? `${idPrefix}-tab-${t.value}` : undefined}
+            aria-controls={idPrefix ? `${idPrefix}-panel` : undefined}
             aria-selected={active}
+            tabIndex={idPrefix ? (i === activeIndex ? 0 : -1) : undefined}
             onClick={() => onChange(t.value)}
             className={`rounded-t-lg px-4 py-2.5 text-sm font-medium transition-colors duration-200 ${
               active ? "font-semibold text-ink" : "text-slate-550 hover:bg-tint hover:text-ink"

@@ -506,80 +506,150 @@ class ClonedVoiceFallback(FallbackTTS):
     async def open_stream(self, pace: Optional[float] = None) -> TTSStream:
         if not self._on_fallback:
             try:
-                return _ClonedStream(await self.primary.open_stream(pace=pace), self)
+                return _ClonedStream(await self.primary.open_stream(pace=pace), self, pace)
             except TTSError as exc:
                 self._warn("opening the stream", exc)
         return await self.fallback.open_stream(pace=pace)
 
 
+_CLOSING_STREAMS: "set[asyncio.Task]" = set()  # abandoned cloned streams being closed (strong references)
+
+
 class _ClonedStream(TTSStream):
-    """A cloned voice's live stream. A Sarvam error before its first audio (the socket closed, or no audio within the
-    stream's time limit) also moves the call to the stock voice: the error still reaches the call, whose recovery
-    (CallSession._recover_tts_failure -> synthesize) then says the reply in the stock voice, and every later reply
-    streams in it - instead of each reply waiting on the cloned voice again. Audio already played is never repeated."""
+    """A cloned voice's live stream that hands the reply to the stock voice until the cloned voice has spoken.
 
-    def __init__(self, inner: TTSStream, owner: ClonedVoiceFallback):
-        self.inner, self.owner = inner, owner
+    A Sarvam error before its first audio (the socket refused or closed), or no audio SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS
+    after the text was due to be spoken (a flush, the end of the reply, or SARVAM_TTS_MIN_BUFFER_CHARS of text), moves
+    the call to the stock fallback voice ("CLONED VOICE FALLBACK" in the log). The reply goes on at once: a stock stream
+    is opened and given everything sent so far (text, flushes, the end), anything sent later goes to it, and its audio
+    is this stream's audio. The call never sees an error or a gap, and every later reply streams in the stock voice.
+    Once the cloned voice has spoken, the reply stays with it (never two voices in one reply)."""
+
+    def __init__(self, inner: TTSStream, owner: ClonedVoiceFallback, pace: Optional[float] = None):
+        self.inner, self.owner, self._pace = inner, owner, pace
+        self._active: TTSStream = inner
+        cfg: Settings = getattr(owner.primary, "cfg", default_settings)
+        self._limit = max(0.0, float(cfg.SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS or 0))
+        self._buffer = min(200, max(30, cfg.SARVAM_TTS_MIN_BUFFER_CHARS))  # Sarvam's min_buffer_size for this stream
+        # A stream that speaks each text at once (sarvam_tts.CloneSentenceStream): due from its first text.
+        self._each_text = bool(getattr(inner, "speaks_each_text", False))
+        self._ops: List[Tuple[str, Optional[str]]] = []  # what was sent, in order: replayed to the stock stream
+        self._chars = 0
+        self._due_at: Optional[float] = None  # when the cloned voice should have started to speak
         self._got_audio = False
+        self._switched = False
+        self._lock = asyncio.Lock()
 
-    def _failed(self, exc: TTSError) -> None:
-        if not self._got_audio and not self.owner._on_fallback:
-            self.owner._warn("streaming", exc)
+    @staticmethod
+    async def _apply(stream: TTSStream, kind: str, text: Optional[str]) -> None:
+        if kind == "text":
+            await stream.send_text(text or "")
+        elif kind == "flush":
+            await stream.flush()
+        else:
+            await stream.end_input()
+
+    async def _switch(self, what: str, exc: TTSError) -> None:
+        """Hand the reply to the stock voice (with self._lock held)."""
+        self.owner._warn(what, exc)
+        stock = await self.owner.fallback.open_stream(pace=self._pace)
+        for kind, text in self._ops:
+            await self._apply(stock, kind, text)
+        self._active, self._switched = stock, True
+        task = asyncio.ensure_future(self.inner.aclose())  # never waits on the cloned socket's close
+        _CLOSING_STREAMS.add(task)
+        task.add_done_callback(_CLOSING_STREAMS.discard)
+
+    async def _send(self, kind: str, text: Optional[str] = None) -> None:
+        async with self._lock:
+            self._ops.append((kind, text))
+            if kind == "text":
+                self._chars += len(text or "")
+            if self._due_at is None and (kind != "text" or self._each_text or self._chars >= self._buffer):
+                self._due_at = time.monotonic()
+            try:
+                await self._apply(self._active, kind, text)
+            except TTSError as exc:
+                if self._switched or self._got_audio:
+                    raise
+                await self._switch("streaming", exc)  # this message too goes to the stock stream
 
     async def send_text(self, text: str) -> None:
-        try:
-            await self.inner.send_text(text)
-        except TTSError as exc:
-            self._failed(exc)
-            raise
-
-    async def end_input(self) -> None:
-        try:
-            await self.inner.end_input()
-        except TTSError as exc:
-            self._failed(exc)
-            raise
+        if text.strip():
+            await self._send("text", text)
 
     async def flush(self) -> None:
-        try:
-            await self.inner.flush()
-        except TTSError as exc:
-            self._failed(exc)
-            raise
+        await self._send("flush")
+
+    async def end_input(self) -> None:
+        await self._send("end")
+
+    def _overdue(self) -> bool:
+        return self._limit > 0 and self._due_at is not None and time.monotonic() >= self._due_at + self._limit
 
     async def audio(self):
+        it = self.inner.audio().__aiter__()
+        pending: Optional[asyncio.Future] = None
         try:
-            async for chunk in self.inner.audio():
-                self._got_audio = True
-                yield chunk
-        except TTSError as exc:
-            self._failed(exc)
-            raise
+            while not self._switched:
+                pending = pending or asyncio.ensure_future(it.__anext__())
+                # Short steps: a switch made by send_text (a refused message) is noticed at once too.
+                done, _ = await asyncio.wait({pending}, timeout=0.05)
+                if pending in done:
+                    task, pending = pending, None
+                    try:
+                        chunk = task.result()
+                    except StopAsyncIteration:
+                        return
+                    except TTSError as exc:
+                        async with self._lock:
+                            if not self._switched:
+                                await self._switch("streaming", exc)
+                        break
+                    self._got_audio = True
+                    yield chunk
+                    async for chunk in it:  # the cloned voice speaks this reply: the rest of its audio
+                        yield chunk
+                    return
+                if self._overdue():
+                    async with self._lock:
+                        if not self._switched:
+                            await self._switch(f"no audio within {self._limit:g}s of the text",
+                                               TTSError("timeout", "Sarvam voice clone stream sent no audio in time"))
+        finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
+        async for chunk in self._active.audio():  # the stock voice, given the reply so far
+            yield chunk
 
     async def set_pace(self, pace: float) -> None:
-        await self.inner.set_pace(pace)
+        self._pace = pace
+        await self._active.set_pace(pace)
 
     async def cancel(self) -> None:
-        await self.inner.cancel()
+        await self._active.cancel()
+        if self._active is not self.inner:
+            await self.inner.cancel()
 
     async def aclose(self) -> None:
-        await self.inner.aclose()
+        await self._active.aclose()
+        if self._active is not self.inner:
+            await self.inner.aclose()
 
     def is_open(self) -> bool:
         # A warm stream (TTS_WARM_STREAM) opened before the call moved to the stock voice is not reused.
-        return not self.owner._on_fallback and self.inner.is_open()
+        return not self.owner._on_fallback and not self._switched and self.inner.is_open()
 
     def __getattr__(self, name: str):
-        if name == "inner":  # not set yet: never recurse
+        if name in ("inner", "_active"):  # not set yet: never recurse
             raise AttributeError(name)
-        return getattr(self.inner, name)  # anything else the call reads from the provider's stream
+        return getattr(self._active, name)  # anything else the call reads from the provider's stream
 
 
 def with_clone_fallback(tts: TTSProvider) -> TTSProvider:
     """A call's TTS: a cloned voice gets a stock voice of its gender (cfg.fallback_speaker: ishita / ratan by default;
     same settings, key and connection pool) as its fallback; any other TTS is returned unchanged. A stream that fails
-    after opening (before any audio) is said again through synthesize() by the call
-    (CallSession._recover_tts_failure), which falls back here."""
+    or stays silent after opening (before any audio) hands its reply to the stock voice itself (_ClonedStream)."""
     if isinstance(tts, ClonedVoiceFallback):
         return tts
     if isinstance(tts, FallbackTTS):
@@ -651,6 +721,9 @@ def _tts_view(tts: TTSProvider) -> Dict[str, Any]:
     view: Dict[str, Any] = {"provider": getattr(tts, "name", type(tts).__name__)}
     if cfg is not None:
         view["model"] = "voice-clone" if getattr(tts, "cloned", False) else cfg.SARVAM_TTS_MODEL
+        if getattr(tts, "cloned", False):
+            view["clone_stream"] = (cfg.SARVAM_TTS_CLONE_STREAM or "rest").strip().lower()
+            view["first_audio_limit_s"] = cfg.SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS
     if getattr(tts, "voice_id", None):
         view["voice"] = tts.voice_id
     if cfg is not None and hasattr(tts, "_voice_settings"):

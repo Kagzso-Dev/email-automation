@@ -92,16 +92,40 @@ GREETING_INSTRUCTION = (
 )
 # Autonomous AI Agents with natural lines (CallContextData.natural_lines): the LLM says these moments in its own
 # words, in the call's language. Sent as this turn's message only; never stored as the customer's words.
+# A call variable set when an agent's call opens with its published greeting (AGENT_FIXED_GREETING).
+FIXED_GREETING_VARIABLE = "flow_fixed_greeting"
 AGENT_GREETING_INSTRUCTION = (
     "(The customer has just picked up the phone and has not said anything yet. Open the call as OPENING says, "
     "in your own words. One or two short sentences.)"
 )
+# Added to that instruction per call language: sent with the opening request itself, where this model follows a rule
+# (a rule in the system prompt changed little - see turn_tuning). A Tamil call once opened with the verb first, before
+# the company. Described, never a quoted line for the model to copy (the project's rule). Used when the LLM writes
+# the opening (AGENT_FIXED_GREETING off); the published Tamil greeting already ends with the verb.
+AGENT_OPENING_ORDER = {
+    "ta": (" (In Tamil, end the sentence with the verb, as people do on the phone: your name and where you are calling "
+           "from come first, and the verb for speaking comes last. Add sir / madam only as title_to_use gives it.)"),
+}
+
+
+def agent_greeting_instruction(language: Optional[str]) -> str:
+    """What an Autonomous AI Agent's LLM is asked when it opens the call (live, or while the phone rings)."""
+    return AGENT_GREETING_INSTRUCTION + AGENT_OPENING_ORDER.get((language or "").split("-")[0].lower(), "")
 AGENT_SILENCE_REPROMPT_INSTRUCTION = (
     "(The customer has been silent for a while. In one short, natural sentence, check gently whether they can "
     "hear you. Nothing else.)"
 )
 AGENT_SILENCE_CLOSE_INSTRUCTION = (
     "(The customer is still silent. Say one short, warm goodbye in your own words. The call ends after it.)"
+)
+# The customer spoke but their words were lost (speech recognition failed): asked once, then a goodbye after a
+# second failure in a row - in the agent's own words, like the silence lines.
+AGENT_UNHEARD_INSTRUCTION = (
+    "(The customer just said something, but their words did not come through clearly. In one short, natural "
+    "sentence, ask them to say it again. Nothing else.)"
+)
+AGENT_UNHEARD_CLOSE_INSTRUCTION = (
+    "(Their words still did not come through. Say one short, warm goodbye in your own words. The call ends after it.)"
 )
 # A call with voice response tuning (turn_tuning.py), after the AI finished: the customer made only a sound. A fixed
 # check-in line there made an agent sound like an IVR, and a "ம்" after a question is often the answer itself.
@@ -880,6 +904,8 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         customer_business=req.customer_business if flow_vars.get("flow_contact_business") else None,
     )
     variables.update(flow_vars)
+    if flow_vars.get("flow_natural_lines") and cfg.AGENT_FIXED_GREETING:
+        variables[FIXED_GREETING_VARIABLE] = "true"  # this call opens with the agent's greeting, word for word
     tuning = turn_tuning.call_variable(req.voice_tuning.model_dump() if req.voice_tuning else None, cfg)
     if tuning:  # only this backend's tuned language; anywhere else it is ignored
         variables[turn_tuning.VARIABLE] = tuning
@@ -936,7 +962,9 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
         await get_session_store().set_fields(call.id, provider_request_id=result.request_uuid)
         log.info("Plivo outbound call fired")
         watch_for_provider_callback(call.id, cfg.NO_PROVIDER_CALLBACK_SECONDS)
-        if cfg.GREETING_PRERENDER and agent.first_message and variables.get("flow_natural_lines") != "true":
+        # An agent's call renders its greeting too when it opens with it (AGENT_FIXED_GREETING).
+        if (cfg.GREETING_PRERENDER and agent.first_message
+                and (variables.get("flow_natural_lines") != "true" or variables.get(FIXED_GREETING_VARIABLE) == "true")):
             greeting = opening_line(agent.first_message, variables)
             if greeting:
                 agent_voice = variables.get("flow_voice_profile") == AGENT_VOICE_PROFILE
@@ -1466,6 +1494,7 @@ class CallSession:
         self._session_started = time.monotonic()  # call time for an Autonomous AI Agent's timing hint
         self._agent_audio_end = 0.0  # when the agent's audio last stopped (echo tail)
         self._speaking_turn: Optional[_TurnState] = None  # the line the agent is / was last saying
+        self._opening_turn: Optional[_TurnState] = None  # the agent's first line of the call
         self._speech_near_agent = False  # current utterance started over / right after the agent
         self._stt_stream: Optional[STTStream] = None  # streaming STT for the utterance in progress
         self._line_audio: Dict[str, bytes] = {}  # pre-rendered fixed lines (PRERENDER_FIXED_LINES)
@@ -1959,12 +1988,20 @@ class CallSession:
               and self._real_speech_so_far(self.cfg.BARGE_EARLY_STOP_PITCHED_MS)):
             await self._stop_ack()  # THINKING_ACK: the customer speaks; the reply is still coming
         elif (self.cfg.BARGE_EARLY_STOP and not in_grace and not self._identity_question_playing()
-              and not self._silence_line_playing() and self._real_speech_so_far(self.cfg.BARGE_EARLY_STOP_PITCHED_MS)):
+              and not self._silence_line_playing() and not self._opening_playing()
+              and self._real_speech_so_far(self.cfg.BARGE_EARLY_STOP_PITCHED_MS)):
             ev = self.endpointer.measure_so_far()
             log.info("Early stop: the customer is really speaking - stopping the agent now")
             self._event("barge_in_early", {"turn": self.turn_index, "voiced_ms": ev.voiced_ms if ev else None})
             self._barge_candidate = False
             await self.barge_in()
+
+    def _opening_playing(self) -> bool:
+        """The agent's first line of the call is playing. A voice over it is usually "Hello?" (the customer checking
+        the line), so BARGE_EARLY_STOP never cuts it on voice alone: the words decide when they end (STT) - real
+        words still interrupt it, a greeting word does not. Long loud speech (BARGE_IN_MIN_SPEECH_MS) still stops it."""
+        st = self._speaking_turn
+        return st is not None and st is self._opening_turn and self.ai_busy
 
     def _real_speech_so_far(self, pitched_ms: int) -> bool:
         """The utterance in progress already passes voice focus's barge-in gates (voiced speech above
@@ -2373,7 +2410,8 @@ class CallSession:
 
     def greeting_instruction(self) -> str:
         """What the LLM is asked when it opens a call without a fixed greeting."""
-        return AGENT_GREETING_INSTRUCTION if self.ctx.natural_lines else GREETING_INSTRUCTION
+        return agent_greeting_instruction(self.cfg.CALL_LANGUAGE) if self.ctx.natural_lines else GREETING_INSTRUCTION
+
 
     async def _greet_at_delay(self) -> None:
         """Dispatch's AI Greeting Delay: greet exactly this long after the customer answered, whatever
@@ -2723,7 +2761,8 @@ class CallSession:
                 if st.scripted is None:
                     m.t4 = m.t4 or time.monotonic()
                     log.info("LLM completed: %dms", _ms(m.t3, m.t4) or 0)
-                if st.is_greeting and self.recording_notice_text() and not self._notice_spoken:
+                # (an agent's own opening never had the flow's notice after it: unchanged)
+                if st.is_greeting and not self.ctx.natural_lines and self.recording_notice_text() and not self._notice_spoken:
                     await self._speak_recording_notice(st)
                 m.t_sound = st.first_sound
                 self._commit_turn(st, interrupted=False)
@@ -3129,6 +3168,8 @@ class CallSession:
             held = time.monotonic()
             await self._hold_for_gap(st.hold_until)  # RHYTHM_GAP, and a tuned call's reply
             st.held_ms = int((time.monotonic() - held) * 1000)
+        if st is not None and not self._agent_spoke:
+            self._opening_turn = st  # the agent's first line of the call (_opening_playing)
         self._agent_spoke = True
         if st is not None and not st.audio_started:
             st.audio_started = True
@@ -3241,6 +3282,10 @@ class CallSession:
 
     async def _speak_fallback(self, st: _TurnState, reason: str) -> None:
         text, close = self._next_fallback_line(reason)
+        if self.ctx.natural_lines and reason.startswith("stt"):
+            # An agent that says its own lines asks again (or says goodbye) in its own words: the customer's words were
+            # lost (speech recognition failed), the LLM still works. The fixed line only if that fails too.
+            text = await self._agent_line(AGENT_UNHEARD_CLOSE_INSTRUCTION if close else AGENT_UNHEARD_INSTRUCTION) or text
         try:
             pcm = self._line_audio.get(text) or await synthesize_line(self.tts, text, self.pauses)
             st.is_greeting = False
@@ -3254,6 +3299,22 @@ class CallSession:
             await self._after_reply()
         except Exception as exc:
             log.error("Fallback speech failed: %s", type(exc).__name__)
+
+    AGENT_LINE_TIMEOUT_SECONDS = 6.0
+
+    async def _agent_line(self, instruction: str) -> Optional[str]:
+        """One line the agent's LLM says for a moment of the call (a one-off instruction, never stored as the
+        customer's words), or None when it can't (error, timeout, nothing speakable, an end-of-call marker)."""
+        try:
+            raw = await asyncio.wait_for(self.providers.llm.generate_response(
+                self.ctx.agent_prompt, self.history, instruction, self.turn_variables()), self.AGENT_LINE_TIMEOUT_SECONDS)
+        except Exception as exc:  # the fixed line is said instead
+            log.warning("Agent line not written (%s) - saying the fixed line", type(exc).__name__)
+            return None
+        text = clean_spoken_text(extract_end_call(raw)[0])
+        if self.agent_voice:
+            text = calm_spoken_text(text)
+        return text or None
 
     async def _hangup_after_playback(self) -> None:
         with call_context(self.call_id):
@@ -3389,10 +3450,11 @@ async def load_call_context(call_id: str) -> Optional[CallContextData]:
         flow_lines = {key: render_first_message(variables[f"flow_silence_{key}"], variables) or None
                       for key in ("reprompt", "closing") if variables.get(f"flow_silence_{key}")}
         natural = variables.get("flow_natural_lines") == "true"
+        fixed_greeting = variables.get(FIXED_GREETING_VARIABLE) == "true"  # AGENT_FIXED_GREETING
         return CallContextData(
             call_id=call.id,
             agent_prompt=call.agent.system_prompt,
-            first_message=None if natural else call.agent.first_message,
+            first_message=None if natural and not fixed_greeting else call.agent.first_message,
             natural_lines=natural,
             variables=variables,
             voice_id=call.voice_id or call.agent.voice_id,

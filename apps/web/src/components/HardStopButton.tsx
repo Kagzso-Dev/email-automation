@@ -35,6 +35,57 @@ import { ErrorNote } from "./ui";
 
 const CSV_LABEL: Record<HardStopCsvChannel, string> = { email: "emails", whatsapp: "WhatsApp", calls: "calls" };
 
+/**
+ * Pressing a Hard stop: the confirmation (its body is HARD_STOP_CONFIRM_TEXT, word for word), then the POST and the
+ * refreshes. Shared by <HardStopButton> and the Send Queue's "More" (danger zone) menu, so both behave the same.
+ */
+export function useHardStopAction({
+  scope,
+  targetId,
+  label = "Hard stop",
+  title,
+  invalidate = [],
+  onError,
+}: {
+  scope: HardStopScope;
+  targetId: string | null;
+  /** Also the confirm button's text. */
+  label?: string;
+  /** The confirmation's headline. */
+  title?: string;
+  /** Queries to refresh once the stop is applied (the list the button sits in). */
+  invalidate?: QueryKey[];
+  /** Callers without room for an inline error (a menu that closes) show it here, e.g. as a toast. */
+  onError?: (err: Error) => void;
+}) {
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const [stop, setStop] = useState<HardStopView | null>(null);
+  const press = useMutation({
+    mutationFn: () => api<HardStopResult>(hardStopPath(scope, targetId), { method: "POST", notify: "Hard stop applied" }),
+    onSuccess: (r) => {
+      setStop(r.stop);
+      for (const key of invalidate) void qc.invalidateQueries({ queryKey: key });
+      void qc.invalidateQueries({ queryKey: ["hard-stop-latest-all"] });
+      void qc.invalidateQueries({ queryKey: ["hard-stop-latest-section"] });
+      void qc.invalidateQueries({ queryKey: ["hard-stop-latest"] });
+    },
+    onError,
+  });
+
+  async function ask() {
+    const ok = await confirm({
+      title: title ?? (scope === "ALL" ? "Stop all running sends?" : "Hard stop this send?"),
+      body: HARD_STOP_CONFIRM_TEXT,
+      confirmText: label,
+      tone: "danger",
+    });
+    if (ok) press.mutate();
+  }
+
+  return { ask, press, stop };
+}
+
 /** "Hard stop" with the confirmation, word for word. Shows the stop's status once pressed. */
 export function HardStopButton({
   scope,
@@ -58,30 +109,8 @@ export function HardStopButton({
   icon?: ReactNode;
   wrapperClassName?: string;
 }) {
-  const qc = useQueryClient();
-  const confirm = useConfirm();
-  const [stop, setStop] = useState<HardStopView | null>(null);
-  const press = useMutation({
-    mutationFn: () => api<HardStopResult>(hardStopPath(scope, targetId), { method: "POST", notify: "Hard stop applied" }),
-    onSuccess: (r) => {
-      setStop(r.stop);
-      for (const key of invalidate) void qc.invalidateQueries({ queryKey: key });
-      void qc.invalidateQueries({ queryKey: ["hard-stop-latest-all"] });
-      void qc.invalidateQueries({ queryKey: ["hard-stop-latest-section"] });
-      void qc.invalidateQueries({ queryKey: ["hard-stop-latest"] });
-    },
-  });
+  const { ask, press, stop } = useHardStopAction({ scope, targetId, label, title, invalidate });
   const wide = scope === "ALL" || scope === "EMAIL" || scope === "WHATSAPP" || scope === "CALLS";
-
-  async function ask() {
-    const ok = await confirm({
-      title: title ?? (scope === "ALL" ? "Stop all running sends?" : "Hard stop this send?"),
-      body: HARD_STOP_CONFIRM_TEXT,
-      confirmText: label,
-      tone: "danger",
-    });
-    if (ok) press.mutate();
-  }
 
   return (
     <span className={wrapperClassName}>
@@ -110,8 +139,6 @@ export function HardStopTargetStatus({ scope, targetId, compact = false }: { sco
 
 /** "Stopping... (N in progress)" until the last in-progress item ends, then "Stopped" with the summary. */
 export function HardStopStatus({ stop, compact = false }: { stop: HardStopView; compact?: boolean }) {
-  const [error, setError] = useState<unknown>(null);
-  const channels = HARD_STOP_CSV_CHANNELS.filter((c) => stop.csvRows[c] > 0);
   const paused = [
     ...stop.paused.campaigns.map((c) => `campaign "${c.name}"`),
     ...stop.paused.triggers.map((t) => `trigger "${t.name}"`),
@@ -126,25 +153,35 @@ export function HardStopStatus({ stop, compact = false }: { stop: HardStopView; 
           Paused so nothing new starts by itself (turn back on with Schedule / the trigger switch): {paused.join(", ")}
         </div>
       )}
-      {channels.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-          {channels.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className="text-accent-ink hover:underline"
-              onClick={() => {
-                setError(null);
-                downloadCancelledCsv(stop.id, c).catch(setError);
-              }}
-            >
-              Download cancelled {CSV_LABEL[c]} (CSV, {stop.csvRows[c]})
-            </button>
-          ))}
-        </div>
-      )}
-      {error ? <ErrorNote error={error} /> : null}
+      <CancelledCsvLinks stop={stop} />
     </div>
+  );
+}
+
+/** One "Download cancelled … (CSV, N)" link per channel that has cancelled rows; nothing when there are none. */
+export function CancelledCsvLinks({ stop, className = "mt-1 flex flex-wrap gap-x-3 gap-y-1" }: { stop: HardStopView; className?: string }) {
+  const [error, setError] = useState<unknown>(null);
+  const channels = HARD_STOP_CSV_CHANNELS.filter((c) => stop.csvRows[c] > 0);
+  if (channels.length === 0) return null;
+  return (
+    <>
+      <div className={className}>
+        {channels.map((c) => (
+          <button
+            key={c}
+            type="button"
+            className="text-accent-ink hover:underline"
+            onClick={() => {
+              setError(null);
+              downloadCancelledCsv(stop.id, c).catch(setError);
+            }}
+          >
+            Download cancelled {CSV_LABEL[c]} (CSV, {stop.csvRows[c]})
+          </button>
+        ))}
+      </div>
+      {error ? <ErrorNote error={error} /> : null}
+    </>
   );
 }
 
@@ -156,6 +193,11 @@ const SECTION_LABEL: Record<HardStopSection, (language: AiCallLanguage) => { but
     title: `Hard stop every ${AI_CALL_LANGUAGE_NAMES[lang]} call run? (Other languages, email and WhatsApp continue)`,
   }),
 };
+
+/** A section's Hard stop wording: the button label and the confirmation's headline. */
+export function sectionHardStopLabels(section: HardStopSection, language: AiCallLanguage = DEFAULT_AI_CALL_LANGUAGE) {
+  return SECTION_LABEL[section](language);
+}
 
 /**
  * One section's Hard stop (Email, WhatsApp, or the calls of one language): the button and that section's latest stop.

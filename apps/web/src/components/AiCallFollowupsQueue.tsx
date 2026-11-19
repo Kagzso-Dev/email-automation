@@ -6,11 +6,11 @@ import { formatDateTime } from "../lib/schedule";
 import { useWhatsAppTemplateOptions, type AiCallFollowup, type FollowupStatus } from "../lib/aiCallCustomers";
 import { useConfirm } from "./confirm";
 import { useToast } from "./toast";
-import { Badge, EmptyState, ErrorNote, Modal, type BadgeTone } from "./ui";
-import { QueuePagination, ScrollTable, SkeletonRows } from "./QueueTable";
+import { Badge, ErrorNote, Modal, type BadgeTone } from "./ui";
+import { QUEUE_CARD, QueuePagination, ScrollTable, SkeletonRows } from "./QueueTable";
 import type { QueueViewProps } from "../pages/SendQueue";
-import { QueueActions } from "./QueueActions";
 import { DeleteHistoryButton } from "./DeleteHistoryButton";
+import { QueueEmptyState, QueueFilterBar } from "./sendQueue/QueueChrome";
 
 /**
  * Send Queue → "AI Call follow-ups": drafts created after AI calls. Nothing is
@@ -46,7 +46,7 @@ interface Page {
 
 const label = (s: string) => s.toLowerCase().replace(/_/g, " ");
 
-const FOLLOWUP_HEAD = ["Customer", "Phone", "Follow-up", "Details", "Status", "Created", ""];
+const FOLLOWUP_HEAD = ["Customer", "Phone", "Follow-up", "Details", "Status", "Created", <span className="sr-only">Actions</span>];
 
 export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
   const qc = useQueryClient();
@@ -91,49 +91,51 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
 
   return (
     <div>
-      <div className="queue-toolbar">
-        <div className="queue-toolbar-filter flex-wrap">
-          <label className="text-xs font-medium uppercase tracking-[0.06em] text-slate-550">Status</label>
-          <select
-            className="input sm:max-w-[14rem]"
-            value={status}
-            onChange={(e) => setView({ status: e.target.value, page: 1 })}
-          >
-            {STATUS_FILTERS.map((f) => (
-              <option key={f.value} value={f.value}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-          {q.data && q.data.pending > 0 && (
-            <span className="text-sm text-warn">
-              {q.data.pending} waiting for approval — nothing is sent until you approve.
-            </span>
-          )}
-        </div>
-        <QueueActions upload="ai-call" history="ai-followups" />
-      </div>
+      {/* Upload new file / Download all history for this tab sit in the Send Queue header. */}
+      <QueueFilterBar status={status} statusOptions={STATUS_FILTERS} onStatus={(v) => setView({ status: v, page: 1 })}>
+        {q.data && q.data.pending > 0 && (
+          <span className="inline-flex items-center rounded-full bg-warn-soft px-3 py-1 text-sm text-warn">
+            {q.data.pending} waiting for approval — nothing is sent until you approve.
+          </span>
+        )}
+      </QueueFilterBar>
 
       {q.isLoading ? (
-        <ScrollTable head={FOLLOWUP_HEAD}>
+        <ScrollTable head={FOLLOWUP_HEAD} label="AI Call follow-ups">
           <SkeletonRows cols={FOLLOWUP_HEAD.length} />
         </ScrollTable>
       ) : q.error ? (
         <ErrorNote error={q.error} />
       ) : q.data!.items.length === 0 ? (
-        <EmptyState icon="phone" title={status === "PENDING_APPROVAL" ? "Nothing waiting for approval" : "No follow-ups"}>
-          Follow-ups are created after AI calls to saved customers (Interested, Follow-up needed, Approved, Callback
-          requested, No answer) or added from a customer's call detail.
-        </EmptyState>
+        <div className={QUEUE_CARD}>
+          <QueueEmptyState title={status === "PENDING_APPROVAL" ? "Nothing waiting for approval" : "No follow-ups"}>
+            Follow-ups are created after AI calls to saved customers (Interested, Follow-up needed, Approved, Callback
+            requested, No answer) or added from a customer's call detail.
+          </QueueEmptyState>
+        </div>
       ) : (
         <>
-          <ScrollTable head={FOLLOWUP_HEAD} scrollKey={`${status}:${page}:${pageSize}`}>
+          <ScrollTable
+            head={FOLLOWUP_HEAD}
+            label="AI Call follow-ups"
+            scrollKey={`${status}:${page}:${pageSize}`}
+            footer={
+              <QueuePagination
+                page={page}
+                pageSize={pageSize}
+                total={q.data!.total}
+                noun="follow-ups"
+                onPage={(p) => setView({ page: p })}
+                onPageSize={(n) => setView({ pageSize: n, page: 1 })}
+              />
+            }
+          >
             {q.data!.items.map((f) => {
               const c = f.customer;
               const blocked = !!c?.deletedAt || !!c?.doNotCall;
               return (
                 <tr key={f.id} className="border-b border-line-subtle align-top last:border-0">
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-3">
                     <div className="font-medium">
                       {c?.customerName || "—"}
                       {/* Another language's customer: its "call again" goes out in that language. */}
@@ -146,15 +148,15 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
                     {c?.businessName && <div className="text-xs text-slate-550">{c.businessName}</div>}
                     {c && <div className="text-[11px] text-slate-400">Stage: {AI_CALL_STAGE_LABELS[c.stage]}</div>}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 font-mono text-xs">{c ? formatPhoneDisplay(c.phone) : "—"}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-xs">{c ? formatPhoneDisplay(c.phone) : "—"}</td>
+                  <td className="px-4 py-3">
                     <div>{f.channel === "WHATSAPP" ? "WhatsApp message" : "Call again"}</div>
                     <div className="text-xs text-slate-550">
                       {f.reason ?? "—"}
                       {f.channel === "CALL" && f.attempt > 1 ? ` · retry ${f.attempt}` : ""}
                     </div>
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-slate-550">
+                  <td className="px-4 py-3 text-xs text-slate-550">
                     {f.channel === "WHATSAPP" ? (
                       f.whatsappTemplateName ? (
                         <>Template: {f.whatsappTemplateName}</>
@@ -167,7 +169,7 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
                     {f.note && <div className="mt-0.5 italic">{f.note}</div>}
                     {f.error && <div className="mt-0.5 text-crit">{f.error}</div>}
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-3">
                     <Badge tone={STATUS_TONE[f.status]}>{label(f.status)}</Badge>
                     {f.delivery && (
                       <div className="mt-0.5 text-[11px] text-slate-550">
@@ -177,8 +179,8 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
                     )}
                     {f.decidedByEmail && <div className="text-[11px] text-slate-400">by {f.decidedByEmail}</div>}
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-slate-550">{formatDateTime(f.createdAt)}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-3 text-xs text-slate-550">{formatDateTime(f.createdAt)}</td>
+                  <td className="px-4 py-3">
                     {f.status !== "PENDING_APPROVAL" && (
                       <div className="flex justify-end">
                         <DeleteHistoryButton
@@ -245,14 +247,6 @@ export function AiCallFollowupsQueue({ view, setView }: QueueViewProps) {
               );
             })}
           </ScrollTable>
-          <QueuePagination
-            page={page}
-            pageSize={pageSize}
-            total={q.data!.total}
-            noun="follow-ups"
-            onPage={(p) => setView({ page: p })}
-            onPageSize={(n) => setView({ pageSize: n, page: 1 })}
-          />
         </>
       )}
 

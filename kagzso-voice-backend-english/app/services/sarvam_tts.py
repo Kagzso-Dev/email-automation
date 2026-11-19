@@ -37,7 +37,7 @@ import base64
 import io
 import json
 import wave
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, List, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -235,14 +235,82 @@ class SarvamTTS(TTSProvider):
             w.writeframes(pcm)
         return out.getvalue()
 
-    async def open_stream(self, pace: Optional[float] = None) -> "SarvamStream":
+    async def open_stream(self, pace: Optional[float] = None) -> TTSStream:
         key = self._check()
+        if self.cloned and (self.cfg.SARVAM_TTS_CLONE_STREAM or "rest").strip().lower() != "websocket":
+            return CloneSentenceStream(self, pace)
         stream = SarvamStream(self, key, pace)
         await stream.connect()
         return stream
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+class CloneSentenceStream(TTSStream):
+    """A cloned voice's live reply through Sarvam's REST clone API (SARVAM_TTS_CLONE_STREAM=rest, the default).
+
+    Measured 2026-11-19 (Tamil, 8 kHz): Sarvam's clone socket dropped a reply that had a second flush (every agent
+    reply flushes its first sentence) after 2.7 of its 4 s, and once sent no audio for 10 s; the REST request
+    answered every time (1.1 s for a 13-character sentence). Here each sentence the call sends is synthesized at once,
+    sentences in parallel, and played in order: the first sentence plays as soon as its audio arrives while the rest
+    are being made. One request per sentence (Sarvam's limit: 60 a minute per account)."""
+
+    speaks_each_text = True  # each text is spoken on its own: no buffer to fill, no flush needed (_ClonedStream)
+
+    def __init__(self, tts: "SarvamTTS", pace: Optional[float] = None):
+        self.tts = tts
+        self._pace = pace
+        self._jobs: "asyncio.Queue[Optional[asyncio.Future]]" = asyncio.Queue()
+        self._pending: List[asyncio.Future] = []
+        self._closed = False
+        self._ended = False
+
+    async def send_text(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        if self._closed:
+            raise TTSError("provider", "Sarvam voice clone stream is closed")
+        job = asyncio.ensure_future(self.tts.synthesize(text) if self._pace is None
+                                    else self.tts.synthesize(text, pace=self._pace))
+        self._pending.append(job)
+        await self._jobs.put(job)
+
+    async def flush(self) -> None:
+        return None  # every sentence is already being spoken on its own
+
+    async def end_input(self) -> None:
+        if not self._ended:
+            self._ended = True
+            await self._jobs.put(None)
+
+    async def set_pace(self, pace: float) -> None:
+        self._pace = pace  # for the sentences sent from now on
+
+    async def audio(self) -> AsyncIterator[bytes]:
+        while True:
+            job = await self._jobs.get()
+            if job is None:
+                return
+            mulaw = await job  # a Sarvam error reaches the call (and _ClonedStream's stock fallback)
+            if mulaw:
+                yield mulaw
+
+    def is_open(self) -> bool:
+        return not self._closed and not self._ended
+
+    async def cancel(self) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        self._closed = True
+        for job in self._pending:
+            if not job.done():
+                job.cancel()
+        if not self._ended:
+            self._ended = True
+            self._jobs.put_nowait(None)
 
 
 class SarvamStream(TTSStream):

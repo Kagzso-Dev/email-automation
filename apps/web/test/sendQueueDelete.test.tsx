@@ -44,6 +44,8 @@ vi.mock("../src/lib/api", async (importOriginal) => {
       if (path === "/api/contacts/send/batches") {
         return { items: [batch("emaildone1", "DONE"), batch("emailrun01", "RUNNING")].filter((b) => !deleted.has(b.id)) };
       }
+      if (path === "/api/whatsapp/send/batches") return { items: [] }; // the WhatsApp tab's count badge
+      if (path === "/api/hard-stop/config") return { enabled: false };
       if (path.startsWith("/api/ai-call-followups?")) {
         const items = [
           followup("f_pending", "Ragul", { status: "PENDING_APPROVAL" }),

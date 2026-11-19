@@ -1,0 +1,145 @@
+---
+config:
+  layout: elk
+  theme: default
+  flowchart:
+    htmlLabels: true
+---
+%% VC — Voice call flow (Calls - English / Calls - Tamil; same code, one voice backend per language):
+%% contact select -> do-not-call check -> start call -> flow / script -> AI agent turns -> stage + interest
+%% -> follow-up / callback -> copy to other languages -> hard stop.
+%% Key files: apps/api/src/http/routes/aiCalls.ts, routes/aiCallCustomers.ts, domain/aiCalls.ts, queue/aiCallRun.ts,
+%% domain/aiCallCustomerSync.ts, domain/aiCallFollowups.ts, queue/aiCallFollowup.ts,
+%% kagzso-voice-backend-english/app/services/call_service.py, app/services/status_callback.py
+flowchart TD
+  subgraph UI["User / UI - Calls section of one language"]
+    direction TB
+    V1["Voicecall Contact: import / add customers into this language list"]
+    V2["Select customers -> Call: mode, gap, max calls, call flow (ADMIN / EDITOR)"]
+    V3["Voice Call Flows: draft + publish; AI Agents: compile + publish (ADMIN)"]
+    V4["Copy to other languages (ADMIN)"]
+    V5["Send Queue -> AI Call follow-ups: approve / reject (ADMIN / EDITOR)"]
+    V6["Hard stop: one run, Calls section of this language, or Stop all"]
+  end
+
+  subgraph BE["Orchestrator Backend"]
+    direction TB
+    C1["importCustomers: E.164 check; one live row per phone per language; DNC numbers saved as DO_NOT_CALL"]
+    C2["POST /api/ai-call-customers/call -> planAndStartAiCallRun"]
+    D1{"Language switched on + voice backend configured; non-English run has a published flow?"}
+    D2{"Phone valid, not a duplicate, NOT on the do-not-call list?"}
+    D3{"No run in progress in any language, voice backend reachable, AI_CALLS_DAILY_CAP not exceeded?"}
+    C3["Create AiCallRun + AiCallLog rows QUEUED; customers -> QUEUED; enqueue ai-call-run"]
+    C4["Worker processAiCallRun: poll in-flight call every 5 s; wait gapSeconds after last call"]
+    D4{"Do-not-call re-check at dial time: number blocked?"}
+    D5{"Run RUNNING and log still QUEUED (claim)?"}
+    C5["Log DIALING, customer CALLING; POST /api/calls/outbound (X-API-Key)"]
+    C6["POST /api/webhooks/ai-calls (HMAC, 5 min window) + polling GET /api/calls/:id"]
+    C7["applyVoiceUpdate: status moves forward only; outcome, summary, transcript, insights saved"]
+    C8["syncCustomerFromLog -> stageForCallResult"]
+    D7{"Resulting stage"}
+    S1["DO_NOT_CALL: doNotCall = true permanently; pending follow-ups cancelled"]
+    S2["INTERESTED / FOLLOW_UP_NEEDED: WhatsApp draft if opted in, else call-again in 24 h"]
+    S3["CALLBACK_REQUESTED: call-again draft in 24 h"]
+    S4["NO_ANSWER: call-again draft in 4 h while retries < AI_CALL_FOLLOWUP_MAX_RETRIES"]
+    S5["NOT_INTERESTED / FAILED: no follow-up"]
+    C9["Follow-up PENDING_APPROVAL"]
+    D8{"Approved?"}
+    C10["WHATSAPP: createWhatsAppSendBatch -> WhatsApp flow"]
+    C11["CALL: ai-call-followup job at scheduledAt -> DNC + cap re-check -> one-call run"]
+    C12["copyCustomersToLanguages: skip numbers already in the target list or on DNC"]
+    C13["pressHardStop CALLS: QUEUED logs CANCELLED, approved call-again follow-ups cancelled; live call is never hung up"]
+    F1["503 / 400: nothing queued"]
+    F2["Row skipped: invalid / duplicate / doNotCall"]
+    F3["409 / 503 / 429: nothing queued"]
+    F4["Log FAILED: Skipped - number is on the do-not-call list"]
+    F5["Stop: run cancelled / hard-stopped"]
+    F7["Follow-up REJECTED"]
+    F8["Place-call error or no final status within AI_CALLS_CALL_TIMEOUT_SEC: log FAILED, run moves on"]
+  end
+
+  subgraph VB["Voice Backend - FastAPI, one process per language"]
+    direction TB
+    P1["start_outbound_call: resolve published flow / AI agent, voice, variables"]
+    D6{"Contact marked DND in the voice DB?"}
+    P2["Create call row; Plivo / Twilio outbound call; answer webhook -> media WebSocket"]
+    P3["CallSession: greeting, identity check, turns STT -> LLM reply -> TTS, barge-in, silence reprompt"]
+    D9{"Customer asks not to be called? (DNC_ENFORCE or Autonomous agent)"}
+    P4["Speak DNC line, end call, outcome do_not_call (locked), contact dnd = true"]
+    P5["Hangup -> finalize_conversation: LLM classifies outcome + summary"]
+    P6["Signed status callback, retries 1 s / 3 s / 10 s"]
+    F6["409: call not placed"]
+  end
+
+  subgraph DB["Database"]
+    direction TB
+    T1[("ai_call_customers, ai_call_customer_events")]
+    T2[("ai_call_runs, ai_call_logs, ai_call_customer_calls, ai_call_run_flows")]
+    T3[("ai_call_followups")]
+    T4[("call_flows, call_flow_versions, ai_agents")]
+    T5[("Job queue table")]
+    T6[("Voice DB: calls, transcripts, call_events, contacts.dnd")]
+  end
+
+  subgraph EXT["External Services"]
+    direction TB
+    X1["Plivo or Twilio telephony"]
+    X2["Sarvam STT / TTS"]
+    X3["LLM chain: Gemini / Groq / OpenAI / Anthropic / Ollama / Sarvam"]
+  end
+
+  V1 --> C1 --> T1
+  V3 --> T4
+  V2 --> C2 --> D1
+  D1 -->|"no"| F1
+  D1 -->|"yes"| D2
+  D2 -->|"no"| F2
+  D2 -->|"yes"| D3
+  D3 -->|"no"| F3
+  D3 -->|"yes"| C3 --> T2
+  C3 --> T5
+  T5 --> C4 --> D4
+  D4 -->|"yes"| F4 --> T2
+  D4 -->|"no"| D5
+  D5 -->|"no"| F5
+  D5 -->|"yes"| C5 --> P1
+  C5 -.->|"error"| F8
+  T4 -.->|"pinned flow version"| P1
+  P1 --> D6
+  D6 -->|"yes"| F6
+  D6 -->|"no"| P2 --> X1
+  P2 --> T6
+  X1 --> P3
+  P3 --> X2
+  P3 --> X3
+  P3 --> D9
+  D9 -->|"yes"| P4 --> P5
+  D9 -->|"no, call ends"| P5
+  P5 --> X3
+  P5 --> T6
+  P5 --> P6 --> C6
+  C4 -.->|"poll"| C6
+  C6 --> C7 --> T2
+  C7 --> C8 --> D7
+  D7 --> S1
+  D7 --> S2
+  D7 --> S3
+  D7 --> S4
+  D7 --> S5
+  S1 --> T1
+  S2 --> C9
+  S3 --> C9
+  S4 --> C9
+  C9 --> T3
+  V5 --> D8
+  D8 -->|"no"| F7
+  D8 -->|"yes, WhatsApp"| C10
+  D8 -->|"yes, call again"| C11 --> T5
+  V4 --> C12 --> T1
+  V6 --> C13 --> T2
+  C13 --> T3
+
+  classDef fail fill:#fdecea,stroke:#c0392b,color:#7b1d14
+  classDef dnc fill:#e8f1fb,stroke:#1f5f99,color:#0d3359
+  class F1,F2,F3,F4,F5,F6,F7,F8 fail
+  class D2,D4,D6,D9,S1,P4 dnc

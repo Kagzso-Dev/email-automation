@@ -57,11 +57,12 @@ export function useLatestHardStop(scope: HardStopTargetScope, targetId: string, 
 }
 
 /** The newest stop of one section's button (CALLS: of that language), or null. */
-export function useLatestSectionStop(section: HardStopSection, language: string | null) {
+export function useLatestSectionStop(section: HardStopSection, language: string | null, enabled = true) {
   return useQuery({
     queryKey: ["hard-stop-latest-section", section, language],
     queryFn: () =>
       api<{ stop: HardStopView | null }>(`/api/hard-stop/latest-section?scope=${section}${section === "CALLS" && language ? `&language=${language}` : ""}`),
+    enabled,
     refetchInterval: pollWhileStopping,
   });
 }

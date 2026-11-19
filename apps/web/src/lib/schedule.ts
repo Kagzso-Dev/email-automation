@@ -130,6 +130,38 @@ export function formatDateTime(value?: string | Date | null): string {
   });
 }
 
+/** Short date + time for dense tables ("18 Nov, 3:32 pm"); the year only when it isn't this year. */
+export function formatShortDateTime(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    ...(d.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/** Clock time only ("3:38 pm"). */
+export function formatClock(value: string | Date): string {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+/** A rough, readable length of time: "<1 min", "6 min", "1 h 5 min", "2 d 3 h". */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 60_000) return "<1 min";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days} d ${hours % 24} h` : `${days} d`;
+}
+
 /** Human-readable summary of a cron string ("Weekly on Monday at 9:00 AM"). */
 export function describeCron(cron?: string | null): string {
   if (!cron) return "Recurring";
