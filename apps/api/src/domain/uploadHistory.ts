@@ -1,13 +1,13 @@
 // Upload History (ENABLE_IMPORT_FILTER_STEP, migration 0037): one row per confirmed "Import N selected" from the
-// import filter step. Reads and writes only the upload_history table. The excluded-rows CSV is kept for 30 days:
-// cleared on every history read / write and by an hourly sweep in the API process; the row with its counts and
-// filters stays.
+// import filter step. Reads and writes only the upload_history table. Each row (counts, filters and the excluded-rows
+// CSV) is deleted 30 days after the upload: on every history read / write and by an hourly sweep in the API process
+// (scheduler.ts is not involved).
 
 import { Prisma } from "@prisma/client";
 import { logger } from "../logger.js";
 import { prisma } from "../prisma.js";
 
-export const EXCLUDED_RETENTION_DAYS = 30;
+export const HISTORY_RETENTION_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Prisma's "table does not exist" (P2021) or MySQL's 1146: migration 0037 isn't applied yet. */
@@ -76,7 +76,7 @@ export async function createUploadHistory(input: UploadHistoryInput, now = new D
       filters: input.filters as Prisma.InputJsonValue,
       result: (input.result ?? {}) as Prisma.InputJsonValue,
       excludedCsv: input.excludedRows > 0 && input.excludedCsv ? input.excludedCsv : null,
-      excludedExpiresAt: new Date(now.getTime() + EXCLUDED_RETENTION_DAYS * DAY_MS),
+      excludedExpiresAt: new Date(now.getTime() + HISTORY_RETENTION_DAYS * DAY_MS), // the whole row goes then
       createdAt: now,
     },
     select: SUMMARY_SELECT,
@@ -84,13 +84,12 @@ export async function createUploadHistory(input: UploadHistoryInput, now = new D
   return view(row, now);
 }
 
-/** Clear the excluded-rows files older than 30 days (the history rows stay). Returns how many were cleared. */
-export async function purgeExpiredExcluded(now = new Date()): Promise<number> {
-  const { count } = await prisma.uploadHistory.updateMany({
-    where: { excludedExpiresAt: { lte: now }, excludedPurgedAt: null },
-    data: { excludedCsv: null, excludedPurgedAt: now },
+/** Delete the uploads made more than 30 days ago (the whole row, its excluded rows included). Returns how many. */
+export async function purgeExpiredHistory(now = new Date()): Promise<number> {
+  const { count } = await prisma.uploadHistory.deleteMany({
+    where: { createdAt: { lte: new Date(now.getTime() - HISTORY_RETENTION_DAYS * DAY_MS) } },
   });
-  if (count) logger.info({ count }, "upload history: excluded rows older than 30 days deleted");
+  if (count) logger.info({ count }, "upload history: uploads older than 30 days deleted");
   return count;
 }
 
@@ -133,7 +132,7 @@ export async function getExcludedCsv(
 /** The hourly sweep (API process). Never throws; a missing table (migration not applied) is ignored. */
 export function startUploadHistorySweep(intervalMs = 60 * 60 * 1000): () => void {
   const run = () =>
-    void purgeExpiredExcluded().catch((err) => {
+    void purgeExpiredHistory().catch((err) => {
       if (!isMissingTable(err)) logger.warn({ err }, "upload history sweep failed");
     });
   const timer = setInterval(run, intervalMs);

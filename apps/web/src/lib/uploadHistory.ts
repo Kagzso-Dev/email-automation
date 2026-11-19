@@ -4,7 +4,7 @@
 
 import { AI_CALL_LANGUAGE_NAMES, type AiCallLanguage } from "@dispatch/shared";
 import { apiResponse, api, ApiError } from "./api";
-import { CHECK_STATUS_OPTIONS, PHONE_TYPE_OPTIONS, TIER_OPTIONS } from "./dataQuality";
+import { CHECK_STATUS_OPTIONS, EXTRA_FIELD_LABELS, PHONE_TYPE_OPTIONS, TIER_OPTIONS, type DqExtraField } from "./dataQuality";
 import { ALL_LANGUAGES, ALL_USED, LANGUAGE_LABELS, USED_OPTIONS, type FiltersUsed } from "./importFilter";
 
 export type UploadChannel = "whatsapp" | "voicecall";
@@ -98,6 +98,9 @@ export function describeFilters(f: Partial<FiltersUsed>): string[] {
   if (x.hasPhone !== undefined) out.push(x.hasPhone ? "Has phone" : "No phone");
   for (const [k, label] of [["business", "Business"], ["name", "Name"], ["email", "Email"], ["phone", "Phone"]] as const) {
     if (x[k]) out.push(`${label} contains “${x[k]}”`);
+  }
+  for (const [k, label] of Object.entries(EXTRA_FIELD_LABELS) as [DqExtraField, string][]) {
+    if (x[k]) out.push(`${label}: ${x[k]}`);
   }
   if (f.tab && f.tab !== "ALL") out.push(`Tab: ${f.tab.toLowerCase()}`);
   if (f.approved || f.rejected) out.push(`Approved ${f.approved ?? 0}, rejected ${f.rejected ?? 0}`);

@@ -90,6 +90,7 @@ export function Modal({
   title,
   children,
   wide = false,
+  extraWide = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -97,6 +98,8 @@ export function Modal({
   children: ReactNode;
   /** Wider dialog for tables (default keeps the standard width). */
   wide?: boolean;
+  /** Widest dialog (the import filter step: the Data Quality table with two more columns). */
+  extraWide?: boolean;
 }) {
   // Closing animation: stay mounted ~150ms after `open` turns false, showing the last
   // open content (callers often clear the data the body reads). Reduced motion: close instantly.
@@ -122,7 +125,7 @@ export function Modal({
       onClick={onClose}
     >
       <div
-        className={`scroll-thin max-h-[85vh] w-full ${wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-2xl border border-line/70 bg-surface p-6 shadow-pop ${
+        className={`scroll-thin max-h-[85vh] w-full ${extraWide ? "max-w-7xl" : wide ? "max-w-4xl" : "max-w-lg"} overflow-y-auto rounded-2xl border border-line/70 bg-surface p-6 shadow-pop ${
           closing ? "animate-dialog-out" : "animate-dialog-in"
         }`}
         onClick={(e) => e.stopPropagation()}

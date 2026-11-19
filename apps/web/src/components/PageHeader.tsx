@@ -1,14 +1,14 @@
 // Page header with a consistent action bar (Email / WhatsApp / Voicecall Contacts, AI Agents).
 //
-//   [Title]                               [danger] │ [secondary] [secondary] [primary]
-//   subtitle (full width, under the title)
-//   helper text (full width, below; never under the buttons)
+//   [Title] (Tamil)                       [danger] │ [secondary] [primary]
+//   description (full width, under the header; never under the buttons)
 //
-// Desktop (≥1024px): one row, never wraps; every button 40px high, 10px radius, 14px / 500.
-// Below 1024px the header stacks (title, then the buttons, which wrap). Below 640px the buttons are full width and
-// stacked, primary first. The danger action (e.g. "Hard stop all email") sits at the far left of the group behind a
-// thin divider, so it isn't clicked by accident; when it renders nothing (flag off) the divider goes too.
-// Layout only: the actions keep their own handlers, titles and disabled states.
+// Only page-wide actions belong here (Import file, Add contact). Actions on ticked rows go in <BulkActionBar />.
+// Desktop (≥1024px): one row, never wraps; the title stays on one line; every button 40px high, 10px radius,
+// 14px / 500. Below 1024px the header stacks (title, then the buttons, which wrap). Below 640px the title is 22px and
+// the buttons are full width and stacked, primary first. The danger action (e.g. "Hard stop all Tamil calls") sits at
+// the far left of the group behind a thin divider, so it isn't clicked by accident; when it renders nothing (flag
+// off) the divider goes too. Layout only: the actions keep their own handlers, titles and disabled states.
 
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -21,27 +21,42 @@ export interface PageHeaderAction {
   disabled?: boolean;
   /** Tooltip: what it does, or why it is disabled. */
   title?: string;
-  /** A destructive secondary action (e.g. "Delete (3)"): the danger look. */
+  /** A destructive action (e.g. "Delete (3)"): the danger look. */
   tone?: "danger";
 }
 
-/** Shared by every header button: 40px high, 10px radius, 14px / 500, visible keyboard focus. */
-const BUTTON_BASE =
-  "inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border px-4 text-sm font-medium " +
+/** Every header / bar button: 10px radius, 14px / 500, icon 16px 8px from the label, visible keyboard focus. */
+const BUTTON_CORE =
+  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border text-sm font-medium " +
   "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
-  "disabled:pointer-events-none disabled:opacity-50 max-sm:w-full";
+  "disabled:pointer-events-none disabled:opacity-50";
+const BUTTON_BASE = `${BUTTON_CORE} h-10 px-4 max-sm:w-full`;
 
-/** Solid accent gradient (the project's own token; navy text keeps WCAG AA contrast on it). */
-export const HEADER_BUTTON_PRIMARY = `${BUTTON_BASE} border-transparent bg-gradient-accent text-ink shadow-[0_2px_8px_rgba(0,194,255,0.18)] hover:shadow-[var(--shadow-glow)] hover:brightness-[1.03]`;
+/** Cyan → teal (the project's darker accent gradient token, so the white text stays readable). */
+const PRIMARY_LOOK = "border-transparent bg-[image:var(--gradient-accent-text)] text-white shadow-[0_2px_8px_rgba(0,137,194,0.25)] hover:brightness-110";
 /** White, light border, subtle shadow; light gray on hover. */
-export const HEADER_BUTTON_SECONDARY = `${BUTTON_BASE} border-line-strong bg-surface text-ink shadow-sm hover:bg-surface-muted`;
+const SECONDARY_LOOK = "border-line-strong bg-surface text-ink shadow-sm hover:bg-surface-muted";
 /** Light red, red text, red-tinted border; a slightly darker tint on hover. */
-export const HEADER_BUTTON_DANGER = `${BUTTON_BASE} border-crit-line bg-crit-soft text-crit hover:border-crit/40 hover:bg-crit-line/60`;
+const DANGER_LOOK = "border-crit-line bg-crit-soft text-crit hover:border-crit/40 hover:bg-crit-line/60";
 
-/** Search inputs and filter dropdowns under a header: the same height and radius as the buttons. */
-export const HEADER_CONTROL = "h-10 rounded-[10px] py-0";
-/** The search + filter row: one row from 640px up, 12px apart. */
-export const FILTER_ROW = "mb-4 flex flex-col gap-3 sm:flex-row sm:items-center";
+export const HEADER_BUTTON_PRIMARY = `${BUTTON_BASE} ${PRIMARY_LOOK}`;
+export const HEADER_BUTTON_SECONDARY = `${BUTTON_BASE} ${SECONDARY_LOOK}`;
+export const HEADER_BUTTON_DANGER = `${BUTTON_BASE} ${DANGER_LOOK}`;
+/** The bulk-action bar's buttons: the same looks, 36px high. */
+export const BAR_BUTTON = `${BUTTON_CORE} h-9 px-3.5 ${SECONDARY_LOOK}`;
+export const BAR_BUTTON_DANGER = `${BUTTON_CORE} h-9 px-3.5 ${DANGER_LOOK}`;
+
+/** The search + filter row under the header: 12px apart, wraps on narrow screens. */
+export const FILTER_ROW = "mb-4 flex flex-wrap items-center gap-3";
+/** The search input: takes the free width, never narrower than 260px. 40px, the buttons' radius. */
+export const SEARCH_INPUT = "input h-10 min-w-[260px] flex-1 rounded-[10px] py-0";
+/** A filter dropdown: 40px, the buttons' radius; full width on phones. */
+export const FILTER_SELECT = "input h-10 w-full rounded-[10px] py-0 sm:w-48";
+
+/** A contacts-table row: 56px high, cells vertically centred. */
+export const TABLE_ROW = "h-14 border-b border-line-subtle last:border-0 [&>td]:align-middle";
+/** The row's Edit / Delete cell: far right, never wraps (the links inside sit 12px apart). */
+export const ROW_ACTIONS_CELL = "whitespace-nowrap px-4 py-2.5 text-right";
 
 export function HeaderButton({ action, primary = false }: { action: PageHeaderAction; primary?: boolean }) {
   const Icon = action.icon;
@@ -64,6 +79,7 @@ export function HeaderButton({ action, primary = false }: { action: PageHeaderAc
 
 export function PageHeader({
   title,
+  badge,
   subtitle,
   primaryAction,
   secondaryActions = [],
@@ -71,23 +87,30 @@ export function PageHeader({
   helper,
 }: {
   title: string;
+  /** A small pill next to the title, e.g. the page's language ("Tamil"). */
+  badge?: string;
   subtitle?: ReactNode;
   primaryAction?: PageHeaderAction;
-  /** Left out when false / null / undefined, so a page can write `cond && { … }`. */
+  /** Page-wide actions only. Left out when false / null / undefined, so a page can write `cond && { … }`. */
   secondaryActions?: (PageHeaderAction | false | null | undefined)[];
   /** A self-contained control (e.g. a Hard stop button with its own confirmation); may render nothing. */
   dangerAction?: ReactNode;
-  /** The page's help text: a full-width block below the header, never under the buttons. */
+  /** More help text (e.g. which file columns an import reads), shown with the description. */
   helper?: ReactNode;
 }) {
   const secondary = secondaryActions.filter((a): a is PageHeaderAction => !!a);
   const hasActions = !!primaryAction || secondary.length > 0 || !!dangerAction;
   return (
-    <div className={helper ? "mb-4" : "mb-6"}>
+    <div className="mb-4">
       <div className="flex flex-col items-start gap-4 lg:flex-row lg:flex-nowrap lg:items-center lg:justify-between">
-        <h1 className="min-w-0 text-[28px] font-bold leading-tight tracking-[-0.02em] text-ink">
-          <GradientLastWord text={title} />
-        </h1>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <h1 className="whitespace-nowrap text-[22px] font-bold leading-tight tracking-[-0.02em] text-ink sm:text-[28px]">
+            <GradientLastWord text={title} />
+          </h1>
+          {badge ? (
+            <span className="shrink-0 rounded-full bg-accent-soft px-2.5 py-0.5 text-[13px] font-medium text-accent-ink">{badge}</span>
+          ) : null}
+        </div>
         {hasActions && (
           <div
             role="group"
@@ -107,12 +130,14 @@ export function PageHeader({
           </div>
         )}
       </div>
-      {/* Under the title, full width: a long subtitle never squeezes into a column beside the buttons. */}
-      {subtitle ? <p className="mt-2 max-w-[800px] text-sm leading-[1.6] text-slate-550">{subtitle}</p> : null}
-      {helper ? <p className="mt-3 max-w-[800px] text-[13px] leading-relaxed text-slate-550">{helper}</p> : null}
+      {/* The description: full width under the header, so it never sits under or beside the buttons. */}
+      {subtitle ? <p className={DESCRIPTION}>{subtitle}</p> : null}
+      {helper ? <p className={DESCRIPTION}>{helper}</p> : null}
     </div>
   );
 }
+
+const DESCRIPTION = "mt-2 max-w-[820px] text-[13px] leading-[1.5] text-slate-550";
 
 /** The last word of a title in the accent gradient ("Voicecall <Contact>"), as on every other page. */
 function GradientLastWord({ text }: { text: string }) {

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { MessageCircle, PhoneCall, Plus, Send, Trash2, Upload } from "lucide-react";
-import { FILTER_ROW, HEADER_CONTROL, PageHeader } from "../components/PageHeader";
+import { FILTER_ROW, FILTER_SELECT, PageHeader, ROW_ACTIONS_CELL, SEARCH_INPUT, TABLE_ROW } from "../components/PageHeader";
+import { BulkActionBar } from "../components/BulkActionBar";
 import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
 import { SectionHardStopButton, SectionHardStopStatus } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
@@ -216,29 +217,6 @@ export function ContactsPage() {
         title="Contacts"
         dangerAction={<SectionHardStopButton section="EMAIL" />}
         secondaryActions={[
-          bulkDeleteIds.length > 0 && {
-            label: `Delete (${bulkDeleteIds.length})`,
-            icon: Trash2,
-            tone: "danger",
-            disabled: bulkDel.isPending,
-            title: "Delete the selected contacts",
-            onClick: () => void deleteSelected(),
-          },
-          {
-            label: `Send email${selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}`,
-            icon: Send,
-            title: "Send a template to the selected active contacts",
-            onClick: openBulkSend,
-          },
-          SHOW_WHATSAPP && {
-            label: `Send WhatsApp${waEligible.length > 0 ? ` (${waEligible.length})` : ""}`,
-            icon: MessageCircle,
-            disabled: !waConfigured,
-            title: waConfigured
-              ? "Send a WhatsApp template to the selected contacts that have a phone number"
-              : WHATSAPP_NOT_CONFIGURED_HINT,
-            onClick: openWaSend,
-          },
           SHOW_AI_CALL &&
             aiCallsConfig.data?.enabled && {
               label: "AI Call",
@@ -322,7 +300,7 @@ export function ContactsPage() {
 
       <div className={FILTER_ROW}>
         <input
-          className={`input ${HEADER_CONTROL} sm:max-w-xs`}
+          className={SEARCH_INPUT}
           aria-label="Search contacts"
           placeholder="Search email or name"
           value={search}
@@ -332,7 +310,7 @@ export function ContactsPage() {
           }}
         />
         <select
-          className={`input ${HEADER_CONTROL} sm:max-w-[12rem]`}
+          className={FILTER_SELECT}
           aria-label="Status filter"
           value={status}
           onChange={(e) => {
@@ -346,6 +324,37 @@ export function ContactsPage() {
           ))}
         </select>
       </div>
+
+      {/* Actions on the ticked contacts (shown only while some are ticked). */}
+      <BulkActionBar
+        count={selectedIds.size}
+        onClear={() => setSelectedIds(new Set())}
+        actions={[
+          {
+            label: `Send email (${selectedIds.size})`,
+            icon: Send,
+            title: "Send a template to the selected active contacts",
+            onClick: openBulkSend,
+          },
+          SHOW_WHATSAPP && {
+            label: `Send WhatsApp${waEligible.length > 0 ? ` (${waEligible.length})` : ""}`,
+            icon: MessageCircle,
+            disabled: !waConfigured,
+            title: waConfigured
+              ? "Send a WhatsApp template to the selected contacts that have a phone number"
+              : WHATSAPP_NOT_CONFIGURED_HINT,
+            onClick: openWaSend,
+          },
+          bulkDeleteIds.length > 0 && {
+            label: `Delete (${bulkDeleteIds.length})`,
+            icon: Trash2,
+            tone: "danger",
+            disabled: bulkDel.isPending,
+            title: "Delete the selected contacts",
+            onClick: () => void deleteSelected(),
+          },
+        ]}
+      />
 
       {query.isLoading ? (
         <Spinner />
@@ -377,7 +386,7 @@ export function ContactsPage() {
             ]}
           >
             {items.map((c) => (
-              <tr key={c.id} className="border-b border-line-subtle last:border-0">
+              <tr key={c.id} className={TABLE_ROW}>
                 <td className="px-4 py-2.5">
                   <input
                     type="checkbox"
@@ -401,7 +410,7 @@ export function ContactsPage() {
                 <td className="px-4 py-2.5 text-slate-550">
                   {new Date(c.createdAt).toLocaleDateString()}
                 </td>
-                <td className="px-4 py-2.5">
+                <td className={ROW_ACTIONS_CELL}>
                   <div className="flex items-center justify-end gap-3">
                     <button
                       className="text-xs text-accent-ink hover:underline"

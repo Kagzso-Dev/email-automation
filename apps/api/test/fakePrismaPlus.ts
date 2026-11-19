@@ -3,7 +3,7 @@ import { fake } from "./fakePrisma.js";
 
 // fakePrisma.ts plus what the import filter step and Upload History need, without changing fakePrisma.ts:
 //   - groupBy({ by, where, _max }) on every model (historyFilter.ts's loadHistory and the "last sent / called" dates)
-//   - an upload_history model with contains-search, skip/take, createdAt ordering and the 30-day purge's updateMany
+//   - an upload_history model with contains-search, skip/take, createdAt ordering and the 30-day purge's deleteMany
 //   - history.missing = true: every upload_history call fails like a database without migration 0037
 // Not a test file itself. Use it as:
 //
@@ -67,6 +67,11 @@ const uploadHistory = {
   ),
   count: guard(({ where }: Row = {}) => history.rows.filter((r) => searchMatch(r, where)).length),
   findUnique: guard(({ where, select }: Row) => pick(history.rows.find((r) => r.id === where.id), select)),
+  deleteMany: guard(({ where }: Row) => {
+    const before = history.rows.length;
+    history.rows = history.rows.filter((r) => !(r.createdAt <= where.createdAt.lte));
+    return { count: before - history.rows.length };
+  }),
   updateMany: guard(({ where, data }: Row) => {
     const hit = history.rows.filter((r) => r.excludedExpiresAt <= where.excludedExpiresAt.lte && r.excludedPurgedAt === null);
     for (const r of hit) Object.assign(r, data);

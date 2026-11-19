@@ -137,10 +137,11 @@ describe("checkWhatsAppDraft: rows as the WhatsApp importer reads them", () => {
       ],
       "91",
     );
-    expect(checks[0]).toMatchObject({ name: "Ravi Kumar", businessName: "Ravi Traders", email: null, phoneType: "mobile", importable: true, alreadySaved: false });
+    // The check reads the row as the Data Quality page does (its name column is "First Name"), so it matches that page.
+    expect(checks[0]).toMatchObject({ name: "Ravi", businessName: "Ravi Traders", email: "ravi@x.in", phoneType: "mobile", importable: true, alreadySaved: false });
     expect(checks[1]).toMatchObject({ phone: DQ_IN_WHATSAPP, importable: true, alreadySaved: true });
     expect(checks[1]!.flags).toContain("in_whatsapp");
-    expect(checks[2]).toMatchObject({ name: "Chennai Office", phoneType: "landline", importable: false, importProblem: WHATSAPP_NO_NUMBER, alreadySaved: false });
+    expect(checks[2]).toMatchObject({ name: "Chennai", phoneType: "landline", importable: false, importProblem: WHATSAPP_NO_NUMBER, alreadySaved: false });
     expect(checks[3]).toMatchObject({ phoneType: "none", importable: false });
     expect(fake.T("whatsAppContact")).toHaveLength(1); // unchanged
     expectNothingWritten();
@@ -154,9 +155,10 @@ describe("checkWhatsAppDraft: rows as the WhatsApp importer reads them", () => {
     ]);
   });
 
-  it("a file without a column the importer reads as the phone: nothing is importable", async () => {
+  it("a file without a column the importer reads as the phone: nothing is importable (Data Quality still reads it)", async () => {
     const checks = await checkWhatsAppDraft(["Contact Number", "Name"], [{ "Contact Number": "9876500101", Name: "Ravi" }], "91");
-    expect(checks[0]).toMatchObject({ importable: false, phoneType: "none" });
+    // Data Quality reads "Contact Number" (so the check matches that page); the WhatsApp importer does not.
+    expect(checks[0]).toMatchObject({ importable: false, importProblem: WHATSAPP_NO_NUMBER, phoneType: "mobile", name: "Ravi" });
     expectNothingWritten();
   });
 });

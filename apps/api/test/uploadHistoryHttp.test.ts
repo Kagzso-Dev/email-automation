@@ -143,28 +143,39 @@ describe("flag on", () => {
     expect((await get(`${H}/${id}/excluded`)).status).toBe(404);
   });
 
-  it("after 30 days the excluded rows are deleted (on read); the counts and filters stay", async () => {
-    const { id } = (await (await post()).json()) as any;
-    history.rows[0]!.excludedExpiresAt = new Date(Date.now() - 1000);
-    const res = await get(`${H}/${id}/excluded`);
-    expect(res.status).toBe(410);
-    expect(((await res.json()) as any).error).toBe("The excluded rows were deleted after 30 days.");
-    expect(history.rows[0]).toMatchObject({ excludedCsv: null, imported: 4, excludedUsed: 3 });
-    expect(history.rows[0]!.excludedPurgedAt).toBeInstanceOf(Date);
-    expect(await (await get(`${H}/${id}`)).json()).toMatchObject({ excludedAvailable: false, imported: 4, filters: SUMMARY.filters });
+  it("30 days after the upload the whole row is deleted (on read); newer uploads stay", async () => {
+    const { id: old } = (await (await post()).json()) as any;
+    const { id: recent } = (await (await post()).json()) as any;
+    history.rows[0]!.createdAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000 - 1000); // uploaded just over 30 days ago
+    const list = (await (await get(H)).json()) as any;
+    expect(list.items.map((r: any) => r.id)).toEqual([recent]);
+    expect(list.total).toBe(1);
+    expect((await get(`${H}/${old}`)).status).toBe(404);
+    expect((await get(`${H}/${old}/excluded`)).status).toBe(404);
+    expect(history.rows.map((r) => r.id)).toEqual([recent]);
+    expect((await get(`${H}/${recent}/excluded`)).status).toBe(200);
   });
 
-  it("the hourly sweep deletes expired files without any request", async () => {
-    const { purgeExpiredExcluded, startUploadHistorySweep } = await import("../src/domain/uploadHistory.js");
+  it("a write purges too", async () => {
+    await post();
+    history.rows[0]!.createdAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+    await post();
+    expect(history.rows).toHaveLength(1);
+  });
+
+  it("the hourly sweep deletes uploads older than 30 days without any request", async () => {
+    const { purgeExpiredHistory, startUploadHistorySweep } = await import("../src/domain/uploadHistory.js");
     await post();
     await post();
-    history.rows[0]!.excludedExpiresAt = new Date(Date.now() - 1000); // only the first has expired
+    history.rows[0]!.createdAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000); // only the first is older than 30 days
+    const second = history.rows[1]!.id;
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const stop = startUploadHistorySweep(60 * 60 * 1000);
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     stop();
-    expect(history.rows.map((r) => r.excludedCsv === null)).toEqual([true, false]);
-    expect(await purgeExpiredExcluded(new Date(Date.now() + 31 * 24 * 60 * 60 * 1000))).toBe(1); // the second, a month on
+    expect(history.rows.map((r) => r.id)).toEqual([second]);
+    expect(await purgeExpiredHistory(new Date(Date.now() + 31 * 24 * 60 * 60 * 1000))).toBe(1); // the second, a month on
+    expect(history.rows).toEqual([]);
   });
 
   it("before migration 0037: 503 saying what to run (never a 500); the sweep stays quiet", async () => {

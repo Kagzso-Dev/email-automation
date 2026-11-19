@@ -2,7 +2,7 @@
 //
 // Reuses Data Quality's own rules (checkRows, phoneType, tierFor, overallScore) and its read-only
 // lookups (do not call, not interested, wrong person, already saved). Writes nothing: no staging job,
-// no queue, no AI service call (the AI score needs a saved job, so only the rules score is used here).
+// no queue. The AI score comes afterwards, a few rows at a time (domain/importFilterAi.ts), and is not saved.
 // The rows stay in the browser until "Import N selected" sends them to the page's own importer.
 
 import { normalizePhoneE164, sanitizeCountryCode } from "@dispatch/shared";
@@ -99,10 +99,11 @@ export type WhatsAppDraftCheck = DraftCheck & {
 export const WHATSAPP_NO_NUMBER = "No usable WhatsApp number: the importer skips this row";
 
 /**
- * Each row exactly as the WhatsApp importer reads it (its own column names and phone rule), then the
- * Data Quality checks and the "already used" checks. Email is left out of the Data Quality checks (the
- * WhatsApp importer does not save it) but, when the file has an email column, it is used for "already
- * sent" (email logs, Send Queue). Read-only.
+ * Each row as the Data Quality page reads it (its own column names: name, phone, business, email), so the check,
+ * the score, the tier and the AI score are the ones Data Quality shows for the same file; whether the row can be
+ * imported comes from the WhatsApp importer itself (its own column names and phone rule). A column Data Quality
+ * does not find falls back to the importer's reading. The email column is also used for "already sent" (email
+ * logs, Send Queue). Read-only.
  */
 export async function checkWhatsAppDraft(
   headers: string[],
@@ -113,7 +114,9 @@ export async function checkWhatsAppDraft(
   // The WhatsApp importer's own rule for the country code (an unusable setting counts as 91).
   const cc = sanitizeCountryCode(defaultCountryCode);
   const phoneHeader = whatsappPhoneHeader(headers);
-  const emailHeader = detectDataQualityColumns(headers).email;
+  const dq = detectDataQualityColumns(headers);
+  const emailHeader = dq.email;
+  const cell = (row: Record<string, string>, h: string) => (row[h] ?? "").trim() || null;
   const inputs = rows.map((row) => {
     const [contact] = rowsToWhatsAppContacts([row], defaultCountryCode); // what would be imported
     // The names and business even when the number is unusable (the importer reads them the same way).
@@ -121,17 +124,18 @@ export async function checkWhatsAppDraft(
     const raw = phoneHeader ? (row[phoneHeader] ?? "").trim() : "";
     return {
       input: {
-        name: [fields?.firstName, fields?.lastName].filter(Boolean).join(" ") || null,
-        phone: contact ? `+${contact.phone}` : raw || null,
-        business: fields?.businessName ?? null,
-        email: null,
+        name: dq.name ? cell(row, dq.name) : [fields?.firstName, fields?.lastName].filter(Boolean).join(" ") || null,
+        phone: dq.phone ? cell(row, dq.phone) : contact ? `+${contact.phone}` : raw || null,
+        business: dq.business ? cell(row, dq.business) : (fields?.businessName ?? null),
+        email: emailHeader ? cell(row, emailHeader) : null,
       },
       importable: !!contact,
     };
   });
+  // The Data Quality page's country code for its checks (an unusable setting counts as 91).
   const checks = await checkDraftRows(
     inputs.map((i) => i.input),
-    cc,
+    sanitizeCountryCode(callCountryCode),
   );
   const used = await findUsed(
     "whatsapp",

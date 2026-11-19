@@ -18,7 +18,7 @@ import {
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useAiCallsConfig, type AiCallsConfig } from "../lib/aiCalls";
-import { isEnglish, titleFor, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
+import { isEnglish, useAiCallLanguage, useLanguageReady, withLanguage } from "../lib/aiCallLanguage";
 import { AiCallLanguageNotice } from "./AiCallLanguageNotice";
 import { RunningCallsNote } from "./RunningCallsNote";
 import {
@@ -36,7 +36,8 @@ import {
 } from "../lib/aiCallCustomers";
 import { formatDateTime } from "../lib/schedule";
 import { Copy, PhoneCall, Plus, Trash2, Upload } from "lucide-react";
-import { FILTER_ROW, HEADER_CONTROL, PageHeader } from "./PageHeader";
+import { FILTER_ROW, FILTER_SELECT, PageHeader, ROW_ACTIONS_CELL, SEARCH_INPUT, TABLE_ROW } from "./PageHeader";
+import { BulkActionBar } from "./BulkActionBar";
 import { AiCallModal } from "./AiCallModal";
 import { Icon } from "./icons";
 import { PhoneInput, phoneInputOk } from "./PhoneInput";
@@ -47,7 +48,7 @@ import { ImportCountsSummary, OverLimitNote } from "./ImportSummary";
 import { CallInsightsLine, InterestBadge } from "./CallInsights";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, type BadgeTone } from "./ui";
 import { SectionHardStopButton, SectionHardStopStatus } from "./HardStopButton";
-import { useImportFilterStep } from "../lib/importFilter";
+import { importFilterStepOn, useImportFilterStep } from "../lib/importFilter";
 import { VoicecallImportFilter } from "./ImportFilterFlows";
 
 /**
@@ -128,41 +129,15 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
   return (
     <div>
       <PageHeader
-        title={titleFor("Voicecall Contact", language)}
+        title="Voicecall Contact"
+        badge={AI_CALL_LANGUAGE_NAMES[language]}
         subtitle={
           isEnglish(language)
             ? "Customers for AI voice calls, their call stage and follow-ups. Separate from email and WhatsApp contacts."
             : "This language's own customer list: they are called only with its call flows, in its language. The same number can also be in other languages' lists; do-not-call applies to every list."
         }
         dangerAction={<SectionHardStopButton section="CALLS" language={language} />}
-        secondaryActions={[
-          selected.size > 0 && {
-            label: `Delete (${selected.size})`,
-            icon: Trash2,
-            tone: "danger",
-            disabled: del.isPending,
-            onClick: () => confirmDelete([...selected], `${selected.size} customer${selected.size === 1 ? "" : "s"}`),
-          },
-          {
-            label: selected.size > 0 ? `Start voice call (${selected.size})` : "Start voice call",
-            icon: PhoneCall,
-            disabled: !canCall,
-            title: canCall
-              ? "Call the ticked customers with the AI voice agent"
-              : isEnglish(language)
-                ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
-                : `Set VOICE_BACKEND_URL_${language.toUpperCase()} (this language's voice backend) to enable calls`,
-            onClick: () => setCallIds([...selected]),
-          },
-          selected.size > 0 &&
-            isAdmin &&
-            copyTargets.length > 0 && {
-              label: `Copy to other languages (${selected.size})`,
-              icon: Copy,
-              onClick: () => setCopyIds([...selected]),
-            },
-          { label: "Import file", icon: Upload, onClick: () => setImportOpen(true) },
-        ]}
+        secondaryActions={[{ label: "Import file", icon: Upload, onClick: () => setImportOpen(true) }]}
         primaryAction={{ label: "Add contact", icon: Plus, onClick: () => setEditing("new") }}
       />
       <SectionHardStopStatus section="CALLS" language={language} />
@@ -172,7 +147,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
 
       <div className={FILTER_ROW}>
         <input
-          className={`input ${HEADER_CONTROL} sm:max-w-xs`}
+          className={SEARCH_INPUT}
           aria-label="Search customers"
           placeholder="Search name, business, phone, email"
           value={search}
@@ -182,7 +157,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           }}
         />
         <select
-          className={`input ${HEADER_CONTROL} sm:max-w-[10rem]`}
+          className={FILTER_SELECT}
           aria-label="Gender filter"
           value={gender}
           onChange={(e) => {
@@ -195,7 +170,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           <option value="female">Female</option>
         </select>
         <select
-          className={`input ${HEADER_CONTROL} sm:max-w-[13rem]`}
+          className={FILTER_SELECT}
           aria-label="Call stage filter"
           value={stage}
           onChange={(e) => {
@@ -211,6 +186,38 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
           ))}
         </select>
       </div>
+
+      {/* Actions on the ticked customers (shown only while some are ticked). */}
+      <BulkActionBar
+        count={selected.size}
+        onClear={() => setSelected(new Set())}
+        actions={[
+          {
+            label: `Start voice call (${selected.size})`,
+            icon: PhoneCall,
+            disabled: !canCall,
+            title: canCall
+              ? "Call the ticked customers with the AI voice agent"
+              : isEnglish(language)
+                ? "Set VOICE_BACKEND_URL and VOICE_BACKEND_API_KEY to enable AI calls"
+                : `Set VOICE_BACKEND_URL_${language.toUpperCase()} (this language's voice backend) to enable calls`,
+            onClick: () => setCallIds([...selected]),
+          },
+          isAdmin &&
+            copyTargets.length > 0 && {
+              label: `Copy to other languages (${selected.size})`,
+              icon: Copy,
+              onClick: () => setCopyIds([...selected]),
+            },
+          {
+            label: `Delete (${selected.size})`,
+            icon: Trash2,
+            tone: "danger",
+            disabled: del.isPending,
+            onClick: () => confirmDelete([...selected], `${selected.size} customer${selected.size === 1 ? "" : "s"}`),
+          },
+        ]}
+      />
 
       {query.isLoading ? (
         <Spinner />
@@ -253,7 +260,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
             ]}
           >
             {items.map((c) => (
-              <tr key={c.id} className="border-b border-line-subtle last:border-0">
+              <tr key={c.id} className={TABLE_ROW}>
                 <td className="px-4 py-2.5">
                   <input
                     type="checkbox"
@@ -276,7 +283,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
                     {c.followUpDetail || "—"}
                   </span>
                 </td>
-                <td className="px-4 py-2.5">
+                <td className="whitespace-nowrap px-4 py-2.5">
                   <button onClick={() => setDetailId(c.id)} title="Open call detail">
                     <StageBadge stage={c.stage} />
                   </button>
@@ -293,7 +300,7 @@ export function AiCallCustomersPanel({ config }: { config: AiCallsConfig }) {
                   )}
                 </td>
                 <td className="px-4 py-2.5 text-slate-550">{new Date(c.createdAt).toLocaleDateString()}</td>
-                <td className="px-4 py-2.5">
+                <td className={ROW_ACTIONS_CELL}>
                   <div className="flex items-center justify-end gap-3">
                     <button className="text-xs text-accent-ink hover:underline" onClick={() => setEditing(c)}>
                       Edit
@@ -516,8 +523,10 @@ const IMPORT_LABELS: Record<AiCallCustomerField, string> = {
 const IMPORT_PREVIEW = 300;
 
 function ImportCustomersModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  // Flag on: wide enough for the import filter step's table (flag off: the width it always had).
+  const filterStep = useImportFilterStep();
   return (
-    <Modal open={open} onClose={onClose} title="Import AI call customers" wide>
+    <Modal open={open} onClose={onClose} title="Import AI call customers" wide extraWide={filterStep.enabled}>
       {open ? <ImportFlow onClose={onClose} /> : null}
     </Modal>
   );
@@ -536,19 +545,23 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
   // Admins: also import into other language lists (this page's list is always included).
   const [also, setAlso] = useState<AiCallLanguage[]>([]);
   const [perLanguage, setPerLanguage] = useState<LanguageImportSummary[] | null>(null);
-  // ENABLE_IMPORT_FILTER_STEP on: after the column mapping, the rows open in the filter step. Off: as before.
+  // ENABLE_IMPORT_FILTER_STEP on: the columns are matched automatically and the rows open straight in the filter
+  // step (the column screen shows only when no Phone column was found, or on "Change columns"). Off: as before.
   const filterStep = useImportFilterStep();
   const [filtering, setFiltering] = useState(false);
 
   const parse = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
-      return api<CustomerSheet>("/api/ai-call-customers/parse", { method: "POST", body: fd, notify: false });
+      const s = await api<CustomerSheet>("/api/ai-call-customers/parse", { method: "POST", body: fd, notify: false });
+      // Asked once the file is read, so the old column screen never flashes up first (any failure = off).
+      return { sheet: s, filter: (await importFilterStepOn(qc)) && !!s.mapping.phone };
     },
-    onSuccess: (s) => {
+    onSuccess: ({ sheet: s, filter }) => {
       setSheet(s);
       setMapping(s.mapping);
+      setFiltering(filter);
     },
   });
 
@@ -739,6 +752,12 @@ function ImportFlow({ onClose }: { onClose: () => void }) {
           startOver(); // back to "Choose file"; nothing was imported
         }}
         onClose={onClose}
+        onChangeColumns={() => setFiltering(false)} // the column screen, then "Next: filter" again
+        beforeImport={
+          isAdmin && offered.length > 1 ? (
+            <LanguageChecks label="Also import into other languages" current={language} offered={offered} value={also} onChange={setAlso} />
+          ) : null
+        }
       />
     );
   }

@@ -1,10 +1,20 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AI_CALL_LANGUAGE_NAMES, type AiCallLanguage } from "@dispatch/shared";
 import { api } from "../lib/api";
 import { withLanguage } from "../lib/aiCallLanguage";
 import type { ImportSummary, LanguageImportSummary } from "../lib/aiCallCustomers";
-import { rowsToCsv, selectedFileName, toDraftRows, type DraftCheck, type ImportSelection } from "../lib/importFilter";
+import {
+  draftFacets,
+  rowsToCsv,
+  selectedFileName,
+  toDraftRows,
+  withExtraValues,
+  type DraftCheck,
+  type ExtraColumns,
+  type ImportSelection,
+} from "../lib/importFilter";
+import { useDraftAiScoring } from "../lib/importFilterAi";
 import { fullNumber } from "../lib/numberFormat";
 import { saveUploadHistory } from "../lib/uploadHistory";
 import { ImportCountsSummary } from "./ImportSummary";
@@ -74,6 +84,8 @@ interface WhatsAppPreview {
   maxRows: number;
   truncated: boolean;
   checks: (DraftCheck & { importable: boolean; importProblem: string | null; alreadySaved: boolean })[];
+  /** The city / category / source / date columns (absent on an older API = no dropdowns). */
+  extraColumns?: ExtraColumns;
 }
 
 /** The WhatsApp importer's answer (POST /api/whatsapp/contacts/import). */
@@ -87,7 +99,7 @@ interface WhatsAppImportResult {
 /** WhatsApp Contacts → Import file, with the filter step. `file` set = open. */
 export function WhatsAppImportFilter({ file, onClose, onBack }: { file: File | null; onClose: () => void; onBack: () => void }) {
   return (
-    <Modal open={!!file} onClose={onClose} title="Import WhatsApp contacts" wide>
+    <Modal open={!!file} onClose={onClose} title="Import WhatsApp contacts" wide extraWide>
       {file ? <WhatsAppFlow file={file} onClose={onClose} onBack={onBack} /> : null}
     </Modal>
   );
@@ -117,7 +129,14 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
     retry: false,
     refetchOnWindowFocus: false,
   });
-  const rows = useMemo(() => (preview.data ? toDraftRows(preview.data.checks) : []), [preview.data]);
+  const rows = useMemo(
+    () => (preview.data ? withExtraValues(toDraftRows(preview.data.checks), preview.data.rows, preview.data.extraColumns) : []),
+    [preview.data],
+  );
+  const facets = useMemo(
+    () => (preview.data?.extraColumns ? draftFacets(preview.data.headers, preview.data.rows, preview.data.extraColumns) : undefined),
+    [preview.data],
+  );
   const [done, setDone] = useState<WhatsAppDone | null>(null);
   const doImport = useMutation({
     mutationFn: async (sel: ImportSelection): Promise<WhatsAppDone> => {
@@ -158,6 +177,9 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
       void qc.invalidateQueries({ queryKey: ["upload-history"] });
     },
   });
+
+  // Data Quality's AI score, a few rows at a time (nothing saved); paused while importing, over once imported.
+  const ai = useDraftAiScoring(rows, !done && !doImport.isPending);
 
   if (preview.isLoading) return <Checking what="Reading and checking the file…" />;
   if (preview.error || !preview.data) return <CheckFailed error={preview.error} onBack={onBack} />;
@@ -203,9 +225,11 @@ function WhatsAppFlow({ file, onClose, onBack }: { file: File; onClose: () => vo
       filename={p.filename}
       headers={p.headers}
       rawRows={p.rows}
-      rows={rows}
+      rows={ai.rows}
+      ai={ai.progress}
       totalRows={p.totalRows}
       maxRows={p.maxRows}
+      facets={facets}
       destination="WhatsApp Contacts"
       importing={doImport.isPending}
       error={doImport.error}
@@ -240,10 +264,14 @@ export interface VoicecallImportFilterProps {
   maxRows: number;
   /** This page's list. */
   language: AiCallLanguage;
-  /** Admins: other lists picked on the mapping screen ("Also import into other languages"). */
+  /** Admins: other lists picked under "Also import into other languages". */
   also: AiCallLanguage[];
   onBack: () => void;
   onClose: () => void;
+  /** Back to the column matching (a link in the step's header). */
+  onChangeColumns?: () => void;
+  /** Shown just above the Import button (admins: "Also import into other languages"). */
+  beforeImport?: ReactNode;
 }
 
 const SAME_NUMBER = "Same number as an earlier row: skipped, as today";
@@ -266,7 +294,7 @@ interface VoicecallDone {
   historyWarning: string | null;
 }
 
-/** Voicecall Contact → Import file → after the column mapping: the filter step. */
+/** Voicecall Contact → Import file → the filter step (columns matched automatically; "Change columns" to fix them). */
 export function VoicecallImportFilter({
   filename,
   headers,
@@ -279,17 +307,20 @@ export function VoicecallImportFilter({
   also,
   onBack,
   onClose,
+  onChangeColumns,
+  beforeImport,
 }: VoicecallImportFilterProps) {
   const qc = useQueryClient();
   const [draftId] = useState(newDraftId);
   const check = useQuery({
     queryKey: ["import-filter", "voicecall", draftId],
     queryFn: () =>
-      api<{ checks: DraftCheck[] }>("/api/import-filter/voicecall/check", {
+      api<{ checks: DraftCheck[]; extraColumns?: ExtraColumns }>("/api/import-filter/voicecall/check", {
         method: "POST",
         json: {
           rows: rows.map((r) => ({ name: r.customerName || null, phone: r.phone || null, business: r.businessName || null, email: r.email || null })),
           language,
+          headers, // only to find the city / category / source / date columns
         },
         notify: false,
       }),
@@ -298,7 +329,14 @@ export function VoicecallImportFilter({
     retry: false,
     refetchOnWindowFocus: false,
   });
-  const draft = useMemo(() => (check.data ? toDraftRows(check.data.checks, (i) => rowProblem(checks[i])) : []), [check.data, checks]);
+  const draft = useMemo(
+    () => (check.data ? withExtraValues(toDraftRows(check.data.checks, (i) => rowProblem(checks[i])), rawRows, check.data.extraColumns) : []),
+    [check.data, checks, rawRows],
+  );
+  const facets = useMemo(
+    () => (check.data?.extraColumns ? draftFacets(headers, rawRows, check.data.extraColumns) : undefined),
+    [check.data, headers, rawRows],
+  );
   const [done, setDone] = useState<VoicecallDone | null>(null);
   const doImport = useMutation({
     mutationFn: async (sel: ImportSelection): Promise<VoicecallDone> => {
@@ -361,6 +399,9 @@ export function VoicecallImportFilter({
       void qc.invalidateQueries({ queryKey: ["upload-history"] });
     },
   });
+
+  // Data Quality's AI score, a few rows at a time (nothing saved); paused while importing, over once imported.
+  const ai = useDraftAiScoring(draft, !done && !doImport.isPending);
 
   if (check.isLoading) return <Checking what="Checking the rows…" />;
   if (check.error || !check.data) return <CheckFailed error={check.error} onBack={onBack} />;
@@ -425,14 +466,18 @@ export function VoicecallImportFilter({
       filename={filename}
       headers={headers}
       rawRows={rawRows}
-      rows={draft}
+      rows={ai.rows}
+      ai={ai.progress}
       totalRows={totalRows}
       maxRows={maxRows}
+      facets={facets}
       destination="Voicecall Contact"
       importing={doImport.isPending}
       error={doImport.error}
       onBack={onBack}
       onImport={(sel) => doImport.mutate(sel)}
+      onChangeColumns={onChangeColumns}
+      beforeImport={beforeImport}
     />
   );
 }

@@ -164,7 +164,7 @@ async function openStep(channel: "whatsapp" | "voicecall") {
   } else {
     fireEvent.click(await screen.findByRole("button", { name: "Import file" }));
     pick(fileInput(".xlsx,.csv"), new File(["x"], "customers.xlsx"));
-    fireEvent.click(await screen.findByRole("button", { name: /^Next: filter \d+ valid rows?$/ }));
+    // Flag on: the columns are matched automatically and the filter step opens straight away.
   }
   return screen.findByRole("button", { name: /^Import \d+ selected$/ });
 }

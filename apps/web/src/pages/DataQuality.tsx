@@ -9,10 +9,8 @@ import {
   downloadFilteredExport,
   DQ_COMPUTED_COLUMNS,
   DQ_STORED_COLUMNS,
-  EXCLUDED_LABELS,
   EXPORT_PRESETS,
   EXTRA_FIELD_LABELS,
-  issueLabel,
   PHONE_TYPE_OPTIONS,
   presetColumns,
   TIER_OPTIONS,
@@ -30,14 +28,13 @@ import {
 import { PageHeader } from "../components/Layout";
 import { Badge, EmptyState, ErrorNote, Modal, Spinner, Table, Tabs, type BadgeTone } from "../components/ui";
 import { useConfirm } from "../components/confirm";
+import { DqRecordTable, DqScoreBar } from "../components/DataQualityParts";
 import { useToast } from "../components/toast";
 
 // Data Quality (admin only): check a contact file before using it. Rows stay in staging
 // until an admin approves them; nothing is added to any contact list, called or sent.
 
 const JOB_TONE: Record<DqJob["status"], BadgeTone> = { RUNNING: "accent", PAUSED: "warn", CANCELLED: "neutral", DONE: "ok" };
-const ROW_TONE: Record<DqRecordStatus, BadgeTone> = { VALID: "ok", INVALID: "crit", DUPLICATE: "warn", EXCLUDED: "neutral" };
-const REVIEW_TONE: Record<DqReview, BadgeTone> = { PENDING: "neutral", APPROVED: "ok", REJECTED: "crit" };
 type Filter = "ALL" | DqRecordStatus;
 
 const clampScore = (v: string) => Math.min(100, Math.max(0, Math.round(Number(v) || 0)));
@@ -344,30 +341,21 @@ function JobDetail({ jobId }: { jobId: string }) {
       <p className="mb-3 text-xs text-slate-550">
         Approving only marks rows here. To use them, export the approved rows and import the file where you need it.
       </p>
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-        <label className="flex items-center gap-2 text-slate-550">
-          Score ≥
-          <input type="number" className="input w-20" min={0} max={100} value={minScore} aria-label="Minimum score" onChange={(e) => setMinScore(clampScore(e.target.value))} />
-        </label>
-        <button type="button" className="btn-ghost" disabled={waitingForAi || atOrAbove === 0 || reviewByScore.isPending} onClick={() => void byScore("APPROVED")}>
-          Approve {atOrAbove}
-        </button>
-        <button type="button" className="btn-ghost" disabled={waitingForAi || below === 0 || reviewByScore.isPending} onClick={() => void byScore("REJECTED")}>
-          Reject {below} below
-        </button>
-        <label className="flex items-center gap-2 text-slate-550">
-          <input
-            type="checkbox"
-            checked={aboveOnly}
-            onChange={(e) => {
-              setAboveOnly(e.target.checked);
-              setPicked(new Set());
-            }}
-          />
-          Only show rows scoring {minScore}+
-        </label>
-        {waitingForAi && <span className="text-xs text-slate-550">Review by score opens once AI scoring finishes (or is cancelled).</span>}
-      </div>
+      <DqScoreBar
+        minScore={minScore}
+        onMinScore={setMinScore}
+        atOrAbove={atOrAbove}
+        below={below}
+        busy={waitingForAi || reviewByScore.isPending}
+        onApprove={() => void byScore("APPROVED")}
+        onReject={() => void byScore("REJECTED")}
+        aboveOnly={aboveOnly}
+        onAboveOnly={(on) => {
+          setAboveOnly(on);
+          setPicked(new Set());
+        }}
+        note={waitingForAi ? "Review by score opens once AI scoring finishes (or is cancelled)." : null}
+      />
       <FilterPanel
         filters={filters}
         onChange={setFilters}
@@ -401,60 +389,17 @@ function JobDetail({ jobId }: { jobId: string }) {
           <Spinner />
         </div>
       ) : (
-      <Table
-        head={[
-          <input
-            key="all"
-            type="checkbox"
-            aria-label="Select all valid rows shown"
-            disabled={pickable.length === 0}
-            checked={pickable.length > 0 && pickable.every((r) => picked.has(r.id))}
-            onChange={(e) => setPicked(e.target.checked ? new Set(pickable.map((r) => r.id)) : new Set())}
-          />,
-          "Row",
-          "Name",
-          "Phone",
-          "Business",
-          "Check",
-          "Score",
-          "Notes",
-          "Review",
-        ]}
-      >
-        {shown.map((r) => (
-          <tr key={r.id} className="border-b border-line-subtle align-top last:border-0">
-            <td className="px-4 py-3">
-              {r.status === "VALID" && <input type="checkbox" aria-label={`Select row ${r.rowIndex + 2}`} checked={picked.has(r.id)} onChange={() => toggle(r.id)} />}
-            </td>
-            <td className="px-4 py-3 font-mono text-xs">{r.rowIndex + 2}</td>
-            <td className="px-4 py-3">{r.name ?? <span className="text-slate-550">—</span>}</td>
-            <td className="px-4 py-3 font-mono text-xs">{r.phone ?? r.phoneRaw ?? "—"}</td>
-            <td className="px-4 py-3">
-              {r.businessName ?? <span className="text-slate-550">—</span>}
-              {r.email && <div className="text-xs text-slate-550">{r.email}</div>}
-            </td>
-            <td className="px-4 py-3">
-              <Badge tone={ROW_TONE[r.status]}>{r.status === "EXCLUDED" && r.excludedReason ? EXCLUDED_LABELS[r.excludedReason] : r.status.toLowerCase()}</Badge>
-            </td>
-            <td className="px-4 py-3 font-mono text-xs">
-              {r.score ?? "—"}
-              {r.ruleScore != null && (
-                <div className="text-slate-550">
-                  rules {r.ruleScore}
-                  {r.aiScore != null ? ` · AI ${r.aiScore}` : r.aiState === "PENDING" ? " · AI …" : ""}
-                </div>
-              )}
-            </td>
-            <td className="max-w-xs px-4 py-3 text-xs">
-              {[...r.issues, ...r.flags].map((c) => (
-                <div key={c}>{issueLabel(c)}</div>
-              ))}
-              {r.aiNotes && <div className={r.aiState === "ERROR" ? "text-crit" : "text-slate-550"}>AI: {r.aiNotes}</div>}
-            </td>
-            <td className="px-4 py-3">{r.status === "VALID" ? <Badge tone={REVIEW_TONE[r.review]}>{r.review.toLowerCase()}</Badge> : null}</td>
-          </tr>
-        ))}
-      </Table>
+      <DqRecordTable
+        rows={shown}
+        rowKey={(r) => r.id}
+        selectAllLabel="Select all valid rows shown"
+        canPick={(r) => r.status === "VALID"}
+        isPicked={(r) => picked.has(r.id)}
+        onPick={(r) => toggle(r.id)}
+        anyPickable={pickable.length > 0}
+        allPicked={pickable.length > 0 && pickable.every((r) => picked.has(r.id))}
+        onPickAll={(on) => setPicked(on ? new Set(pickable.map((r) => r.id)) : new Set())}
+      />
       )}
       <ExportDialog
         open={exportOpen}
@@ -490,11 +435,14 @@ export function CheckGroup<T extends string>({
   options,
   value,
   onChange,
+  disabled,
 }: {
   label: string;
   options: readonly (readonly [T, string])[];
   value: T[] | undefined;
   onChange: (v: T[]) => void;
+  /** Import filter step only (Tier while AI scores are still coming). Data Quality never sets it. */
+  disabled?: boolean;
 }) {
   return (
     <fieldset className="text-sm">
@@ -502,7 +450,7 @@ export function CheckGroup<T extends string>({
       <div className="flex flex-wrap gap-x-3 gap-y-1">
         {options.map(([v, text]) => (
           <label key={v} className="flex items-center gap-1.5">
-            <input type="checkbox" checked={value?.includes(v) ?? false} onChange={() => onChange(toggleIn(value, v))} />
+            <input type="checkbox" checked={value?.includes(v) ?? false} disabled={disabled} onChange={() => onChange(toggleIn(value, v))} />
             {text}
           </label>
         ))}
@@ -520,6 +468,7 @@ export function FilterPanel({
   showing,
   busy,
   onClear,
+  scoreLocked,
 }: {
   filters: DqFilters;
   onChange: (f: DqFilters) => void;
@@ -527,6 +476,8 @@ export function FilterPanel({
   showing: string;
   busy: boolean;
   onClear: () => void;
+  /** Import filter step only: Score and Tier disabled while AI scores are still coming. Data Quality never sets it. */
+  scoreLocked?: boolean;
 }) {
   const set = <K extends keyof DqFilters>(key: K, value: DqFilters[K]) => onChange({ ...filters, [key]: value });
   const searches: [keyof DqFilters, string][] = [
@@ -571,15 +522,15 @@ export function FilterPanel({
         </select>
         <div className="flex items-center gap-2 text-sm text-slate-550">
           Score
-          <input type="number" className="input w-20" min={0} max={100} placeholder="min" aria-label="Score from" value={filters.scoreMin ?? ""} onChange={(e) => set("scoreMin", scoreOrUndefined(e.target.value))} />
+          <input type="number" className="input w-20" min={0} max={100} placeholder="min" aria-label="Score from" value={filters.scoreMin ?? ""} disabled={scoreLocked} onChange={(e) => set("scoreMin", scoreOrUndefined(e.target.value))} />
           to
-          <input type="number" className="input w-20" min={0} max={100} placeholder="max" aria-label="Score to" value={filters.scoreMax ?? ""} onChange={(e) => set("scoreMax", scoreOrUndefined(e.target.value))} />
+          <input type="number" className="input w-20" min={0} max={100} placeholder="max" aria-label="Score to" value={filters.scoreMax ?? ""} disabled={scoreLocked} onChange={(e) => set("scoreMax", scoreOrUndefined(e.target.value))} />
         </div>
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         <CheckGroup label="Check status" options={CHECK_STATUS_OPTIONS} value={filters.status} onChange={(v) => set("status", v)} />
         <CheckGroup label="Phone type" options={PHONE_TYPE_OPTIONS} value={filters.phoneType} onChange={(v) => set("phoneType", v)} />
-        <CheckGroup label="Tier" options={TIER_OPTIONS} value={filters.tier} onChange={(v) => set("tier", v)} />
+        <CheckGroup label="Tier" options={TIER_OPTIONS} value={filters.tier} onChange={(v) => set("tier", v)} disabled={scoreLocked} />
         <CheckGroup
           label="Review"
           options={[

@@ -20,16 +20,24 @@ import {
 import { WhatsAppContactsPage } from "../src/pages/WhatsAppContacts";
 import { AiCallCustomersPanel } from "../src/components/AiCallCustomersPanel";
 import type { AiCallsConfig } from "../src/lib/aiCalls";
+import { describeFilters } from "../src/lib/uploadHistory";
 
 // Import filter step (ENABLE_IMPORT_FILTER_STEP) on WhatsApp Contacts and Voicecall Contact (English, Tamil).
 // Flag OFF: "Import file" works exactly as before. Flag ON: the rows open in the Data Quality filter view
 // first, with each page's default filters; nothing is sent to an importer until "Import N selected".
 // lib/api is mocked and records every call.
 
-const state = vi.hoisted(() => ({ flag: false }));
+const state = vi.hoisted(() => ({
+  flag: false,
+  role: "EDITOR" as "EDITOR" | "ADMIN",
+  vcNoPhone: false,
+  extra: false,
+  // The AI score (GET /api/import-filter/ai, POST /ai-score); null = the service is not set up.
+  ai: null as null | { info: Record<string, unknown>; score?: (rows: { name: string | null; business: string | null; ruleScore: number | null }[]) => unknown },
+}));
 
 vi.mock("../src/lib/auth", () => ({
-  useAuth: () => ({ user: { role: "EDITOR", email: "e@example.com" }, loading: false, logout: () => undefined }),
+  useAuth: () => ({ user: { role: state.role, email: "e@example.com" }, loading: false, logout: () => undefined }),
 }));
 
 /* ------------------------------------------------------------------ fixtures */
@@ -109,17 +117,40 @@ const VC_CHECKS = [
   check(3, { name: "Ravi again", phone: "+919876500101", status: "DUPLICATE", ruleScore: null, score: null, tier: null }),
 ];
 
+// The same files with a City and an Industry column (Data Quality's dropdowns).
+const CITY = ["Chennai", "Chennai", "Madurai", "Chennai"];
+const INDUSTRY = ["Retail", "IT", "Retail", "Retail"];
+const NO_EXTRA = { city: null, state: null, district: null, pincode: null, category: null, source: null, dateAdded: null };
+const WA_PREVIEW_EXTRA = {
+  ...WA_PREVIEW,
+  headers: [...WA_HEADERS, "City", "Industry"],
+  rows: WA_ROWS.map((r, i) => ({ ...r, City: CITY[i]!, Industry: INDUSTRY[i]! })),
+  extraColumns: { ...NO_EXTRA, city: "City", category: "Industry" },
+};
+const VC_SHEET_EXTRA = {
+  ...VC_SHEET,
+  headers: [...VC_SHEET.headers, "city"],
+  rows: VC_SHEET.rows.map((r, i) => ({ ...r, city: CITY[i]! })),
+};
+const VC_EXTRA_COLUMNS = { ...NO_EXTRA, city: "city" };
+
 vi.mock("../src/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/lib/api")>()),
   api: vi.fn(async (path: string, opts: { method?: string } = {}) => {
     const method = opts.method ?? "GET";
     if (path === "/api/import-filter/config") return { enabled: state.flag, maxRows: 1000 };
-    if (path === "/api/import-filter/whatsapp/preview") return WA_PREVIEW;
-    if (path === "/api/import-filter/voicecall/check") return { checks: VC_CHECKS };
+    if (path === "/api/import-filter/ai")
+      return state.ai?.info ?? { available: false, provider: "ollama", label: "Ollama", model: null, reason: "not set up", minGapMs: 0, maxFailures: 5, batchSize: 5, liveCalls: false };
+    if (path === "/api/import-filter/ai-score") return state.ai!.score!((opts as { json: { rows: never[] } }).json.rows);
+    if (path === "/api/import-filter/whatsapp/preview") return state.extra ? WA_PREVIEW_EXTRA : WA_PREVIEW;
+    if (path === "/api/import-filter/voicecall/check") return state.extra ? { checks: VC_CHECKS, extraColumns: VC_EXTRA_COLUMNS } : { checks: VC_CHECKS };
     if (path === "/api/whatsapp/contacts/import") return { totalRows: 2, maxRows: 1000, selectedRows: 2, skippedOverLimit: 0, created: 1, updated: 1, duplicates: 0, failed: 0 };
     if (path.startsWith("/api/whatsapp/contacts")) return { items: [], total: 0, page: 1, pageSize: 25 };
     if (path === "/api/whatsapp/config") return { configured: false };
-    if (path === "/api/ai-call-customers/parse") return VC_SHEET;
+    if (path === "/api/ai-call-customers/parse")
+      return state.extra ? VC_SHEET_EXTRA : state.vcNoPhone ? { ...VC_SHEET, mapping: { ...VC_SHEET.mapping, phone: null } } : VC_SHEET;
+    if (path === "/api/ai-call-customers/import-to-languages")
+      return { results: ["en", "ta"].map((language) => ({ language, imported: 2, duplicates: 0, doNotCall: 0, skipped: 0, failed: false })) };
     if (path.startsWith("/api/ai-call-customers/import")) return { imported: 2, skipped: 0, duplicates: 0, doNotCall: 0, problems: [] };
     if (path.startsWith("/api/ai-call-customers") && method === "GET") return { items: [], total: 0, page: 1, pageSize: 25 };
     if (path === "/api/ai-calls/config") return AI_CONFIG;
@@ -174,6 +205,10 @@ const readFile = (f: File) =>
 
 beforeEach(() => {
   state.flag = false;
+  state.role = "EDITOR";
+  state.vcNoPhone = false;
+  state.extra = false;
+  state.ai = null;
   vi.mocked(api).mockClear();
 });
 afterEach(cleanup);
@@ -313,7 +348,6 @@ describe("Voicecall Contact → Import file", () => {
     it(`flag ON (${language}): Mobile + Landline and every language ticked; only the chosen rows are imported`, async () => {
       state.flag = true;
       await openVoicecallMapping(language);
-      fireEvent.click(await screen.findByRole("button", { name: "Next: filter 3 valid rows" }));
 
       const importBtn = await screen.findByRole("button", { name: "Import 2 selected" });
       expect(checkbox("Mobile").checked).toBe(true);
@@ -338,10 +372,299 @@ describe("Voicecall Contact → Import file", () => {
   it("flag ON: Back returns to Choose file without importing", async () => {
     state.flag = true;
     await openVoicecallMapping();
-    fireEvent.click(await screen.findByRole("button", { name: "Next: filter 3 valid rows" }));
     await screen.findByRole("button", { name: "Import 2 selected" });
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(await screen.findByRole("button", { name: "Choose file" })).toBeTruthy();
     expect(posted("/api/ai-call-customers/import")).toEqual([]);
+  });
+});
+
+/* ------------------------------------------------------------------ Business name filter */
+
+describe("Business name contains (in the filter step)", () => {
+  it("WhatsApp: only rows whose business matches are shown and imported (any case, Tamil too)", async () => {
+    state.flag = true;
+    wrap(<WhatsAppContactsPage />);
+    await screen.findByText("Import file");
+    pick(fileInput(".csv,.xlsx"), new File(["x"], "contacts.xlsx"));
+    await screen.findByRole("button", { name: "Import 3 selected" });
+
+    const business = screen.getByRole("textbox", { name: "Business name contains" });
+    fireEvent.change(business, { target: { value: "ஸ்டோர்ஸ்" } });
+    expect(screen.getByText(/Showing 1 of 4/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import 1 selected" })).toBeTruthy();
+
+    fireEvent.change(business, { target: { value: "RAVI trad" } });
+    expect(screen.getByText(/Showing 2 of 4/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 selected" }));
+    await waitFor(() => expect(posted("/api/whatsapp/contacts/import")).toHaveLength(1));
+    const sent = (vi.mocked(api).mock.calls.find(([p]) => p === "/api/whatsapp/contacts/import")![1]!.body as FormData).get("file") as File;
+    expect(await readFile(sent)).toBe(rowsToCsv(WA_HEADERS, [WA_ROWS[0]!, WA_ROWS[3]!]));
+  });
+
+  it("Voicecall: only the matching business is imported; no match = Import 0, disabled", async () => {
+    state.flag = true;
+    await openVoicecallMapping();
+    await screen.findByRole("button", { name: "Import 2 selected" });
+
+    const business = screen.getByRole("textbox", { name: "Business name contains" });
+    fireEvent.change(business, { target: { value: "no such shop" } });
+    expect((screen.getByRole("button", { name: "Import 0 selected" }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(business, { target: { value: "acme" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import 1 selected" }));
+    await waitFor(() => expect(posted("/api/ai-call-customers/import")).toHaveLength(1));
+    const [, opts] = vi.mocked(api).mock.calls.find(([p]) => p.startsWith("/api/ai-call-customers/import"))!;
+    expect(((opts as { json: { rows: { customerName: string }[] } }).json.rows).map((r) => r.customerName)).toEqual(["Chennai Office"]);
+  });
+});
+
+/* ------------------------------------------------------------------ The flow: one filter view, Data Quality's panel */
+
+const optionTexts = (name: string) => [...(screen.getByRole("combobox", { name }) as HTMLSelectElement).options].map((o) => o.textContent);
+const pickOption = (name: string, value: string) => fireEvent.change(screen.getByRole("combobox", { name }), { target: { value } });
+const checkBody = () =>
+  (vi.mocked(api).mock.calls.find(([p]) => p === "/api/import-filter/voicecall/check")![1] as { json: { headers?: string[] } }).json;
+
+describe("Voicecall, flag ON: columns matched automatically, straight to the filter view", () => {
+  it("the old column screen doesn't show (no column dropdowns, no 300-row preview, no Next button)", async () => {
+    state.flag = true;
+    await openVoicecallMapping();
+    await screen.findByRole("button", { name: "Import 2 selected" });
+    expect(screen.queryAllByText("— not mapped —")).toEqual([]);
+    expect(screen.queryByText(/Showing the first/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Next: filter/ })).toBeNull();
+    expect(checkBody().headers).toEqual(VC_SHEET.headers); // only to find city / category / source / date
+  });
+
+  it("no Phone column found: the column screen shows; Next opens the filter view", async () => {
+    state.flag = true;
+    state.vcNoPhone = true;
+    await openVoicecallMapping();
+    await screen.findByText("Map the Phone column to continue.");
+    const phone = screen.getAllByRole("combobox").find((el) => el.parentElement?.textContent?.startsWith("Phone"))!;
+    fireEvent.change(phone, { target: { value: "phone" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: filter 3 valid rows" }));
+    expect(await screen.findByRole("button", { name: "Import 2 selected" })).toBeTruthy();
+  });
+
+  it("Change columns opens the column screen; Next comes back; nothing is imported", async () => {
+    state.flag = true;
+    await openVoicecallMapping();
+    await screen.findByRole("button", { name: "Import 2 selected" });
+    fireEvent.click(screen.getByRole("button", { name: "Change columns" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Next: filter 3 valid rows" }));
+    expect(await screen.findByRole("button", { name: "Import 2 selected" })).toBeTruthy();
+    expect(posted("/api/ai-call-customers/import")).toEqual([]);
+  });
+
+  it("Back at the top discards the draft and returns to Choose file", async () => {
+    state.flag = true;
+    await openVoicecallMapping();
+    await screen.findByRole("button", { name: "Import 2 selected" });
+    fireEvent.click(screen.getByRole("button", { name: "Back to choosing a file" }));
+    expect(await screen.findByRole("button", { name: "Choose file" })).toBeTruthy();
+    expect(posted("/api/ai-call-customers/import")).toEqual([]);
+  });
+
+  it("admins: 'Also import into other languages' is in the filter view and goes with the import", async () => {
+    state.flag = true;
+    state.role = "ADMIN";
+    await openVoicecallMapping();
+    await screen.findByRole("button", { name: "Import 2 selected" });
+    const also = screen.getByRole("group", { name: "Also import into other languages" });
+    fireEvent.click(within(also).getByRole("checkbox", { name: /Tamil/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 selected" }));
+    await waitFor(() => expect(posted("/api/ai-call-customers/import-to-languages")).toHaveLength(1));
+    const [, opts] = vi.mocked(api).mock.calls.find(([p]) => p === "/api/ai-call-customers/import-to-languages")!;
+    const json = (opts as { json: { rows: { customerName: string }[]; languages: string[] } }).json;
+    expect(json.languages).toEqual(["en", "ta"]);
+    expect(json.rows.map((r) => r.customerName)).toEqual(["Ravi", "Chennai Office"]);
+  });
+});
+
+describe("Data Quality's dropdowns (city, category / industry, source, date added) in the filter view", () => {
+  it("WhatsApp: the file's values with counts; picking one filters the rows and the import", async () => {
+    state.flag = true;
+    state.extra = true;
+    wrap(<WhatsAppContactsPage />);
+    await screen.findByText("Import file");
+    pick(fileInput(".csv,.xlsx"), new File(["x"], "contacts.xlsx"));
+    await screen.findByRole("button", { name: "Import 3 selected" });
+
+    expect(optionTexts("City")).toEqual(["Any city", "Chennai (3)", "Madurai (1)"]);
+    expect(optionTexts("Category / industry")).toEqual(["Any category / industry", "Retail (3)", "IT (1)"]);
+    expect(screen.queryByRole("combobox", { name: "Source" })).toBeNull(); // not in this file, as on Data Quality
+
+    pickOption("City", "Chennai");
+    expect(screen.getByText(/Showing 2 of 4/)).toBeTruthy(); // the Chennai landline stays out (Mobile only)
+    pickOption("City", "");
+    pickOption("Category / industry", "Retail");
+    expect(screen.getByText(/Showing 3 of 4/)).toBeTruthy();
+    pickOption("City", "Madurai");
+    expect(screen.getByText(/Showing 1 of 4/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Import 1 selected" }));
+    await waitFor(() => expect(posted("/api/whatsapp/contacts/import")).toHaveLength(1));
+    const sent = (vi.mocked(api).mock.calls.find(([p]) => p === "/api/whatsapp/contacts/import")![1]!.body as FormData).get("file") as File;
+    expect(await readFile(sent)).toBe(rowsToCsv(WA_PREVIEW_EXTRA.headers, [WA_PREVIEW_EXTRA.rows[2]!]));
+  });
+
+  it("Voicecall: the file's headers go with the check; City filters like on Data Quality", async () => {
+    state.flag = true;
+    state.extra = true;
+    await openVoicecallMapping();
+    await screen.findByRole("button", { name: "Import 2 selected" });
+    expect(checkBody().headers).toEqual(VC_SHEET_EXTRA.headers);
+    expect(optionTexts("City")).toEqual(["Any city", "Chennai (3)", "Madurai (1)"]);
+    pickOption("City", "Madurai"); // the only Madurai row is another country's number: not ticked by default
+    expect((screen.getByRole("button", { name: "Import 0 selected" }) as HTMLButtonElement).disabled).toBe(true);
+    pickOption("City", "Chennai");
+    expect(screen.getByText(/Showing 3 of 4/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import 2 selected" })).toBeTruthy();
+  });
+
+  it("Upload History lists the dropdown choices among the filters used", () => {
+    expect(describeFilters({ filters: { city: "Chennai", category: "Retail" } })).toEqual(
+      expect.arrayContaining(["City: Chennai", "Category / industry: Retail"]),
+    );
+  });
+});
+
+describe("Clear filters returns to the page's defaults, not to a blank panel", () => {
+  it("WhatsApp: back to Mobile only", async () => {
+    state.flag = true;
+    wrap(<WhatsAppContactsPage />);
+    await screen.findByText("Import file");
+    pick(fileInput(".csv,.xlsx"), new File(["x"], "contacts.xlsx"));
+    await screen.findByRole("button", { name: "Import 3 selected" });
+    fireEvent.click(checkbox("Landline"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Business name contains" }), { target: { value: "ravi" } });
+    fireEvent.click(checkbox("Tamil"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(checkbox("Mobile").checked).toBe(true);
+    expect(checkbox("Landline").checked).toBe(false);
+    expect(checkbox("Tamil").checked).toBe(true);
+    expect((screen.getByRole("textbox", { name: "Business name contains" }) as HTMLInputElement).value).toBe("");
+    expect(screen.getByText(/Showing 3 of 4/)).toBeTruthy();
+  });
+
+  it("Voicecall: back to Mobile + Landline", async () => {
+    state.flag = true;
+    await openVoicecallMapping("ta");
+    await screen.findByRole("button", { name: "Import 2 selected" });
+    fireEvent.click(checkbox("Landline"));
+    expect(screen.getByRole("button", { name: "Import 1 selected" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(checkbox("Mobile").checked).toBe(true);
+    expect(checkbox("Landline").checked).toBe(true);
+    expect(screen.getByRole("button", { name: "Import 2 selected" })).toBeTruthy();
+  });
+});
+
+/* ------------------------------------------------------------------ AI score (Data Quality's), nothing saved */
+
+const AI_INFO = { available: true, provider: "groq", label: "Groq", model: "llama-3.1-8b-instant", reason: null, minGapMs: 0, maxFailures: 5, batchSize: 5, liveCalls: false };
+const aiOk = (rows: { ruleScore: number | null }[]) => ({
+  results: rows.map((r) => ({ aiState: "DONE", aiScore: 90, aiNotes: null, score: Math.round(((r.ruleScore ?? 0) + 90) / 2), tier: "HIGH_PRIORITY" })),
+});
+const aiCalls = () => vi.mocked(api).mock.calls.filter(([p]) => p === "/api/import-filter/ai-score").map(([, o]) => (o as { json: { rows: Record<string, unknown>[] } }).json.rows);
+async function openWhatsAppStep() {
+  wrap(<WhatsAppContactsPage />);
+  await screen.findByText("Import file");
+  pick(fileInput(".csv,.xlsx"), new File(["x"], "contacts.xlsx"));
+  return screen.findByRole("button", { name: /^Import \d+ selected$/ });
+}
+const disabled = (el: HTMLElement) => (el as HTMLInputElement | HTMLButtonElement).disabled;
+
+describe("AI score in the filter view (Data Quality's, nothing saved)", () => {
+  it("while scoring: 'X of Y scored'; score filters and review by score wait; phone type and status don't", async () => {
+    state.flag = true;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    state.ai = { info: AI_INFO, score: async (rows) => (await gate, aiOk(rows)) };
+    await openWhatsAppStep();
+    expect(await screen.findByText("0 of 3 scored")).toBeTruthy(); // the 3 valid rows, as on Data Quality
+
+    expect(disabled(screen.getByRole("spinbutton", { name: "Minimum score" }))).toBe(true);
+    expect(disabled(screen.getByRole("button", { name: /^Approve \d+$/ }))).toBe(true);
+    expect(disabled(screen.getByRole("button", { name: /^Reject \d+ below$/ }))).toBe(true);
+    expect(disabled(screen.getByRole("checkbox", { name: /Only show rows scoring/ }))).toBe(true);
+    expect(disabled(screen.getByRole("spinbutton", { name: "Score from" }))).toBe(true);
+    expect(disabled(screen.getByRole("spinbutton", { name: "Score to" }))).toBe(true);
+    expect(disabled(checkbox("High priority (85+)"))).toBe(true);
+    expect(screen.getByText("Score filters and review by score open once AI scoring finishes.")).toBeTruthy();
+    // Still usable meanwhile.
+    expect(disabled(checkbox("Landline"))).toBe(false);
+    expect(disabled(checkbox("Valid"))).toBe(false);
+    expect(disabled(screen.getByRole("textbox", { name: "Business name contains" }))).toBe(false);
+    expect(screen.getAllByText(/rules 100 · AI …/).length).toBeGreaterThan(0);
+
+    // Only the name, the business name and the rules score are sent; never the phone or the email.
+    expect(Object.keys(aiCalls()[0]![0]!).sort()).toEqual(["business", "name", "ruleScore"]);
+    expect(aiCalls()[0]!.map((r) => r.name)).toEqual(["Ravi", "Chennai", "முருகன்"]);
+
+    release();
+    expect(await screen.findByText("Scored 3 of 3")).toBeTruthy();
+    expect(disabled(screen.getByRole("spinbutton", { name: "Minimum score" }))).toBe(false);
+    expect(disabled(checkbox("High priority (85+)"))).toBe(false);
+    expect(screen.getAllByText(/rules 100 · AI 90/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Approve 3" })).toBeTruthy(); // overall scores 95, 85, 95
+    expect(posted("/api/whatsapp/contacts/import")).toEqual([]); // nothing saved by scoring
+  });
+
+  it("the service is not available: says so; only the standard checks; nothing is locked", async () => {
+    state.flag = true;
+    state.ai = { info: { ...AI_INFO, provider: "ollama", label: "Ollama", available: false, reason: 'model "qwen2.5:3b" is not pulled' } };
+    await openWhatsAppStep();
+    expect(await screen.findByText('Ollama not available: model "qwen2.5:3b" is not pulled. Only the standard checks run.')).toBeTruthy();
+    expect(disabled(screen.getByRole("spinbutton", { name: "Minimum score" }))).toBe(false);
+    expect(screen.queryAllByText(/AI …/)).toEqual([]);
+    expect(aiCalls()).toEqual([]);
+  });
+
+  it("too many failed rows stop the scoring (the service's limit); those rows keep the rules score", async () => {
+    state.flag = true;
+    state.ai = { info: { ...AI_INFO, maxFailures: 2 }, score: (rows) => ({ results: rows.map(() => ({ aiState: "ERROR", aiScore: null, aiNotes: "Groq 500: upstream", score: 100, tier: "HIGH_PRIORITY" })) }) };
+    await openWhatsAppStep();
+    expect(await screen.findByText("AI scoring stopped after 2 failed rows: Groq 500: upstream. Rows not scored keep the rules score.")).toBeTruthy();
+    expect(screen.getAllByText("AI: Groq 500: upstream").length).toBe(2); // the 2 valid mobiles shown (Mobile only)
+    expect(disabled(screen.getByRole("spinbutton", { name: "Minimum score" }))).toBe(false);
+  });
+
+  it("rate limited: waits, then sends the rows not scored yet", async () => {
+    state.flag = true;
+    let call = 0;
+    state.ai = {
+      info: AI_INFO,
+      score: (rows) =>
+        ++call === 1 ? { results: aiOk(rows.slice(0, 1)).results, wait: { ms: 10, reason: "Waiting: Groq rate limit, trying again shortly" } } : aiOk(rows),
+    };
+    await openWhatsAppStep();
+    expect(await screen.findByText("Scored 3 of 3")).toBeTruthy();
+    expect(aiCalls().map((rows) => rows.length)).toEqual([3, 2]);
+  });
+
+  it("Voicecall: the same AI score, on the valid rows of this list", async () => {
+    state.flag = true;
+    state.ai = { info: AI_INFO, score: aiOk };
+    await openVoicecallMapping("ta");
+    expect(await screen.findByText("Scored 3 of 3")).toBeTruthy();
+    expect(aiCalls()[0]!.map((r) => r.name)).toEqual(["Ravi", "Chennai Office", "Abroad"]);
+  });
+});
+
+describe("Row checkboxes behave as on Data Quality", () => {
+  it("changing what is shown resets them (Data Quality unpicks every row; here every row is ticked again)", async () => {
+    state.flag = true;
+    await openWhatsAppStep();
+    fireEvent.click(checkbox("Select row 2"));
+    expect(screen.getByRole("button", { name: "Import 2 selected" })).toBeTruthy();
+    fireEvent.click(checkbox("Landline")); // a filter change
+    expect(screen.getByRole("button", { name: "Import 3 selected" })).toBeTruthy();
+    fireEvent.click(checkbox("Select all rows shown"));
+    expect(screen.getByRole("button", { name: "Import 0 selected" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: /Valid \(/ })); // a tab change
+    expect(screen.getByRole("button", { name: "Import 2 selected" })).toBeTruthy();
   });
 });

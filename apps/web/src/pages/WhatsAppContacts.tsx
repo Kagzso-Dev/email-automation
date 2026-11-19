@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { Plus, Send, Trash2, Upload } from "lucide-react";
-import { FILTER_ROW, HEADER_CONTROL, PageHeader } from "../components/PageHeader";
+import { FILTER_ROW, FILTER_SELECT, PageHeader, ROW_ACTIONS_CELL, SEARCH_INPUT, TABLE_ROW } from "../components/PageHeader";
+import { BulkActionBar } from "../components/BulkActionBar";
 import { Badge, ErrorNote, Modal, Spinner, Table } from "../components/ui";
 import { SectionHardStopButton, SectionHardStopStatus } from "../components/HardStopButton";
 import { useConfirm } from "../components/confirm";
@@ -234,24 +235,7 @@ export function WhatsAppContactsPage() {
       <PageHeader
         title="WhatsApp Contacts"
         dangerAction={<SectionHardStopButton section="WHATSAPP" />}
-        secondaryActions={[
-          bulkDeleteIds.length > 0 && {
-            label: `Delete (${bulkDeleteIds.length})`,
-            icon: Trash2,
-            tone: "danger",
-            disabled: bulkDel.isPending,
-            title: "Delete the selected contacts",
-            onClick: () => void deleteSelected(),
-          },
-          {
-            label: `Send WhatsApp${activeSelectedCount > 0 ? ` (${activeSelectedCount})` : ""}`,
-            icon: Send,
-            disabled: !configured,
-            title: configured ? "Send a template to the selected active contacts" : WHATSAPP_NOT_CONFIGURED_HINT,
-            onClick: openSend,
-          },
-          { label: "Import file", icon: Upload, onClick: () => fileRef.current?.click() },
-        ]}
+        secondaryActions={[{ label: "Import file", icon: Upload, onClick: () => fileRef.current?.click() }]}
         primaryAction={{ label: "Add contact", icon: Plus, onClick: () => setShowAdd(true) }}
         helper={
           <>
@@ -325,7 +309,7 @@ export function WhatsAppContactsPage() {
 
       <div className={FILTER_ROW}>
         <input
-          className={`input ${HEADER_CONTROL} sm:max-w-xs`}
+          className={SEARCH_INPUT}
           aria-label="Search contacts"
           placeholder="Search phone or name"
           value={search}
@@ -335,7 +319,7 @@ export function WhatsAppContactsPage() {
           }}
         />
         <select
-          className={`input ${HEADER_CONTROL} sm:max-w-[12rem]`}
+          className={FILTER_SELECT}
           aria-label="Status filter"
           value={status}
           onChange={(e) => {
@@ -349,6 +333,29 @@ export function WhatsAppContactsPage() {
           ))}
         </select>
       </div>
+
+      {/* Actions on the ticked contacts (shown only while some are ticked). */}
+      <BulkActionBar
+        count={selectedIds.size}
+        onClear={() => setSelectedIds(new Set())}
+        actions={[
+          {
+            label: `Send WhatsApp${activeSelectedCount > 0 ? ` (${activeSelectedCount})` : ""}`,
+            icon: Send,
+            disabled: !configured,
+            title: configured ? "Send a template to the selected active contacts" : WHATSAPP_NOT_CONFIGURED_HINT,
+            onClick: openSend,
+          },
+          bulkDeleteIds.length > 0 && {
+            label: `Delete (${bulkDeleteIds.length})`,
+            icon: Trash2,
+            tone: "danger",
+            disabled: bulkDel.isPending,
+            title: "Delete the selected contacts",
+            onClick: () => void deleteSelected(),
+          },
+        ]}
+      />
 
       {query.isLoading ? (
         <Spinner />
@@ -380,7 +387,7 @@ export function WhatsAppContactsPage() {
             ]}
           >
             {items.map((c) => (
-              <tr key={c.id} className="border-b border-line-subtle last:border-0">
+              <tr key={c.id} className={TABLE_ROW}>
                 <td className="px-4 py-2.5">
                   <input
                     type="checkbox"
@@ -406,7 +413,7 @@ export function WhatsAppContactsPage() {
                 <td className="px-4 py-2.5 text-slate-550">
                   {new Date(c.createdAt).toLocaleDateString()}
                 </td>
-                <td className="px-4 py-2.5">
+                <td className={ROW_ACTIONS_CELL}>
                   <div className="flex items-center justify-end gap-3">
                     <button
                       className="text-xs text-accent-ink hover:underline"

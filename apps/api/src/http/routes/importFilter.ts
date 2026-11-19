@@ -1,12 +1,18 @@
 // Import filter step (ENABLE_IMPORT_FILTER_STEP, off by default). Before "Import file" imports anything on
 // WhatsApp Contacts or Voicecall Contact, the rows are checked with Data Quality's own rules and shown in
-// its filter view. These endpoints only READ: no row is saved (no staging job, no contact, no queue job),
-// nothing is called, sent or scored by an AI service. The chosen rows go to each page's existing importer
-// afterwards (POST /api/whatsapp/contacts/import, POST /api/ai-call-customers/import…), unchanged.
+// its filter view. These endpoints only READ: no row is saved (no staging job, no contact, no queue job), nothing
+// is called or sent. The AI score is Data Quality's own (only names and business names go to the AI service, in
+// batches) and is not saved either. The chosen rows go to each page's existing importer afterwards
+// (POST /api/whatsapp/contacts/import, POST /api/ai-call-customers/import…), unchanged.
 //
 //   GET  /api/import-filter/config               { enabled, maxRows }: always answers (the web app's switch)
 //   POST /api/import-filter/whatsapp/preview     upload .csv/.xlsx → the rows + their checks (nothing saved)
 //   POST /api/import-filter/voicecall/check      mapped rows (JSON) → their checks (nothing saved)
+//   GET  /api/import-filter/ai                   is the Data Quality AI service usable; how to pace the batches
+//   POST /api/import-filter/ai-score             { rows: [{ name, business, ruleScore }] } (≤ 5) → AI scores (nothing saved)
+//
+// Both checks also answer `extraColumns`: which of the file's columns hold the city, state, category, source,
+// date… (Data Quality's own header detection), so the step can show the same dropdowns as the Data Quality page.
 //
 // Flag off: everything except GET /config answers 404. Signed-in ADMIN and EDITOR (both can import today).
 
@@ -18,6 +24,8 @@ import { isImportFilterStepEnabled } from "../../config/importFilterStep.js";
 import { whatsappConfig } from "../../config/whatsapp.js";
 import { aiCallFormatFromFilename, readAiCallSheetUpload } from "../../domain/aiCallImport.js";
 import { aiCallLanguage } from "@dispatch/shared";
+import { detectExtraColumns } from "../../domain/dataQualityExport.js";
+import { AI_BATCH_SIZE, draftAiInfo, scoreDraftBatch } from "../../domain/importFilterAi.js";
 import { checkVoicecallDraft, checkWhatsAppDraft } from "../../domain/importFilterCheck.js";
 import { IMPORT_MAX_ROWS } from "../../domain/importLimit.js";
 import { importUpload, removeUpload, unreadableFile } from "../importUpload.js";
@@ -77,6 +85,7 @@ importFilterRouter.post(
       maxRows: sheet.maxRows,
       truncated: sheet.truncated,
       checks,
+      extraColumns: detectExtraColumns(sheet.headers),
     });
   }),
 );
@@ -98,6 +107,8 @@ const voicecallCheckInput = z
       .max(IMPORT_MAX_ROWS),
     // This page's list: "already in contacts" means already in THIS list (the importer's own duplicate rule).
     language: aiCallLanguage.default("en"),
+    // The file's column names: only to find the city / category / source / date columns (optional).
+    headers: z.array(z.string().max(300)).max(500).optional(),
   })
   .strict();
 
@@ -108,7 +119,44 @@ importFilterRouter.post(
   requireRole("ADMIN", "EDITOR"),
   checkLimiter,
   wrap(async (req, res) => {
-    const { rows, language } = voicecallCheckInput.parse(req.body);
-    res.json({ checks: await checkVoicecallDraft(rows, language, aiCallsConfig.defaultCountryCode, whatsappConfig.defaultCountryCode) });
+    const { rows, language, headers } = voicecallCheckInput.parse(req.body);
+    res.json({
+      checks: await checkVoicecallDraft(rows, language, aiCallsConfig.defaultCountryCode, whatsappConfig.defaultCountryCode),
+      extraColumns: detectExtraColumns(headers ?? []),
+    });
+  }),
+);
+
+/* ------------------------------------------------------------------ AI score (Data Quality's, nothing saved) */
+
+// One file is up to 1,000 rows sent a few at a time, one request after the other: a roomier limit than the checks.
+const aiLimiter = limiter(300);
+
+importFilterRouter.get(
+  "/ai",
+  flagOn,
+  requireRole("ADMIN", "EDITOR"),
+  wrap(async (_req, res) => {
+    res.json(await draftAiInfo());
+  }),
+);
+
+const aiScoreInput = z
+  .object({
+    rows: z
+      .array(z.object({ name: text(200), business: text(300), ruleScore: z.number().int().min(0).max(100).nullable() }).strict())
+      .min(1, "No rows to score")
+      .max(AI_BATCH_SIZE),
+  })
+  .strict();
+
+importFilterRouter.post(
+  "/ai-score",
+  flagOn,
+  requireRole("ADMIN", "EDITOR"),
+  aiLimiter,
+  wrap(async (req, res) => {
+    const { rows } = aiScoreInput.parse(req.body);
+    res.json(await scoreDraftBatch(rows.map((r) => ({ name: r.name ?? null, business: r.business ?? null, ruleScore: r.ruleScore }))));
   }),
 );

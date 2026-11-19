@@ -5,7 +5,17 @@
 
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import type { DqFilters, DqPhoneType, DqRecordStatus, DqReview, DqTier } from "./dataQuality";
+import {
+  EXTRA_FIELD_LABELS,
+  type DqExtraField,
+  type DqFacets,
+  type DqFilters,
+  type DqPhoneType,
+  type DqRecord,
+  type DqRecordStatus,
+  type DqReview,
+  type DqTier,
+} from "./dataQuality";
 
 export interface ImportFilterConfig {
   enabled: boolean;
@@ -142,6 +152,50 @@ export interface DraftRow extends DraftCheck {
   /** Approve / Reject here: held in memory only. Rejected rows are not imported. */
   review: DqReview;
   used: UsedInfo;
+  /** The file's city, state, category, source, date… for this row (the dropdown filters). */
+  extra?: Partial<Record<DqExtraField, string>>;
+  /** Data Quality's AI score (lib/importFilterAi.ts): PENDING on valid rows until scored; never saved. */
+  aiState: DqRecord["aiState"];
+  aiScore: number | null;
+  aiNotes: string | null;
+}
+
+/* ------------------------------------------------------------------ city / category / source / date (Data Quality's dropdowns) */
+
+/** Which of the file's columns holds each field (from the API: Data Quality's own header detection). */
+export type ExtraColumns = Record<DqExtraField, string | null>;
+const EXTRA_FIELDS = Object.keys(EXTRA_FIELD_LABELS) as DqExtraField[];
+/** The most values one dropdown lists (the Data Quality page's limit). */
+const FACET_LIMIT = 500;
+const rawValue = (raw: Record<string, string> | undefined, header: string | null) => (header && raw ? String(raw[header] ?? "").trim() : "");
+
+/** Each row's city, category, … read from its own file row (as the Data Quality page reads them). */
+export function withExtraValues(rows: DraftRow[], rawRows: Record<string, string>[], columns: ExtraColumns | null | undefined): DraftRow[] {
+  if (!columns || !EXTRA_FIELDS.some((f) => columns[f])) return rows;
+  return rows.map((r) => {
+    const extra: Partial<Record<DqExtraField, string>> = {};
+    for (const f of EXTRA_FIELDS) if (columns[f]) extra[f] = rawValue(rawRows[r.rowIndex], columns[f]);
+    return { ...r, extra };
+  });
+}
+
+/** The dropdown values with their counts, for the shared Data Quality filter panel (most frequent first). */
+export function draftFacets(headers: string[], rawRows: Record<string, string>[], columns: ExtraColumns | null | undefined): DqFacets {
+  const cols = Object.fromEntries(EXTRA_FIELDS.map((f) => [f, columns?.[f] ?? null])) as ExtraColumns;
+  const values: DqFacets["values"] = {};
+  for (const f of EXTRA_FIELDS) {
+    if (!cols[f]) continue;
+    const counts = new Map<string, number>();
+    for (const raw of rawRows) {
+      const v = rawValue(raw, cols[f]);
+      if (v) counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    values[f] = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, FACET_LIMIT)
+      .map(([value, count]) => ({ value, count }));
+  }
+  return { headers, columns: cols, values };
 }
 
 export function toDraftRows(
@@ -158,6 +212,10 @@ export function toDraftRows(
       alreadySaved: c.alreadySaved === true,
       review: "PENDING",
       used: c.used ?? NOT_USED,
+      // As on Data Quality: only valid rows get an AI score.
+      aiState: c.status === "VALID" ? "PENDING" : "NONE",
+      aiScore: null,
+      aiNotes: null,
     };
   });
 }
@@ -185,7 +243,7 @@ const digitsOf = (v: string | null | undefined) => (v ?? "").replace(/\D/g, "");
 
 /**
  * Every filter must match (AND); inside one group any one will do; an empty group is no filter.
- * Mirrors rowMatches in apps/api/src/domain/dataQualityExport.ts (the file's extra columns aren't used here).
+ * Mirrors rowMatches in apps/api/src/domain/dataQualityExport.ts (city, category, … must equal the picked value).
  */
 export function draftRowMatches(r: DraftRow, f: DqFilters, languages: DraftLanguage[], view: DraftView = {}): boolean {
   if (view.status && r.status !== view.status) return false;
@@ -195,6 +253,10 @@ export function draftRowMatches(r: DraftRow, f: DqFilters, languages: DraftLangu
   if (f.phone) {
     const q = digitsOf(f.phone);
     if (!q || !(digitsOf(r.phone).includes(q) || digitsOf(r.phoneRaw).includes(q))) return false;
+  }
+  for (const field of EXTRA_FIELDS) {
+    const want = f[field];
+    if (want && (r.extra?.[field] ?? "") !== want) return false;
   }
   if (f.status?.length && !f.status.some((s) => (s === "LANDLINE" ? r.phoneType === "landline" : r.status === s))) return false;
   if (f.phoneType?.length && !f.phoneType.includes(r.phoneType)) return false;

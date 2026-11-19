@@ -170,3 +170,38 @@ describe("flag on", () => {
     expect((await post("/api/import-filter/voicecall/check", { rows })).status).toBe(400);
   });
 });
+
+describe("flag on: the Data Quality dropdowns and the email column", () => {
+  beforeEach(() => flag(true));
+
+  it("WhatsApp preview names the city / category / source / date columns, and reads the email for the checks", async () => {
+    const csv = [
+      "phone,first name,business name,Email,City,Industry,Lead Source,First Seen",
+      "9876500101,Ravi,Ravi Traders,ravi@example.com,Chennai,Retail,Maps,2026-11-01",
+      "9876500102,Priya,Priya Boutique,,Madurai,Fashion,Website,2026-11-02",
+    ].join("\n");
+    const res = await upload("/api/import-filter/whatsapp/preview", csv);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    expect(body.extraColumns).toEqual({
+      city: "City",
+      state: null,
+      district: null,
+      pincode: null,
+      category: "Industry",
+      source: "Lead Source",
+      dateAdded: "First Seen",
+    });
+    expect(body.checks.map((c: any) => c.email)).toEqual(["ravi@example.com", null]);
+    expect(writes()).toEqual([]);
+  });
+
+  it("Voicecall check: the columns from the file's headers (optional; none sent = none found)", async () => {
+    const rows = [{ name: "Ravi", phone: "9876500101", business: "Ravi Traders" }];
+    const withHeaders = (await (await post("/api/import-filter/voicecall/check", { rows, headers: ["customer_name", "phone", "city", "industry"] })).json()) as any;
+    expect(withHeaders.extraColumns).toMatchObject({ city: "city", category: "industry", source: null });
+    const without = (await (await post("/api/import-filter/voicecall/check", { rows })).json()) as any;
+    expect(Object.values(without.extraColumns).every((v) => v === null)).toBe(true);
+    expect(writes()).toEqual([]);
+  });
+});

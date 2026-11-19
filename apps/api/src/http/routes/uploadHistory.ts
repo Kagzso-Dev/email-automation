@@ -3,7 +3,10 @@
 //
 //   GET  /api/upload-history                  newest first, ?page=&pageSize=&search=<file name>
 //   GET  /api/upload-history/:id              one upload: counts, filters, exclusion options
-//   GET  /api/upload-history/:id/excluded     the excluded rows (CSV) for 30 days, then 410
+//   GET  /api/upload-history/:id/excluded     the excluded rows (CSV)
+//
+// Each upload (its row and its excluded rows) is deleted 30 days after it was made: on every read / write here and
+// by an hourly sweep in the API process.
 //   POST /api/upload-history                  written by the import filter step right after the page's importer
 //                                             answered "Import N selected" (multipart: summary JSON + excluded CSV)
 //
@@ -22,7 +25,7 @@ import {
   getUploadHistory,
   isMissingTable,
   listUploadHistory,
-  purgeExpiredExcluded,
+  purgeExpiredHistory,
   startUploadHistorySweep,
 } from "../../domain/uploadHistory.js";
 import { logger } from "../../logger.js";
@@ -71,7 +74,7 @@ uploadHistoryRouter.get(
   readLimiter,
   handle(async (req, res) => {
     const q = listQuery.parse(req.query);
-    await purgeExpiredExcluded();
+    await purgeExpiredHistory();
     res.json(await listUploadHistory({ ...q, search: q.search || undefined }));
   }),
 );
@@ -81,7 +84,7 @@ uploadHistoryRouter.get(
   readLimiter,
   handle(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    await purgeExpiredExcluded();
+    await purgeExpiredHistory();
     const row = await getUploadHistory(id);
     if (!row) throw notFound("Upload");
     res.json(row);
@@ -96,7 +99,7 @@ uploadHistoryRouter.get(
   readLimiter,
   handle(async (req, res) => {
     const { id } = idParam.parse(req.params);
-    await purgeExpiredExcluded();
+    await purgeExpiredHistory();
     const r = await getExcludedCsv(id);
     if (r.status === "missing") throw notFound("Upload");
     if (r.status === "none") throw notFound("Excluded rows (none were excluded)");
@@ -149,7 +152,7 @@ uploadHistoryRouter.post(
     }
     const s = summaryInput.parse(raw);
     const csv = req.file ? req.file.buffer.toString("utf8").replace(/^﻿/, "") : null;
-    await purgeExpiredExcluded();
+    await purgeExpiredHistory();
     const row = await createUploadHistory({
       ...s,
       result: s.result ?? {},

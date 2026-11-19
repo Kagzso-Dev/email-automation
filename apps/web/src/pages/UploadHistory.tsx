@@ -62,7 +62,7 @@ function HistoryList() {
     <div>
       <PageHeader
         title="Upload History"
-        subtitle="Every import confirmed in the import filter step (WhatsApp Contacts, Voicecall Contact), newest first. Excluded rows can be downloaded for 30 days."
+        subtitle="Every import confirmed in the import filter step (WhatsApp Contacts, Voicecall Contact), newest first. Each upload is kept for 30 days, then deleted."
       />
       <div className="mb-4">
         <input
@@ -214,7 +214,7 @@ function UploadDetail({ id, onClose }: { id: string | null; onClose: () => void 
               {u.excludedRows === 0
                 ? "No rows were excluded as already used."
                 : u.excludedAvailable
-                  ? `${n(u.excludedRows)} excluded rows, kept until ${formatDateTime(u.excludedExpiresAt)}.`
+                  ? `${n(u.excludedRows)} excluded rows. This upload is deleted on ${formatDateTime(u.excludedExpiresAt)}.`
                   : `The ${n(u.excludedRows)} excluded rows were deleted after 30 days.`}
             </span>
             <button type="button" className="btn-primary" disabled={!u.excludedAvailable || busy} onClick={() => void download()}>

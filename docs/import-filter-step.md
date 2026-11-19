@@ -32,9 +32,24 @@ Upload History", and **imports still work**.
 
 1. **WhatsApp Contacts:** picking a file opens the filter step. The file is read with the WhatsApp
    importer's own column names and phone rule (first 1,000 rows, as the importer).
-   **Voicecall Contact:** Choose file → column mapping (as today) → **Next: filter N valid rows**.
-2. Each row is checked with the Data Quality rules (check status, rules score, tier, phone type). The **AI
-   score is not used** (it needs a saved Data Quality job).
+   **Voicecall Contact:** Choose file → the columns are matched automatically and the filter step opens
+   straight away (the old column screen, its 300-row preview and its error list don't show). The column screen
+   opens only when no Phone column was found, or on **Change columns** in the step's header; **Next: filter
+   N valid rows** then returns to the step. Admins pick **Also import into other languages** in the step.
+2. Each row is checked with the Data Quality rules (check status, rules score, tier, phone type), then gets
+   **Data Quality's AI score**, exactly as on the Data Quality page and nothing saved: the valid rows go to
+   `POST /api/import-filter/ai-score` 5 at a time with only their name, business name and rules score (never the
+   phone number or the email); same service (DATA_QUALITY_AI_PROVIDER), prompt, overall score (rules + AI average)
+   and tier; same pause between rows, wait while rate limited or while live AI calls run, stop when the service is
+   down, the key is refused or 5 rows failed. The step shows "X of Y scored"; until scoring ends, **Score ≥,
+   Approve, Reject, Only show rows scoring N+, Score from / to and Tier are disabled** (phone type, check status,
+   text, dropdowns and the import stay usable). Not available = "<service> not available: … Only the standard
+   checks run." Two differences, for the request behind nginx: a batch starts no new row after 15 s (the browser
+   sends the rest), and one row waits at most 45 s.
+   The score bar and the row table are the Data Quality page's own components (`components/DataQualityParts.tsx`;
+   the Data Quality page renders exactly as before, held by `test/dataQualityPageSnapshot.test.tsx`). The import
+   table adds Language and Already used; its row checkboxes reset when the filters, tab or "Only show" change, as
+   on Data Quality (there every row is unpicked again, here every row is ticked again).
 3. **Exclude already used data**: all three options are **ticked** by default. Ticked = matching rows are shown
    with the reason (e.g. "Already sent 12 Nov 2026 (WhatsApp)"), cannot be selected and are **not imported**.
    Unticked = they go to the importer like any other row (its own duplicate rules apply).
@@ -51,6 +66,12 @@ Upload History", and **imports still work**.
    import them, and the import then updates those contacts. **Clear filters** does not change these options.
 4. Default filters: WhatsApp = Phone type **Mobile** only; Voicecall = **Mobile + Landline**. Language (from the
    script of the name and business) = all ticked. The counter reads "Showing X of Y, Z excluded as already used".
+   **Clear filters** returns to these page defaults (not to a blank panel).
+   The filter panel is the Data Quality page's own component: the four text searches, the **City / State /
+   District / Pincode / Category / Source / Date added** dropdowns (shown when the file has those columns, found
+   by Data Quality's header names, with counts), Email / Phone any, Score range, Check status, Phone type, Tier
+   and Review. On WhatsApp the email column is read for these filters and the checks (the importer still
+   doesn't store it). The Data Quality page itself is not changed.
 5. **Download excluded rows** saves the excluded rows (original columns + "Excluded because") as CSV, in the
    browser; nothing is uploaded.
 6. **Import N selected** (live count, disabled at 0, never above 1,000) sends the rows that are shown, ticked,
@@ -58,34 +79,37 @@ Upload History", and **imports still work**.
    (`POST /api/whatsapp/contacts/import` as `<file>-selected.csv`, or `POST /api/ai-call-customers/import…`).
 7. The summary shows imported, failed, duplicates, **Excluded (already used)** and **Filtered out**. Each row
    read is counted once: excluded → failed (the importer can't take it) → filtered out → sent.
-8. **Back** returns to file selection. Nothing is imported and no history is written. A failed import writes no
-   history either.
+8. **Back** (in the header and next to Import) returns to file selection. Nothing is imported and no history is
+   written. A failed import writes no history either.
 
 ## Upload History
 
 Menu **System → Upload History** (admins and editors; everyone sees every upload). Newest first, 25 per page,
 search by file name. Click a row for the counts, the filters and exclusion options used, and **Download
-excluded rows**. The excluded rows are kept **30 days**, then deleted (on any history request and by an hourly
-sweep in the API process); the record with its counts and filters stays.
+excluded rows**. Each upload is **deleted 30 days after it was made** (its row, counts, filters and excluded
+rows), on any history request and by an hourly sweep in the API process (`scheduler.ts` is not involved).
+A missing migration never blocks an import: the history write answers 503 and the step shows a warning.
 
-Endpoints: `GET /api/upload-history`, `GET /api/upload-history/:id`, `GET /api/upload-history/:id/excluded`
-(410 after 30 days), `POST /api/upload-history` (written by the step after the importer answered; the user and
+Endpoints: `GET /api/upload-history`, `GET /api/upload-history/:id`, `GET /api/upload-history/:id/excluded`,
+`POST /api/upload-history` (written by the step after the importer answered; the user and
 time come from the session and the server, never from the request).
 
 ## Files
 
-New: `apps/api/src/config/importFilterStep.ts`, `apps/api/src/domain/importFilterCheck.ts`,
+New: `apps/api/src/config/importFilterStep.ts`, `apps/api/src/domain/importFilterCheck.ts`, `apps/api/src/domain/importFilterAi.ts`,
 `apps/api/src/domain/importFilterUsed.ts`, `apps/api/src/domain/uploadHistory.ts`,
 `apps/api/src/http/routes/importFilter.ts`, `apps/api/src/http/routes/uploadHistory.ts`,
 `prisma/migrations/0037_upload_history/{migration.sql,down.sql}`, `apps/web/src/lib/importFilter.ts`,
-`apps/web/src/lib/uploadHistory.ts`, `apps/web/src/components/ImportFilterStep.tsx`,
+`apps/web/src/lib/uploadHistory.ts`, `apps/web/src/lib/importFilterAi.ts`, `apps/web/src/components/ImportFilterStep.tsx`,
+`apps/web/src/components/DataQualityParts.tsx` (score bar + row table shared with Data Quality),
 `apps/web/src/components/ImportFilterFlows.tsx`, `apps/web/src/pages/UploadHistory.tsx`; tests
-`apps/api/test/{importFilterCheck,importFilterHttp,importFilterUsed,uploadHistoryHttp}.test.ts`,
-`apps/api/test/fakePrismaPlus.ts`, `apps/web/test/{importFilterStep,importFilterExclusions,uploadHistoryPage}.test.tsx`.
+`apps/api/test/{importFilterCheck,importFilterHttp,importFilterUsed,importFilterAi,uploadHistoryHttp}.test.ts`,
+`apps/api/test/fakePrismaPlus.ts`, `apps/web/test/{importFilterStep,importFilterExclusions,uploadHistoryPage,dataQualityPageSnapshot}.test.tsx`.
 
 Hook-ins: `prisma/schema.prisma` (the `UploadHistory` model only), `apps/api/src/http/app.ts` (2 route lines),
 `.env.example`, `apps/web/src/App.tsx` (1 route), `apps/web/src/components/Layout.tsx` (menu item, only with
-the flag on), `apps/web/src/pages/DataQuality.tsx` (`FilterPanel`, `CheckGroup` exported),
+the flag on), `apps/web/src/pages/DataQuality.tsx` (`FilterPanel`, `CheckGroup` exported, with optional
+`scoreLocked` / `disabled` it never sets; score bar and table moved to `DataQualityParts.tsx`, same HTML),
 `apps/web/src/pages/WhatsAppContacts.tsx`, `apps/web/src/components/AiCallCustomersPanel.tsx`.
 
 ## Manual test checklist
@@ -126,5 +150,6 @@ number, 1 Tamil name, an email column with one address already emailed, and 1,00
 **Upload History**
 - [ ] Newest first; search by part of a file name; Prev / Next.
 - [ ] Detail: counts match the import summary; filters and exclusion options listed; download works.
-- [ ] Set a row's `excludedExpiresAt` in the past → download disabled, "deleted after 30 days"; counts kept.
+- [ ] Set a row's `createdAt` more than 30 days back → it is gone on the next list / detail request.
+- [ ] Data Quality page: upload a file → same score bar, filters, tabs and table as before.
 - [ ] Editor account sees the page and every upload.
