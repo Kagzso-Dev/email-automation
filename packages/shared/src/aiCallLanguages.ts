@@ -36,11 +36,13 @@ export const AI_CALL_LANGUAGE_NAMES: Record<AiCallLanguage, string> = {
 /**
  * Line for the voice "Listen" button when the flow's own opening can't be shown (the editor uses the
  * flow's greeting first). Editable in the page. Tamil, Hindi and Kannada are written in their own script;
- * TODO(native review before release): ta, hi, kn. Hindi uses the female form: every offered voice is female.
+ * TODO(native review before release): hi, kn. Hindi uses the female form: every offered voice is female.
+ * Tamil is spoken Tamil, as calls speak it (not the formal "சாரிடம் பேசுகிறேனா"); பேசுறேனா is the same for a male or a
+ * female voice. Given by Kagzso 2026-11-19.
  */
 export const AI_CALL_VOICE_SAMPLES: Record<AiCallLanguage, string> = {
   en: "Hello, am I speaking with Ragul?",
-  ta: "வணக்கம், நான் ராகுல் சாரிடம் பேசுகிறேனா?",
+  ta: "வணக்கம் சார், நான் ராகுல் சார் கிட்ட பேசுறேனா?",
   hi: "नमस्ते, क्या मैं राहुल सर से बात कर रही हूँ?",
   kn: "ನಮಸ್ಕಾರ, ನಾನು ರಾಹುಲ್ ಸರ್ ಜೊತೆ ಮಾತನಾಡುತ್ತಿದ್ದೇನಾ?",
   te: "Hello, నేను Ragul గారితో మాట్లాడుతున్నానా?",

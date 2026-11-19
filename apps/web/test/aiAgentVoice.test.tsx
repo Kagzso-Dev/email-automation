@@ -190,16 +190,45 @@ describe("Settings → AI Voice", () => {
       expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ language: "ta", agent: { voiceId: M2 } });
     });
 
-    it("a male voice warns that the AI still introduces itself by the executive name (e.g. Sara)", async () => {
+    it("a male voice with the female default name (Thaara): a clear prompt at the voice and the name, and “Use Arun” fixes it", async () => {
       catalogVoices = [...CLONES, ...STOCK];
       form();
       await waitFor(() => expect(names()).toHaveLength(5));
-      fill("AI executive name", "Sara");
-      expect(screen.queryByText(/A male voice still introduces itself as/)).toBeNull(); // female voice: no warning
+      expect(screen.queryByRole("alert")).toBeNull(); // female voice, female name: nothing to say
+      fireEvent.click(genderButton("Male")); // Kgazso Male 1
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain("Kgazso Male 1 is a male voice, but the AI introduces itself as Thaara, a female name.");
+      expect(alert.textContent).toContain("Change “AI executive name” to a male name before you publish.");
+      expect(screen.getByText("The AI Voice below is male: give it a male name, e.g. Arun.")).toBeTruthy(); // at the name field too
+      fireEvent.click(within(alert).getByRole("button", { name: "Use “Arun”" }));
+      const name = screen.getByText("AI executive name").parentElement!.querySelector("input")!;
+      expect(name.value).toBe("Arun");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByText(/give it a male name/)).toBeNull();
+      expect(screen.getByText(/A male voice still introduces itself as/).textContent).toContain("Arun"); // the general reminder stays
+      fill("Agent name (for your list)", "ABC Hospital — Arun");
+      fill("Calling objective", "Introduce AI for hospitals.");
+      fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
+      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
+      expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ agent: { executiveName: "Arun", voiceId: M1 } });
+    });
+
+    it("Sara, Nila and Tamil-letter தாரா are known female names too; any other name only gets the general reminder", async () => {
+      catalogVoices = [...CLONES, ...STOCK];
+      form();
+      await waitFor(() => expect(names()).toHaveLength(5));
       fireEvent.click(genderButton("Male"));
-      const note = screen.getByText(/A male voice still introduces itself as/);
-      expect(note.textContent).toContain("Sara");
-      expect(note.textContent).toContain("change “AI executive name” to a male name");
+      for (const female of ["Sara", " nila ", "தாரா"]) {
+        fill("AI executive name", female);
+        expect([female, screen.getByRole("alert").textContent]).toEqual([female, expect.stringContaining(`introduces itself as ${female.trim()}, a female name`)]);
+      }
+      fill("AI executive name", "Ravi"); // a name the form can't know the gender of: never guessed
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByText(/A male voice still introduces itself as/).textContent).toContain("Ravi");
+      fireEvent.click(genderButton("Female"));
+      fill("AI executive name", "Sara");
+      expect(screen.queryByRole("alert")).toBeNull(); // female voice: no warning
+      expect(screen.queryByText(/A male voice still introduces itself as/)).toBeNull();
     });
 
     it("with SARVAM_TTS_VOICE_TA_MALE_EITHER, “Either male (per call)” is offered first and saved as the pool", async () => {

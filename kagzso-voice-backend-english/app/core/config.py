@@ -59,6 +59,14 @@ CLONED_VOICE_SLOTS = {
     "ta": (("female", "SARVAM_TTS_VOICE_TA_FEMALE"), ("male_1", "SARVAM_TTS_VOICE_TA_MALE_1"),
            ("male_2", "SARVAM_TTS_VOICE_TA_MALE_2")),
 }
+# A cloned voice's picker name while its SARVAM_TTS_VOICE_<LANG>_<SLOT>_NAME line is missing or empty (an empty line
+# from .env.example included): the names Kagzso gave its own clones, so no card reads "Cloned male 1".
+CLONED_VOICE_DEFAULT_NAMES = {
+    ("en", "female"): "Kgazso English",
+    ("ta", "female"): "Kgazso Tamil",
+    ("ta", "male_1"): "Kgazso Male 1",
+    ("ta", "male_2"): "Kgazso Male 2",
+}
 
 
 def cloned_voice_id(raw: Optional[str]) -> Optional[str]:
@@ -173,7 +181,8 @@ class Settings(BaseSettings):
     SARVAM_TTS_VOICE_TA_FEMALE: str = ""
     SARVAM_TTS_VOICE_TA_MALE_1: str = ""
     SARVAM_TTS_VOICE_TA_MALE_2: str = ""
-    # The name each one shows in the voice pickers (max 40 characters; empty = "Cloned female", "Cloned male 1" ...).
+    # The name each one shows in the voice pickers (max 40 characters; empty = "Kgazso English", "Kgazso Tamil",
+    # "Kgazso Male 1", "Kgazso Male 2": CLONED_VOICE_DEFAULT_NAMES).
     SARVAM_TTS_VOICE_EN_FEMALE_NAME: str = ""
     SARVAM_TTS_VOICE_TA_FEMALE_NAME: str = ""
     SARVAM_TTS_VOICE_TA_MALE_1_NAME: str = ""
@@ -677,10 +686,11 @@ class Settings(BaseSettings):
         return next((g for _, v, g in self.cloned_voices if v == voice_id), "")
 
     def cloned_voice_name(self, slot: str) -> str:
-        """A cloned voice's picker name (SARVAM_TTS_VOICE_<LANG>_<SLOT>_NAME, max 40 characters), else "Cloned <slot>"."""
+        """A cloned voice's picker name (SARVAM_TTS_VOICE_<LANG>_<SLOT>_NAME, max 40 characters), else its
+        CLONED_VOICE_DEFAULT_NAMES name ("Kgazso Male 1" ...)."""
         setting = dict(CLONED_VOICE_SLOTS.get(self.call_language, ())).get(slot, "")
         name = " ".join(str(getattr(self, f"{setting}_NAME", "") or "").split())[:40].strip()
-        return name or "Cloned " + slot.replace("_", " ")
+        return name or CLONED_VOICE_DEFAULT_NAMES.get((self.call_language, slot), "Custom " + slot.replace("_", " "))
 
     def cloned_either(self, gender: str) -> bool:
         """Offer "Either <gender> (per call)" for this backend's cloned voices of that gender (Tamil male only)."""

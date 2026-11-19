@@ -69,6 +69,20 @@ export const AI_AGENT_VOICE_GENDERS = ["female", "male"] as const;
 export type AiAgentVoiceGender = (typeof AI_AGENT_VOICE_GENDERS)[number];
 export const AI_AGENT_VOICE_GENDER_LABELS: Record<AiAgentVoiceGender, string> = { female: "Female", male: "Male" };
 /**
+ * Female names an AI executive is known to carry here: the default (AI_AGENT_DEFAULTS.executiveName, Thaara, also spelt
+ * Thara), the built-in Call Flow persona Nila, and Sara, in English and Tamil letters. With a male voice the AI would
+ * introduce a man's voice by one of them, so the agent form asks for a male name and offers AI_AGENT_MALE_EXECUTIVE_NAME.
+ * Only these names are checked: no other name's gender is guessed.
+ */
+export const AI_AGENT_FEMALE_EXECUTIVE_NAMES = ["Thaara", "Thara", "Sara", "Nila", "தாரா", "சாரா", "நிலா"] as const;
+/** The male name the form offers for a male voice (one click; any other name can be typed). */
+export const AI_AGENT_MALE_EXECUTIVE_NAME = "Arun";
+/** True when a male voice would introduce itself by one of AI_AGENT_FEMALE_EXECUTIVE_NAMES (case and spacing ignored). */
+export function femaleNameForMaleVoice(executiveName: string, voiceGender: string | null | undefined): boolean {
+  const name = executiveName.trim().replace(/\s+/g, " ").toLowerCase();
+  return voiceGender === "male" && AI_AGENT_FEMALE_EXECUTIVE_NAMES.some((n) => n.toLowerCase() === name);
+}
+/**
  * The voice a new agent starts with, per language (none = the voice backend's default voice, as before). The female
  * cloned voice the language's backend offers (SARVAM_TTS_VOICE_<LANG>_FEMALE, `cloned: true` in its list) comes first.
  */

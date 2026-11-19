@@ -4,12 +4,13 @@
 import { useState } from "react";
 import {
   AI_AGENT_DEFAULT_VOICE,
-  AI_AGENT_DEFAULTS,
+  AI_AGENT_MALE_EXECUTIVE_NAME,
   AI_AGENT_VOICE_GENDER_LABELS,
   AI_AGENT_VOICE_GENDERS,
   AI_AGENT_VOICE_SPEED_LIMITS,
   AI_AGENT_VOICE_SPEEDS,
   AI_CALL_LANGUAGE_NAMES,
+  femaleNameForMaleVoice,
   isVoiceTuningLanguage,
   VOICE_TUNING_DEFAULT_PRESET,
   VOICE_TUNING_LIMITS,
@@ -205,6 +206,7 @@ export function AiAgentVoice({
   replySpeed,
   onReplySpeedChange,
   executiveName,
+  onExecutiveNameChange,
 }: {
   language: AiCallLanguage;
   /** The picked voice id ("" = none: the voice backend's default voice). */
@@ -219,6 +221,8 @@ export function AiAgentVoice({
   replySpeed: VoiceTuningSetting | null;
   onReplySpeedChange: (speed: VoiceTuningSetting | null) => void;
   executiveName: string;
+  /** Sets "AI executive name" (the male name offered when a male voice would say a female name). */
+  onExecutiveNameChange?: (name: string) => void;
 }) {
   const catalog = useCallFlowCatalog(language);
   const [picked, setPicked] = useState<AiAgentVoiceGender | null>(null);
@@ -300,14 +304,31 @@ export function AiAgentVoice({
           }
         />
       )}
-      {current?.gender === "male" && (
-        <p className="text-xs text-warn" role="note">
-          A male voice still introduces itself as <strong>{executiveName.trim() || "the AI executive name"}</strong>. If that is a
-          female name (like the default {AI_AGENT_DEFAULTS.executiveName}), change “AI executive name” to a male name before publishing. The
-          published prompt tells the AI its voice is male; Tamil first-person verbs such as பேசுறேன் and சொல்றேன் are the same for a man
-          or a woman.
-        </p>
-      )}
+      {current?.gender === "male" &&
+        (femaleNameForMaleVoice(executiveName, current.gender) ? (
+          // A known female name (the default Thaara, Sara, Nila): the customer would hear a man say a woman's name.
+          <div className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-xs text-warn" role="alert">
+            <p>
+              <strong>{current.name}</strong> is a male voice, but the AI introduces itself as <strong>{executiveName.trim()}</strong>, a
+              female name. Change “AI executive name” to a male name before you publish.
+            </p>
+            {onExecutiveNameChange && (
+              <button
+                type="button"
+                className="btn-ghost mt-2 px-2.5 py-1 text-xs"
+                onClick={() => onExecutiveNameChange(AI_AGENT_MALE_EXECUTIVE_NAME)}
+              >
+                Use “{AI_AGENT_MALE_EXECUTIVE_NAME}”
+              </button>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-warn" role="note">
+            A male voice still introduces itself as <strong>{executiveName.trim() || "the AI executive name"}</strong>. If that is a
+            female name, change “AI executive name” to a male name before publishing. The published prompt tells the AI its voice is
+            male; Tamil first-person verbs such as பேசுறேன் and சொல்றேன் are the same for a man or a woman.
+          </p>
+        ))}
       <VoiceSpeed speed={speed} onChange={onSpeedChange} error={speedError} />
       {reply}
       {!value && (

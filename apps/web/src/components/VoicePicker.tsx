@@ -209,8 +209,9 @@ export function VoicePicker({
               <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
                 <input type="radio" name="flow-voice" className="mt-0.5 shrink-0" checked={on} onChange={() => onChange(v.id)} />
                 <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate font-medium" title={v.name}>{v.name}</span>
+                  {/* The whole name, wrapped (never cut to "Kgazso M…"); the Custom label goes under it when there is no room. */}
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                    <span className="break-words font-medium" title={v.name}>{v.name}</span>
                     {v.cloned && (
                       <span
                         className="shrink-0 rounded border border-accent/40 bg-tint px-1 text-[10px] font-semibold uppercase leading-4 text-accent"

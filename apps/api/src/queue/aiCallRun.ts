@@ -73,6 +73,63 @@ async function stopForDisabledLanguage(runId: string, language: AiCallLanguage):
   return { stopped: "language_disabled", cancelled: queued.length };
 }
 
+/** One poll of the voice backend for this log's call, applied like a status callback. Never throws. */
+async function refreshFromVoice(runId: string, log: { id: string; phone: string; voiceCallId: string }, language: AiCallLanguage) {
+  try {
+    const d = await getVoiceCall(log.voiceCallId, language);
+    await applyVoiceUpdate(log.id, {
+      status: d.status,
+      providerCallId: d.provider_call_id,
+      outcome: d.outcome,
+      summary: d.summary,
+      transcript: d.transcripts ?? null,
+      durationSec: d.duration_seconds,
+      endedAt: parseUtc(d.ended_at),
+      error: d.hangup_cause,
+      learnedBusiness: d.learned_business,
+      customerQuestions: d.customer_questions,
+      callInsights: d.call_insights,
+    });
+  } catch (err) {
+    logger.warn(
+      { runId, logId: log.id, phone: maskPhone(log.phone), err: err instanceof Error ? err.message : String(err) },
+      "ai call status poll failed",
+    );
+  }
+}
+
+/**
+ * How long after an answered call ends the run keeps asking the voice backend for its result. The hangup gives the
+ * final status first; the outcome, summary and transcript are saved a moment later, when the conversation is
+ * finalized (a classification takes up to about 30 s).
+ */
+export const AI_CALL_RESULT_SETTLE_MS = 60_000;
+
+/**
+ * A completed call whose result (outcome) hasn't arrived: ask the voice backend again, up to AI_CALL_RESULT_SETTLE_MS
+ * after it ended. Polling stopped at the final status, so the result came only with the signed status callback: one
+ * missed or refused callback (STATUS_CALLBACK_URL / secret not set on that language's backend) left the Result empty
+ * for good, and a run's last call was never asked at all (the job finished). Returns true while it is still waiting.
+ */
+async function settleEndedCall(runId: string, language: AiCallLanguage): Promise<boolean> {
+  const log = await prisma.aiCallLog.findFirst({
+    where: {
+      runId,
+      status: "COMPLETED",
+      outcome: null,
+      voiceCallId: { not: null },
+      endedAt: { gte: new Date(Date.now() - AI_CALL_RESULT_SETTLE_MS) },
+    },
+    orderBy: { endedAt: "desc" },
+  });
+  if (!log?.voiceCallId) return false;
+  await refreshFromVoice(runId, { id: log.id, phone: log.phone, voiceCallId: log.voiceCallId }, language);
+  const fresh = await prisma.aiCallLog.findUnique({ where: { id: log.id }, select: { outcome: true } });
+  if (fresh?.outcome) return false;
+  logger.debug({ runId, logId: log.id, voiceCallId: log.voiceCallId }, "ai call ended — waiting for its result");
+  return true;
+}
+
 /** Refresh an in-flight call from the voice backend; time it out if it never ends. Returns true if still in flight. */
 async function pollInFlight(runId: string, language: AiCallLanguage): Promise<boolean> {
   const log = await prisma.aiCallLog.findFirst({
@@ -81,29 +138,7 @@ async function pollInFlight(runId: string, language: AiCallLanguage): Promise<bo
   });
   if (!log) return false;
 
-  if (log.voiceCallId) {
-    try {
-      const d = await getVoiceCall(log.voiceCallId, language);
-      await applyVoiceUpdate(log.id, {
-        status: d.status,
-        providerCallId: d.provider_call_id,
-        outcome: d.outcome,
-        summary: d.summary,
-        transcript: d.transcripts ?? null,
-        durationSec: d.duration_seconds,
-        endedAt: parseUtc(d.ended_at),
-        error: d.hangup_cause,
-        learnedBusiness: d.learned_business,
-        customerQuestions: d.customer_questions,
-        callInsights: d.call_insights,
-      });
-    } catch (err) {
-      logger.warn(
-        { runId, logId: log.id, phone: maskPhone(log.phone), err: err instanceof Error ? err.message : String(err) },
-        "ai call status poll failed",
-      );
-    }
-  }
+  if (log.voiceCallId) await refreshFromVoice(runId, { id: log.id, phone: log.phone, voiceCallId: log.voiceCallId }, language);
 
   const fresh = await prisma.aiCallLog.findUnique({ where: { id: log.id } });
   if (!fresh || !IN_FLIGHT_AI_CALL_STATUSES.includes(fresh.status)) return false;
@@ -138,6 +173,8 @@ export async function processAiCallRun(payload: Record<string, unknown>): Promis
   const language = flow?.language ?? DEFAULT_AI_CALL_LANGUAGE;
 
   if (await pollInFlight(runId, language)) throw deferFor(POLL_MS);
+  // Also for a stopped run and before the run finishes: its last call's result still comes in.
+  if (await settleEndedCall(runId, language)) throw deferFor(POLL_MS);
   if (run.status !== "RUNNING") return { stopped: run.status };
   if (language !== DEFAULT_AI_CALL_LANGUAGE && (await disabledAiCallLanguages()).has(language)) {
     return stopForDisabledLanguage(runId, language);

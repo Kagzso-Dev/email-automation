@@ -97,8 +97,11 @@ def test_cloned_voice_entries(caplog):
         {"id": TA_M1, "name": "Kgazso Male 1", "gender": "male", "language": label, "cloned": True},
         {"id": TA_M2, "name": "Kgazso Male 2", "gender": "male", "language": label, "cloned": True},
     ]  # 1 female + 2 male: Tamil's 4 stock female voices become 5, its 6 stock male voices 8
-    unnamed = voices.cloned_voice_entries(_cfg("ta"))
-    assert [v["name"] for v in unnamed] == ["Cloned female", "Cloned male 1", "Cloned male 2"]
+    # No *_NAME line, or an empty one (.env.example's): Kagzso's own names, never "Cloned male 1" (cut to "Cloned ..."
+    # on the picker's cards).
+    unnamed = voices.cloned_voice_entries(_cfg("ta", SARVAM_TTS_VOICE_TA_MALE_1_NAME="", SARVAM_TTS_VOICE_TA_MALE_2_NAME="  "))
+    assert [v["name"] for v in unnamed] == ["Kgazso Tamil", "Kgazso Male 1", "Kgazso Male 2"]
+    assert [v["name"] for v in voices.cloned_voice_entries(_cfg("en"))] == ["Kgazso English"]
     long = voices.cloned_voice_entries(_cfg("en", SARVAM_TTS_VOICE_EN_FEMALE_NAME="K" * 60))
     assert long[0]["name"] == "K" * 40  # ai_agents.voiceDisplayName holds 40
     # SARVAM_TTS_VOICE_TA_MALE_EITHER: "Either male (per call)" first among the male ones (one of them per call)

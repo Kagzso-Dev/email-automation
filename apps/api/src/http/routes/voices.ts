@@ -6,14 +6,16 @@
 //                              pace = an AI Agent's voice speed: the sample sounds as its calls do)
 //
 // Text-to-speech only: nothing is dialled and nothing is saved. The voice backend holds
-// the provider key and the list of offered voices (an unknown voice is a 400 from it).
+// the provider key and the list of offered voices (an unknown voice is a 400 from it). Here only the id's form is
+// checked: a stock voice name ("roopa") or a Sarvam cloned voice id ("svc-<uuid>"), the same rule as an AI Agent's
+// saved voice; whether the backend offers it (SARVAM_TTS_VOICES / SARVAM_TTS_VOICE_<LANG>_*) is its own check.
 // `language` picks that language's voice backend (absent = English): each speaks its own language.
 // Audio is cached per language + voice + text + pause lengths + pace, so repeated clicks don't cost another provider call.
 
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
-import { aiCallLanguage, callFlowDefinition, DEFAULT_AI_CALL_LANGUAGE } from "@dispatch/shared";
+import { AI_AGENT_VOICE_ID_RE, aiCallLanguage, callFlowDefinition, DEFAULT_AI_CALL_LANGUAGE } from "@dispatch/shared";
 import { isCallFlowEditorEnabled } from "../../config/aiCalls.js";
 import { previewVoice, VoiceBackendError } from "../../services/voiceBackend.js";
 import { authRequired, requireRole } from "../middleware/auth.js";
@@ -37,7 +39,7 @@ const previewLimiter = rateLimit({
 });
 
 const previewInput = z.object({
-  voice_id: z.string().trim().toLowerCase().regex(/^[a-z][a-z0-9_]{0,63}$/, "Choose a voice"),
+  voice_id: z.string().trim().toLowerCase().regex(AI_AGENT_VOICE_ID_RE, "Choose a voice"),
   text: z
     .string()
     .transform((s) => s.replace(/\s+/g, " ").trim())

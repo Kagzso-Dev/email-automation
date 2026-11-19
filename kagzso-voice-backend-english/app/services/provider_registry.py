@@ -506,10 +506,73 @@ class ClonedVoiceFallback(FallbackTTS):
     async def open_stream(self, pace: Optional[float] = None) -> TTSStream:
         if not self._on_fallback:
             try:
-                return await self.primary.open_stream(pace=pace)
+                return _ClonedStream(await self.primary.open_stream(pace=pace), self)
             except TTSError as exc:
                 self._warn("opening the stream", exc)
         return await self.fallback.open_stream(pace=pace)
+
+
+class _ClonedStream(TTSStream):
+    """A cloned voice's live stream. A Sarvam error before its first audio (the socket closed, or no audio within the
+    stream's time limit) also moves the call to the stock voice: the error still reaches the call, whose recovery
+    (CallSession._recover_tts_failure -> synthesize) then says the reply in the stock voice, and every later reply
+    streams in it - instead of each reply waiting on the cloned voice again. Audio already played is never repeated."""
+
+    def __init__(self, inner: TTSStream, owner: ClonedVoiceFallback):
+        self.inner, self.owner = inner, owner
+        self._got_audio = False
+
+    def _failed(self, exc: TTSError) -> None:
+        if not self._got_audio and not self.owner._on_fallback:
+            self.owner._warn("streaming", exc)
+
+    async def send_text(self, text: str) -> None:
+        try:
+            await self.inner.send_text(text)
+        except TTSError as exc:
+            self._failed(exc)
+            raise
+
+    async def end_input(self) -> None:
+        try:
+            await self.inner.end_input()
+        except TTSError as exc:
+            self._failed(exc)
+            raise
+
+    async def flush(self) -> None:
+        try:
+            await self.inner.flush()
+        except TTSError as exc:
+            self._failed(exc)
+            raise
+
+    async def audio(self):
+        try:
+            async for chunk in self.inner.audio():
+                self._got_audio = True
+                yield chunk
+        except TTSError as exc:
+            self._failed(exc)
+            raise
+
+    async def set_pace(self, pace: float) -> None:
+        await self.inner.set_pace(pace)
+
+    async def cancel(self) -> None:
+        await self.inner.cancel()
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+    def is_open(self) -> bool:
+        # A warm stream (TTS_WARM_STREAM) opened before the call moved to the stock voice is not reused.
+        return not self.owner._on_fallback and self.inner.is_open()
+
+    def __getattr__(self, name: str):
+        if name == "inner":  # not set yet: never recurse
+            raise AttributeError(name)
+        return getattr(self.inner, name)  # anything else the call reads from the provider's stream
 
 
 def with_clone_fallback(tts: TTSProvider) -> TTSProvider:

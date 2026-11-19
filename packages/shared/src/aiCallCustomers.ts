@@ -226,7 +226,9 @@ export function stageForCallResult(status: string, outcome: string | null | unde
     case "voicemail":
       return "NO_ANSWER";
     case "call_failed":
+    case "voice_error": // answered, but the customer heard no AI voice (its text-to-speech or media session failed)
       return "FAILED";
+    // hung_up_early (answered, the customer said nothing and hung up) stays Follow-up needed, as "completed" was before.
     default:
       // completed / unknown / not classified yet; also wrong_person: someone else answering, or an
       // unclear identity, is never "not interested" - the stage follows the answer to the pitch.

@@ -7,12 +7,14 @@ import {
   AI_AGENT_GENDER_LABELS,
   AI_AGENT_GENDERS,
   AI_AGENT_INSTRUCTIONS_MAX,
+  AI_AGENT_MALE_EXECUTIVE_NAME,
   AI_AGENT_OBJECTIVE_MAX,
   AI_AGENT_PERSONALITIES,
   AI_AGENT_PERSONALITY_LABELS,
   AI_CALL_LANGUAGE_NAMES,
   aiAgentInput,
   aiAgentLanguageSupported,
+  femaleNameForMaleVoice,
   type AiAgentInput,
   type AiAgentView,
   type AiCallLanguage,
@@ -100,6 +102,9 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   }, [startVoice]);
 
   const published = (flows.data?.items ?? []).filter((x) => x.published);
+  // A male AI Voice with a known female executive name (the default Thaara, Sara, Nila): flagged at the name too.
+  const voiceGender = offeredVoices?.find((v) => v.id === f.voiceId)?.gender;
+  const nameMismatch = f.mode === "autonomous" && femaleNameForMaleVoice(f.executiveName, voiceGender);
 
   const body: AiAgentInput = {
     ...f,
@@ -210,6 +215,11 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="AI executive name" error={fieldError("executiveName")}>
                 <input className="input" maxLength={40} value={f.executiveName} onChange={(e) => set("executiveName", e.target.value)} />
+                {nameMismatch && (
+                  <p className="mt-1 text-xs font-semibold text-warn">
+                    The AI Voice below is male: give it a male name, e.g. {AI_AGENT_MALE_EXECUTIVE_NAME}.
+                  </p>
+                )}
               </Field>
               <Field label="Calling on behalf of (company)" error={fieldError("companyName")}>
                 <input className="input" maxLength={100} value={f.companyName} onChange={(e) => set("companyName", e.target.value)} />
@@ -247,6 +257,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
               replySpeed={f.replySpeed}
               onReplySpeedChange={(v) => set("replySpeed", v)}
               executiveName={f.executiveName}
+              onExecutiveNameChange={(v) => set("executiveName", v)}
             />
           </Section>
 

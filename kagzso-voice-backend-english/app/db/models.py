@@ -54,6 +54,11 @@ class CallOutcome(str, enum.Enum):
     call_failed = "call_failed"
     completed = "completed"
     unknown = "unknown"
+    # An answered call where the customer never said anything (finalize_conversation, never the transcript classifier):
+    # the customer hung up first (hung_up_early), or the customer heard no AI voice at all - its text-to-speech failed,
+    # or the call's media session never started (voice_error).
+    hung_up_early = "hung_up_early"
+    voice_error = "voice_error"
 
 
 # Outcomes decided by hard signals (Plivo / machine detection) that the

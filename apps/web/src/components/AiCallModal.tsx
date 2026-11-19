@@ -808,6 +808,21 @@ function greetingDelayValid(v: string): boolean {
   return v.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= AI_CALL_MAX_GREETING_DELAY_SEC && Number.isInteger(n * 2);
 }
 
+/** How long the run keeps asking the voice backend for a completed call's result (api queue/aiCallRun AI_CALL_RESULT_SETTLE_MS). */
+const RESULT_WAIT_MS = 60_000;
+
+/**
+ * The Result cell of a call with no outcome, summary, transcript or error. A completed call never shows a bare "—": its
+ * result is on its way for a minute after it ends (the run asks for it), and after that the cell says none came back.
+ */
+export function noResultText(l: Pick<AiCallLog, "status" | "endedAt">, now = Date.now()): string {
+  if (l.status !== "COMPLETED") return "—";
+  const ended = l.endedAt ? new Date(l.endedAt).getTime() : 0;
+  return now - ended < RESULT_WAIT_MS
+    ? "Waiting for the call's result…"
+    : "No result came back for this call: no outcome or transcript from the voice backend.";
+}
+
 function LogRow({ log: l, recording }: { log: AiCallLog; recording?: RecordingStatusName }) {
   const detail = l.error || l.summary || l.transcript;
   return (
@@ -839,7 +854,7 @@ function LogRow({ log: l, recording }: { log: AiCallLog; recording?: RecordingSt
           </details>
         )}
         <CallRecording logId={l.id} status={recording} />
-        {!detail && !l.outcome && <span className="text-slate-550">—</span>}
+        {!detail && !l.outcome && <span className="text-slate-550">{noResultText(l)}</span>}
       </td>
     </tr>
   );

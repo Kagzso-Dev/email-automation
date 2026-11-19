@@ -48,9 +48,15 @@ const { aiCallsConfig } = await import("../src/config/aiCalls.js");
 const run = { id: "r1", status: "RUNNING", gapSeconds: 30 };
 const next = { id: "l2", phone: "919876543210", customerName: "Asha", gender: "female", followUpDetail: "demo", position: 1 };
 
-/** findFirst is called for: in-flight log, next QUEUED log, last ended log — in that order. */
-function logs({ inFlight = null, queued = next, lastEnded = null }: { inFlight?: unknown; queued?: unknown; lastEnded?: unknown }) {
-  db.aiCallLog.findFirst.mockImplementation(async (args: { where: { status?: unknown; endedAt?: unknown } }) => {
+/** findFirst is called for: in-flight log, a completed call still without its result, next QUEUED log, last ended log — in that order. */
+function logs({
+  inFlight = null,
+  queued = next,
+  lastEnded = null,
+  settling = null,
+}: { inFlight?: unknown; queued?: unknown; lastEnded?: unknown; settling?: unknown }) {
+  db.aiCallLog.findFirst.mockImplementation(async (args: { where: { status?: unknown; endedAt?: unknown; outcome?: unknown } }) => {
+    if (args.where.status === "COMPLETED" && args.where.outcome === null) return settling;
     if (args.where.endedAt) return lastEnded;
     if (args.where.status === "QUEUED") return queued;
     return inFlight;
@@ -310,6 +316,55 @@ describe("processAiCallRun (characterization)", () => {
     });
     expect(helpers.syncCustomerFromLog).toHaveBeenCalledWith("l3");
     expect(voice.placeVoiceCall).not.toHaveBeenCalled();
+  });
+
+  describe("a completed call whose result hasn't arrived (the hangup came before the outcome; a callback missed or refused)", () => {
+    const ended = { id: "l1", phone: "919800000000", voiceCallId: "v0", status: "COMPLETED", outcome: null, endedAt: new Date(Date.now() - 5000) };
+    const voiceCall = (outcome: string | null) => ({
+      status: "completed",
+      provider_call_id: "p0",
+      outcome,
+      summary: outcome ? "The customer hung up before the AI spoke." : null,
+      transcripts: [],
+      duration_seconds: 16,
+      ended_at: "2026-11-19T09:15:00",
+      hangup_cause: "Normal Hangup",
+    });
+
+    it("asks the voice backend again and holds the run (nothing dialled, not finished) while the result is missing", async () => {
+      logs({ settling: ended, queued: null });
+      db.aiCallLog.findUnique.mockResolvedValue({ outcome: null });
+      voice.getVoiceCall.mockResolvedValue(voiceCall(null));
+      const wait = await deferredMs(processAiCallRun({ runId: "r1" }));
+      expect(wait).toBeGreaterThanOrEqual(5000);
+      expect(voice.getVoiceCall).toHaveBeenCalledWith("v0", "en");
+      expect(helpers.applyVoiceUpdate).toHaveBeenCalledWith("l1", expect.objectContaining({ status: "completed", durationSec: 16 }));
+      expect(voice.placeVoiceCall).not.toHaveBeenCalled();
+      expect(db.aiCallRun.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "DONE" }) }));
+      // Only calls that ended within the settle window are asked again.
+      const where = db.aiCallLog.findFirst.mock.calls.map((c) => c[0].where).find((w) => w.outcome === null)!;
+      expect(where).toMatchObject({ runId: "r1", status: "COMPLETED", outcome: null, voiceCallId: { not: null } });
+      expect(Date.now() - where.endedAt.gte.getTime()).toBeGreaterThanOrEqual(60_000 - 50);
+      expect(Date.now() - where.endedAt.gte.getTime()).toBeLessThan(61_000);
+    });
+
+    it("the run's last call: once its result arrives (hung up early), the run finishes", async () => {
+      logs({ settling: ended, queued: null });
+      db.aiCallLog.findUnique.mockResolvedValue({ outcome: "hung_up_early" });
+      voice.getVoiceCall.mockResolvedValue(voiceCall("hung_up_early"));
+      await expect(processAiCallRun({ runId: "r1" })).resolves.toEqual({ done: true, COMPLETED: 2, FAILED: 1 });
+      expect(helpers.applyVoiceUpdate).toHaveBeenCalledWith("l1", expect.objectContaining({ outcome: "hung_up_early" }));
+    });
+
+    it("a stopped run still collects its last call's result before it stops", async () => {
+      db.aiCallRun.findUnique.mockResolvedValueOnce({ ...run, status: "CANCELLED" });
+      logs({ settling: ended });
+      db.aiCallLog.findUnique.mockResolvedValue({ outcome: null });
+      voice.getVoiceCall.mockResolvedValue(voiceCall(null));
+      await deferredMs(processAiCallRun({ runId: "r1" }));
+      expect(voice.getVoiceCall).toHaveBeenCalledTimes(1);
+      expect(voice.placeVoiceCall).not.toHaveBeenCalled();
+    });
   });
 
   it("in-flight call past callTimeoutSec: FAILED with the timeout message, then the next call is dialled", async () => {

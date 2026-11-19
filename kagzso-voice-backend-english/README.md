@@ -181,12 +181,14 @@ The backend asks Sarvam for 16-bit PCM at 8000 Hz and converts it to μ-law, whi
 
 1. Copy each voice's id (`svc-…`) from Sarvam's Voice Library into the backend of its language:
    `SARVAM_TTS_VOICE_EN_FEMALE` in `.env`; `SARVAM_TTS_VOICE_TA_FEMALE`, `SARVAM_TTS_VOICE_TA_MALE_1`,
-   `SARVAM_TTS_VOICE_TA_MALE_2` in `.env.ta`; the name each shows in `…_NAME`. Keep `SARVAM_TTS_VOICE_ROTATION=` empty.
+   `SARVAM_TTS_VOICE_TA_MALE_2` in `.env.ta`; the name each shows in `…_NAME` (empty = "Kgazso English", "Kgazso Tamil",
+   "Kgazso Male 1", "Kgazso Male 2"). Keep `SARVAM_TTS_VOICE_ROTATION=` empty.
 2. Restart that backend. Its voice list (Call Flows, AI Agents → AI Voice) starts with these voices under their
    gender, labelled "Custom". The female voice is the default. `SARVAM_TTS_VOICE_TA_MALE_EITHER=true` adds "Either
    male (per call)": one of the two male voices, picked when a call starts and kept for the whole call.
 3. If Sarvam refuses a cloned voice, that call continues in `SARVAM_TTS_FALLBACK_VOICE_FEMALE` (ishita) or
-   `SARVAM_TTS_FALLBACK_VOICE_MALE` (ratan), logged as `CLONED VOICE FALLBACK`.
+   `SARVAM_TTS_FALLBACK_VOICE_MALE` (ratan), logged as `CLONED VOICE FALLBACK`. A refused request counts, and so
+   does a live stream that fails before its first audio (closed, or silent for 10 s).
 4. Listen before going live: `python -m scripts.voice_samples --cloned` lists the sample requests and their cost;
    add `--yes` to send them (WAVs in `samples/cloned_voices/`).
 
@@ -395,9 +397,14 @@ WS /ws/plivo/media   "start" event (callId, streamId)                    status:
   - The conversational states (`listening`, `processing`, `speaking`) change several times a second, so they're kept in process memory (`app/services/session_store.py`) and dropped when the call ends. Barge-ins are recorded as `call_events`.
   - Because live call state is per-process, run a **single** uvicorn worker.
 - **Outcomes:**
-  - Values: `interested`, `not_interested`, `callback_requested`, `do_not_call`, `wrong_person`, `busy`, `voicemail`, `no_answer`, `call_failed`, `completed`, `unknown`.
+  - Values: `interested`, `not_interested`, `callback_requested`, `do_not_call`, `wrong_person`, `busy`, `voicemail`, `no_answer`, `call_failed`, `completed`, `unknown`, `hung_up_early`, `voice_error`.
   - Busy, no-answer and failed calls get their outcome from Plivo's hangup callback; voicemail from machine detection.
   - Answered calls are classified by the LLM from the transcript (Tamil, English or Tanglish).
+  - An answered call where the customer said nothing is never left blank. It gets an outcome and a one-line summary:
+    - `voice_error`: the customer heard no AI voice. Either text-to-speech failed before the AI said a line, or the call's media session never started.
+    - `hung_up_early`: the customer hung up before the AI spoke, or after hearing it without a word.
+    - `completed`: the AI said its lines and ended the call itself.
+  - A call that never had a media session is finalized 20 s after its hangup (`settle_unfinalized_call`, logged "Answered call ended without a media session").
   - `do_not_call` marks the contact DND, so it's never called again. `callback_requested` creates a `followups` row (no call is auto-scheduled, and the agent never claims one is).
 - **Prompt safety:**
   - Only `{{customer_name}}`, `{{contact_name}}`, `{{gender}}`, `{{title}}`, `{{company_name}}`, `{{business_type}}` and `{{phone_number}}` are substituted.

@@ -22,7 +22,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Set, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1137,6 +1137,43 @@ OUTCOME_FOR_STATUS = {
     CallStatus.cancelled: CallOutcome.call_failed,
 }
 
+# How long after the hangup an answered call without an outcome waits before settle_unfinalized_call finalizes it
+# itself: longer than a session's own teardown takes to start (its socket closes with the call).
+SETTLE_SECONDS = 20.0
+_SETTLE_TASKS: Set[asyncio.Task] = set()
+
+
+def settle_unfinalized_call(call_id: str, delay: Optional[float] = None) -> None:
+    """Safety net for an answered call that ended with no outcome. Its media session finalizes it (CallSession.close);
+    a call that never had one - its audio stream never connected, or the session failed to start - would keep no result
+    for ever, in this backend and in Dispatch. After `delay` (SETTLE_SECONDS), unless a session is running or closing,
+    the call has an outcome or was finalized, it is finalized here: outcome voice_error, Dispatch notified."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def settle() -> None:
+        await asyncio.sleep(SETTLE_SECONDS if delay is None else delay)
+        with call_context(call_id):
+            try:
+                if call_id in ACTIVE_SESSIONS or call_id in CLOSING_SESSIONS:
+                    return
+                async with session_factory()() as db:
+                    call = await repo.get_call(db, call_id)
+                    if call is None or call.outcome:
+                        return
+                    if any(e.event_type == "conversation_finalized" for e in await repo.list_events(db, call_id)):
+                        return
+                log.warning("Answered call ended without a media session or an outcome - recording it as a voice error")
+                await finalize_conversation(call_id, get_providers().llm, NO_MEDIA_SESSION)
+            except Exception as exc:  # a safety net must never raise
+                log.warning("Settling the ended call failed: %s", type(exc).__name__)
+
+    task = loop.create_task(settle())
+    _SETTLE_TASKS.add(task)
+    task.add_done_callback(_SETTLE_TASKS.discard)
+
 
 async def handle_status(db: AsyncSession, call_id: Optional[str], params: Mapping[str, str]) -> None:
     call = await find_call(db, call_id, params)
@@ -1165,6 +1202,8 @@ async def handle_status(db: AsyncSession, call_id: Optional[str], params: Mappin
             if final in OUTCOME_FOR_STATUS and not call.outcome:
                 fields["outcome"] = OUTCOME_FOR_STATUS[final].value
             await transition(db, call, final, safe_params(params), **fields)
+            if final == CallStatus.completed and not call.outcome:
+                settle_unfinalized_call(call.id)  # answered: its session finalizes it - unless it never had one
             return
         await repo.add_event(db, call.id, "plivo:status", safe_params(params))
 
@@ -1300,6 +1339,8 @@ class _TurnState:
 
 
 ACTIVE_SESSIONS: Dict[str, "CallSession"] = {}
+# Calls whose session is closing (CallSession.close: flushing, classifying, finalizing) - no longer in ACTIVE_SESSIONS.
+CLOSING_SESSIONS: Set[str] = set()
 
 
 class CallSession:
@@ -1463,6 +1504,14 @@ class CallSession:
         if self._closed:
             return
         self._closed = True
+        # From here until the outcome is saved the call is "closing", not active: settle_unfinalized_call leaves it alone.
+        CLOSING_SESSIONS.add(self.call_id)
+        try:
+            await self._close(reason)
+        finally:
+            CLOSING_SESSIONS.discard(self.call_id)
+
+    async def _close(self, reason: str) -> None:
         ACTIVE_SESSIONS.pop(self.call_id, None)
         if self._latency_rows:
             log.info(latency_summary(self._latency_rows, slow_speaker=self._slow_speaker))
@@ -3249,6 +3298,32 @@ async def classify_outcome(llm: LLMProvider, transcript: str, learn_business: bo
 # Outcomes where what was said is not the customer talking about their own business, or where they want nothing more.
 _NO_LEARNED_BUSINESS = (CallOutcome.wrong_person.value, CallOutcome.voicemail.value, CallOutcome.do_not_call.value)
 
+# finalize_conversation's reason for an answered call that never had a media session (settle_unfinalized_call).
+NO_MEDIA_SESSION = "no_media_session"
+
+
+def silent_call_result(transcripts: Sequence[Any], events: Sequence[Any], reason: str) -> Tuple[str, str]:
+    """(outcome, summary) of an answered call where the customer said nothing, so the classifier has nothing to read:
+      voice_error   the customer heard no AI voice: the media session never started, or the AI's text-to-speech failed
+                    before it said a line
+      hung_up_early the customer hung up before the AI spoke, or after hearing it without saying anything
+      completed     the AI said its lines and ended the call itself (silence closing), as before
+    Every such call gets one of these and a one-line summary, so no answered call reaches Dispatch without a result."""
+    if reason == NO_MEDIA_SESSION:
+        return (CallOutcome.voice_error.value,
+                "The call was answered, but the AI's audio never started, so the customer heard nothing.")
+    agent_spoke = any(t.speaker == "agent" for t in transcripts)
+    kinds = [e.event_type for e in events]
+    tts_failed = any(e.event_type == "pipeline_error" and (e.payload or {}).get("stage") == "tts" for e in events)
+    if not agent_spoke and tts_failed:
+        return (CallOutcome.voice_error.value,
+                "The AI's voice failed (text-to-speech error), so the customer heard nothing before the call ended.")
+    if not agent_spoke:
+        return CallOutcome.hung_up_early.value, "The customer hung up before the AI spoke."
+    if "agent_hangup" in kinds:
+        return CallOutcome.completed.value, "The customer didn't say anything; the AI ended the call."
+    return CallOutcome.hung_up_early.value, "The customer hung up without saying anything."
+
 
 async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> None:
     """Classify the outcome and close out the call record. Idempotent."""
@@ -3278,8 +3353,10 @@ async def finalize_conversation(call_id: str, llm: LLMProvider, reason: str) -> 
                 outcome = call.outcome  # hard signal wins over the transcript classifier
             elif outcome and (call.outcome in (None, "completed", "unknown") or outcome != "unknown"):
                 fields["outcome"] = outcome
-            elif not outcome and not call.outcome and call.answered_at is not None:
-                fields["outcome"] = CallOutcome.completed.value  # answered, customer never spoke
+            elif not outcome and not call.outcome and (call.answered_at is not None or reason == NO_MEDIA_SESSION):
+                # Answered, the customer never spoke: why, in the outcome and a summary (never a blank result).
+                outcome, summary = silent_call_result(transcripts, await repo.list_events(db, call_id), reason)
+                fields["outcome"] = outcome
             if summary:
                 fields["summary"] = summary
             if learned and outcome not in _NO_LEARNED_BUSINESS:
