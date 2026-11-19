@@ -5,8 +5,8 @@ import { MemoryRouter } from "react-router-dom";
 import { CollapsibleNavGroup, Layout } from "../src/components/Layout";
 
 // Sidebar: each AI call language section ("Calls · English", "Calls · Tamil") folds open/closed under its
-// heading, on its own, remembered per browser; the page you're on is never folded away. Every other section
-// keeps its plain heading. lib/api is mocked: nothing reaches the API.
+// heading, on its own, remembered per browser. They start closed, except the one holding the page you're on.
+// Every other section keeps its plain heading. lib/api is mocked: nothing reaches the API.
 
 const EN_TA = [
   { code: "en", name: "English", configured: true, enabled: true },
@@ -66,13 +66,15 @@ const folded = (button: HTMLElement) =>
   button.getAttribute("aria-expanded") === "false" && region(button).className.split(" ").includes("invisible");
 
 describe("sidebar: language sections fold", () => {
-  it("both start open; only the two language headings are toggles", async () => {
+  it("both start closed; only the two language headings are toggles", async () => {
     renderAt("/");
     const en = await toggle("Calls · English");
     const ta = await toggle("Calls · Tamil");
-    expect(en.getAttribute("aria-expanded")).toBe("true");
-    expect(ta.getAttribute("aria-expanded")).toBe("true");
-    // Each section's three links sit in the region its toggle controls.
+    expect(folded(en)).toBe(true);
+    expect(folded(ta)).toBe(true);
+    // Opened, each section's three links sit in the region its toggle controls.
+    fireEvent.click(en);
+    fireEvent.click(ta);
     expect(within(region(en)).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual([
       "/ai-call-customers",
       "/call-flows",
@@ -94,21 +96,27 @@ describe("sidebar: language sections fold", () => {
     const en = await toggle("Calls · English");
     const ta = await toggle("Calls · Tamil");
     fireEvent.click(ta);
-    expect(folded(ta)).toBe(true);
-    expect(en.getAttribute("aria-expanded")).toBe("true");
-    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ "Calls · Tamil": false });
-
-    fireEvent.click(ta);
     expect(ta.getAttribute("aria-expanded")).toBe("true");
     expect(region(ta).className.split(" ")).not.toContain("invisible");
+    expect(folded(en)).toBe(true);
     expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ "Calls · Tamil": true });
+
+    fireEvent.click(ta);
+    expect(folded(ta)).toBe(true);
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual({ "Calls · Tamil": false });
   });
 
-  it("a section folded earlier stays folded after a reload", async () => {
-    localStorage.setItem(KEY, JSON.stringify({ "Calls · English": false }));
+  it("a section opened earlier stays open after a reload", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ "Calls · English": true }));
     renderAt("/");
-    expect(folded(await toggle("Calls · English"))).toBe(true);
-    expect((await toggle("Calls · Tamil")).getAttribute("aria-expanded")).toBe("true");
+    expect((await toggle("Calls · English")).getAttribute("aria-expanded")).toBe("true");
+    expect(folded(await toggle("Calls · Tamil"))).toBe(true);
+  });
+
+  it("the section holding the current page starts open; the others stay closed", async () => {
+    renderAt("/call-flows");
+    expect((await toggle("Calls · English")).getAttribute("aria-expanded")).toBe("true");
+    expect(folded(await toggle("Calls · Tamil"))).toBe(true);
   });
 
   it("the section holding the current page opens even if it was folded", async () => {
@@ -131,10 +139,11 @@ describe("sidebar: language sections fold", () => {
     const toggles = menu().getAllByRole("button");
     expect(toggles.map((b) => b.textContent)).toEqual(["Calls · English", "Calls · Tamil", "Calls · Hindi", "Calls · Telugu"]);
     for (const b of toggles) {
-      expect(b.getAttribute("aria-expanded")).toBe("true");
+      expect(folded(b)).toBe(true);
       const arrow = b.querySelector("span[aria-hidden='true']")!;
       expect(arrow.className.split(" ")).toEqual(expect.arrayContaining(["text-crit", "animate-arrow-nudge"]));
     }
+    fireEvent.click(toggles[3]!);
     expect(within(region(toggles[3]!)).getAllByRole("link").map((a) => a.getAttribute("href"))).toEqual([
       "/te/ai-call-customers",
       "/te/call-flows",
@@ -145,7 +154,7 @@ describe("sidebar: language sections fold", () => {
   it("unreadable storage just means the defaults", async () => {
     localStorage.setItem(KEY, "not json");
     renderAt("/");
-    expect((await toggle("Calls · English")).getAttribute("aria-expanded")).toBe("true");
+    expect(folded(await toggle("Calls · English"))).toBe(true);
   });
 });
 

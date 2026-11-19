@@ -445,7 +445,8 @@ export function Layout({ children }: { children: ReactNode }) {
                   <CollapsibleNavGroup
                     labelId={labelId}
                     label={g.label}
-                    defaultOpen
+                    // Closed until clicked; the section holding the current page still opens by itself.
+                    defaultOpen={false}
                     // Same rule NavLink uses for its active highlight.
                     active={g.items.some((n) => matchPath({ path: n.to, end: n.end ?? false }, location.pathname) !== null)}
                     railCollapsed={collapsed}
