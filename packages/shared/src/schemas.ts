@@ -485,6 +485,37 @@ export const whatsAppCredentialsInput = z.object({
 });
 export type WhatsAppCredentialsInput = z.infer<typeof whatsAppCredentialsInput>;
 
+const EMAIL_ADDR = "[^<>@\\s]+@[^<>@\\s]+\\.[^<>@\\s]+";
+const FROM_RE = new RegExp(`^(${EMAIL_ADDR}|[^<>]*<${EMAIL_ADDR}>)$`);
+
+/**
+ * Settings → Email (SMTP), admins only. Saved as a DB override on top of SMTP_* / EMAIL_FROM in .env. Omit a
+ * field to leave it unchanged; send "" (or null for port / secure) to clear it and fall back to .env. The
+ * password is write-only: it is stored encrypted and never sent back.
+ */
+export const smtpSettingsInput = z.object({
+  host: z
+    .string()
+    .trim()
+    .max(255)
+    .regex(/^[A-Za-z0-9.-]*$/, "Server name only, e.g. smtp.gmail.com")
+    .optional(),
+  port: z.number().int().min(1).max(65535).nullable().optional(),
+  /** true = SSL/TLS from the start (usually port 465); false = STARTTLS (usually 587). */
+  secure: z.boolean().nullable().optional(),
+  user: z.string().trim().max(320).optional(),
+  password: z.string().max(1024).optional(),
+  from: z
+    .string()
+    .trim()
+    .max(320)
+    .refine((v) => v === "" || FROM_RE.test(v), "Use you@example.com or Name <you@example.com>")
+    .optional(),
+});
+export type SmtpSettingsInputBody = z.infer<typeof smtpSettingsInput>;
+
+export const smtpTestInput = z.object({ to: z.string().trim().email().max(320) });
+
 export const listWhatsAppInboundQuery = z.object({
   phone: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),

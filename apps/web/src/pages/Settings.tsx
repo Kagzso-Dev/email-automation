@@ -17,6 +17,7 @@ import { AiCallLanguagesSection } from "../components/AiCallLanguagesSection";
 import { VoiceResponseTuningSection } from "../components/VoiceResponseTuningSection";
 import { Switch } from "../components/Switch";
 import { SendingDomainModeSection } from "../components/SendingDomainModeSection";
+import { SmtpSettingsSection } from "../components/SmtpSettingsSection";
 import { useSendingDomains } from "../lib/sendingDomains";
 
 interface ApiKey {
@@ -174,6 +175,8 @@ export function SettingsPage() {
           </>
         )}
       </section>
+
+      <SmtpSettingsSection isAdmin={isAdmin} />
 
       <WhatsAppSection isAdmin={isAdmin} />
 

@@ -1,5 +1,4 @@
 import nodemailer, { type Transporter } from "nodemailer";
-import { env } from "../env.js";
 import { logger } from "../logger.js";
 import {
   type EmailProvider,
@@ -13,25 +12,41 @@ import {
 const TRANSIENT_ERROR_CODES = new Set(["ETIMEDOUT", "ECONNECTION", "ESOCKET", "EDNS", "ECONNRESET"]);
 const PERMANENT_ERROR_CODES = new Set(["EAUTH", "EENVELOPE", "EMESSAGE"]);
 
+/** Where to connect — from Settings → Email (SMTP) or .env (see domain/smtpSettings.ts). */
+export interface SmtpConnection {
+  host?: string;
+  port: number;
+  secure: boolean;
+  user?: string;
+  pass?: string;
+}
+
 export class SmtpProvider implements EmailProvider {
   readonly name = "smtp";
   private transporter: Transporter;
 
-  constructor() {
-    if (!env.SMTP_HOST) {
-      throw new Error("EMAIL_PROVIDER=smtp requires SMTP_HOST (and usually SMTP_USER/SMTP_PASS)");
+  constructor(conn: SmtpConnection) {
+    if (!conn.host) {
+      throw new Error(
+        "EMAIL_PROVIDER=smtp requires an SMTP host — set it in Settings → Email (SMTP) or SMTP_HOST in .env",
+      );
     }
     this.transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
+      host: conn.host,
+      port: conn.port,
       // true => implicit TLS (465); false => STARTTLS upgrade on 587/25
-      secure: env.SMTP_SECURE,
-      auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+      secure: conn.secure,
+      auth: conn.user ? { user: conn.user, pass: conn.pass } : undefined,
     });
     logger.info(
-      { host: env.SMTP_HOST, port: env.SMTP_PORT, secure: env.SMTP_SECURE, auth: Boolean(env.SMTP_USER) },
+      { host: conn.host, port: conn.port, secure: conn.secure, auth: Boolean(conn.user) },
       "SMTP provider configured",
     );
+  }
+
+  /** Release the old connection when the settings change. */
+  close(): void {
+    this.transporter.close();
   }
 
   async send(msg: OutboundMessage): Promise<SendResult> {
