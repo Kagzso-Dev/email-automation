@@ -139,7 +139,7 @@ class Call(Base):
     provider_request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     stream_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     telephony_provider: Mapped[str] = mapped_column(String(16), default="plivo")  # plivo | twilio
-    voice_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # set when voice rotation is on
+    voice_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # the call's one voice, chosen when placed
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"))
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"))
     from_number: Mapped[str] = mapped_column(String(20))

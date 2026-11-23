@@ -14,7 +14,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import agents, calls, dev_tests, flows, health, providers, recordings, twilio_webhooks, voices, webhooks
-from app.core.config import settings
+from app.core.config import removed_settings_in_use, settings
 from app.core.logging import configure_logging, get_logger
 from app.db import repositories as repo
 from app.db.database import dispose_engine, session_factory
@@ -29,7 +29,6 @@ CALL_FLAGS = (
     "INDIC_WORD_SPLIT", "BARGE_EARLY_STOP", "NOISE_SAFE_STATE", "GREETING_DELAY_MS", "GREETING_PRERENDER",
     "AGENT_FIXED_GREETING", "SARVAM_TTS_CLONE_STREAM", "SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS", "BARGE_IN_MIN_SPEECH_MS",
     "VOICE_FOCUS_LEVEL", "VOICE_FOCUS_MODE", "STT_STREAMING", "ADAPTIVE_EOS", "TTS_WARM_STREAM", "PROVIDER_PREWARM",
-    "SARVAM_TTS_VOICE_ROTATION",
 )
 
 
@@ -80,6 +79,9 @@ async def lifespan(app: FastAPI):
     log.info("%s started (env=%s, llm=%s)", settings.APP_NAME, settings.APP_ENV, settings.LLM_PROVIDER)
     # What this process actually runs with (the .env is read only at start): one line to check against the file.
     log.info("Call settings (%s): %s", settings.call_language, " ".join(f"{k}={getattr(settings, k)}" for k in CALL_FLAGS))
+    for name in removed_settings_in_use():  # voice rotation is gone: every call speaks in its agent's one voice
+        log.warning("%s is set but no longer exists - ignored (each call speaks only in its AI agent's saved voice, "
+                    "else the language default). Remove it from the env file.", name)
     yield
 
     if retention is not None:

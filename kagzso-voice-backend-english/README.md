@@ -170,8 +170,12 @@ Text to speech uses the same `SARVAM_API_KEY` as STT.
 
 1. Keep `SARVAM_TTS_MODEL=bulbul:v3`.
 2. Set `SARVAM_TTS_SPEAKER` to a lowercase Bulbul v3 speaker (default `priya`).
-3. Optional: list speakers in `SARVAM_TTS_VOICE_ROTATION` (comma-separated); each new call uses the next one in turn.
-   Check them first with `python -m scripts.voice_check`.
+3. One voice per call, never rotated or picked at random: an AI agent's call speaks only in the voice saved in its
+   AI Voice settings (else this backend's default voice: its female cloned voice, else `SARVAM_TTS_SPEAKER`), chosen
+   once when the call is placed (`Call voice: ...` in the log) and used for the greeting, every reply, re-ask and the
+   closing. Voice rotation (`SARVAM_TTS_VOICE_ROTATION`, `VOICE_ROTATION_MODE`) and "Either male (per call)"
+   (`SARVAM_TTS_VOICE_TA_MALE_EITHER`) were removed: still set, they are ignored and a warning is logged at start.
+   Check voices with `python -m scripts.voice_check`.
 
 The backend asks Sarvam for 16-bit PCM at 8000 Hz and converts it to μ-law, which is what the Plivo stream plays.
 
@@ -182,12 +186,12 @@ The backend asks Sarvam for 16-bit PCM at 8000 Hz and converts it to μ-law, whi
 1. Copy each voice's id (`svc-…`) from Sarvam's Voice Library into the backend of its language:
    `SARVAM_TTS_VOICE_EN_FEMALE` in `.env`; `SARVAM_TTS_VOICE_TA_FEMALE`, `SARVAM_TTS_VOICE_TA_MALE_1`,
    `SARVAM_TTS_VOICE_TA_MALE_2` in `.env.ta`; the name each shows in `…_NAME` (empty = "Kgazso English", "Kgazso Tamil",
-   "Kgazso Male 1", "Kgazso Male 2"). Keep `SARVAM_TTS_VOICE_ROTATION=` empty.
+   "Kgazso Male 1", "Kgazso Male 2").
 2. Restart that backend. Its voice list (Call Flows, AI Agents → AI Voice) starts with these voices under their
-   gender, labelled "Custom". The female voice is the default. `SARVAM_TTS_VOICE_TA_MALE_EITHER=true` adds "Either
-   male (per call)": one of the two male voices, picked when a call starts and kept for the whole call.
+   gender, labelled "Custom". The female voice is the default.
 3. If Sarvam refuses a cloned voice, that call continues in `SARVAM_TTS_FALLBACK_VOICE_FEMALE` (ishita) or
-   `SARVAM_TTS_FALLBACK_VOICE_MALE` (ratan), logged as `CLONED VOICE FALLBACK`. A refused request counts, and so
+   `SARVAM_TTS_FALLBACK_VOICE_MALE` (ratan) - by the cloned voice's gender - logged as `CLONED VOICE FALLBACK (call
+   <id>)`. A greeting that fell back while the phone rang keeps the whole call on the fallback voice. A refused request counts, and so
    does a live stream that fails before its first audio: closed, or silent for `SARVAM_TTS_CLONE_FIRST_AUDIO_SECONDS`
    (2 s) after its text was due. The reply then goes on at once in the stock voice: the text already sent is spoken
    by it, with no error and nothing repeated.

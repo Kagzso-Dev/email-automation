@@ -937,7 +937,7 @@ function CallFlowEditor({
                 onChange={(e) => update((f) => void (f.voice_id = e.target.value.trim() || null))}
               />
             )}
-            <span className="mt-1 block text-xs text-slate-550">Ignored while SARVAM_TTS_VOICE_ROTATION is set on the server.</span>
+            <span className="mt-1 block text-xs text-slate-550">Every call with this flow speaks in this one voice.</span>
           </div>
           <div className="min-w-0">
             <label className="label">Max call duration (seconds)</label>

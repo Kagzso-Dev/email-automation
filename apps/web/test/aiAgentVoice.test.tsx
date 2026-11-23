@@ -141,7 +141,7 @@ describe("Settings → AI Voice", () => {
   });
 
   describe("cloned voices (the backend's SARVAM_TTS_VOICE_TA_*, labelled Custom)", () => {
-    const clone = (id: string, name: string, gender: string, pool?: string[]) => ({ ...TA(id, name, gender), cloned: true, ...(pool ? { pool } : {}) });
+    const clone = (id: string, name: string, gender: string) => ({ ...TA(id, name, gender), cloned: true });
     const F = "svc-00000000-0000-4000-8000-0000000000a1";
     const M1 = "svc-00000000-0000-4000-8000-0000000000b1";
     const M2 = "svc-00000000-0000-4000-8000-0000000000b2";
@@ -229,19 +229,6 @@ describe("Settings → AI Voice", () => {
       fill("AI executive name", "Sara");
       expect(screen.queryByRole("alert")).toBeNull(); // female voice: no warning
       expect(screen.queryByText(/A male voice still introduces itself as/)).toBeNull();
-    });
-
-    it("with SARVAM_TTS_VOICE_TA_MALE_EITHER, “Either male (per call)” is offered first and saved as the pool", async () => {
-      catalogVoices = [CLONES[0]!, clone("cloned_male", "Either male (per call)", "male", [M1, M2]), ...CLONES.slice(1), ...STOCK];
-      form();
-      await waitFor(() => expect(names()).toHaveLength(5));
-      fireEvent.click(genderButton("Male"));
-      expect(checked()).toEqual(["Either male (per call)CustomTamil (India) · male"]);
-      fill("Agent name (for your list)", "ABC Hospital — Arun");
-      fill("Calling objective", "Introduce AI for hospitals.");
-      fireEvent.click(screen.getByRole("button", { name: "Create AI agent" }));
-      await waitFor(() => expect(sent.find((s) => s.url === "/api/ai-agents")).toBeTruthy());
-      expect(sent.find((s) => s.url === "/api/ai-agents")!.body).toMatchObject({ agent: { voiceId: "cloned_male" } });
     });
   });
 

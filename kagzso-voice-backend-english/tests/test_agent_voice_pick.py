@@ -7,11 +7,11 @@ AI Agent call, whoever the customer is.
 * the offered list: a voice SARVAM_TTS_VOICES leaves untagged gets only a gender Sarvam's docs state
   (DOCUMENTED_GENDERS); others stay without one (never guessed from the name); a tag always wins;
 * mocked calls (no Sarvam request, no phone call - a recording SarvamTTS stands in for the network): every TTS
-  request and stream of the call (greeting, replies, fixed lines) uses the picked voice with the agent voice profile,
-  even with a voice rotation configured; a male contact with a female voice and a female contact with a male voice
+  request and stream of the call (greeting, replies, fixed lines) uses the picked voice with the agent voice profile
+  (there is no voice rotation); a male contact with a female voice and a female contact with a male voice
   are still addressed by the CONTACT's gender;
 * a picked voice this backend no longer offers is refused (409) before anything is dialled, instead of speaking in
-  another voice; ordinary flows keep their old behaviour (rotation, an unknown voice playing as the default).
+  another voice; ordinary flows keep their old behaviour (an unknown voice plays as the default).
 
 How each voice SOUNDS needs real Sarvam audio (a paid request): not done here.
 """
@@ -61,8 +61,6 @@ def tamil_voices(monkeypatch):
     """This backend offers the Tamil list as configured (four female voices and Shubh)."""
     monkeypatch.setattr(voices, "VOICE_IDS", OFFERED)
     monkeypatch.setattr(cs, "SarvamTTS", RecordingSarvamTTS)  # tts_for_voice(picked voice) records too (no network)
-    # A rotation is configured (the local .env.ta has one): an agent's picked voice must never be rotated away.
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "ritu,simran,ishita")
 
 
 def _talk(client, auth, fakes, flow, gender, flow_id):
@@ -93,7 +91,7 @@ def test_every_line_of_a_tamil_agent_call_uses_the_picked_voice(client, auth, fa
     _talk(client, auth, fakes, flow, "male", flow_id=f"agent_{voice}")
     log = recorder.log
     assert len([e for e in log if e[0] == "stream"]) >= 3  # several replies, each its own stream
-    assert _speakers(log) == {voice}  # greeting, replies and fixed lines: one voice, never a rotation voice
+    assert _speakers(log) == {voice}  # greeting, replies and fixed lines: one voice, never another
     used = {json.dumps({k: v for k, v in e[2].items()}, sort_keys=True) for e in log if e[0] in ("rest", "stream")}
     assert len(used) == 1  # and one profile: same speaker, model, pace, temperature, chunk size on every request
     assert (json.loads(used.pop())["pace"]) == 0.9
@@ -126,10 +124,9 @@ def test_a_picked_voice_no_longer_offered_is_refused_and_nothing_is_dialled(clie
 
 
 def test_ordinary_flows_keep_their_old_voice_behaviour(client, auth, fakes, monkeypatch, recorder, tamil_voices):
-    # Not an agent flow: an unknown voice still plays as the default, and the rotation still picks the voice.
+    # Not an agent flow: an unknown voice still plays as the backend's main voice - that one voice, every line.
     flow = _flow("ta", monkeypatch)
     flow.pop("autonomous")
     flow["voice_id"] = "kavya"
-    _talk(client, auth, fakes, flow, "male", flow_id="plain_rotation")
-    assert _speakers(recorder.log) <= {"ritu", "simran", "ishita", settings.tts_speaker}
-    assert "kavya" not in _speakers(recorder.log)
+    _talk(client, auth, fakes, flow, "male", flow_id="plain_unknown_voice")
+    assert _speakers(recorder.log) == {settings.tts_speaker}

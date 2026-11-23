@@ -4,7 +4,7 @@ Uses the real call settings (SARVAM_TTS_MODEL, SARVAM_TTS_PACE, CALL_LANGUAGE fr
 8 kHz phone audio), so each file sounds the way a customer hears that voice. One TTS
 request per voice; nothing in the app, database or call flows is changed.
 
-    .venv\\Scripts\\python -m scripts.voice_samples            # every voice in SARVAM_TTS_VOICE_ROTATION
+    .venv\\Scripts\\python -m scripts.voice_samples            # every stock voice this backend offers
     .venv\\Scripts\\python -m scripts.voice_samples priya ritu # only these
 
 Cloned voices (SARVAM_TTS_VOICE_EN_FEMALE in .env, SARVAM_TTS_VOICE_TA_FEMALE / _MALE_1 / _MALE_2 in .env.ta): the
@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from app.core.config import Settings, settings
+from app.core.voices import STOCK_VOICE_IDS
 from app.services import audio_service as audio
 from app.services.provider_registry import agent_voice_settings
 from app.services.sarvam_tts import SarvamTTS, _split_text
@@ -56,7 +57,7 @@ async def save_sample(voice: str) -> str:
 
 
 async def main(selected: list[str]) -> None:
-    voices = selected or settings.voice_rotation or list(CANDIDATES)
+    voices = selected or list(STOCK_VOICE_IDS) or list(CANDIDATES)
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"model={settings.SARVAM_TTS_MODEL} language={settings.sarvam_language_code} pace={settings.SARVAM_TTS_PACE}")
     for voice in voices:  # one at a time: well under the Sarvam rate limit

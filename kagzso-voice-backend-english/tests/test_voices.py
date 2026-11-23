@@ -1,6 +1,6 @@
 """The offered voices (app/core/voices.py): only Roopa, Ritu, Simran and Ishita, Roopa by default.
-Any other voice - an old flow, SARVAM_TTS_SPEAKER or the rotation list naming a voice that is
-no longer offered - plays as Roopa. "Listen" previews only synthesize audio; nothing is dialled."""
+Any other voice - an old flow or SARVAM_TTS_SPEAKER naming a voice that is no longer offered -
+plays as Roopa. "Listen" previews only synthesize audio; nothing is dialled."""
 import base64
 import io
 import json
@@ -31,13 +31,10 @@ def test_only_four_voices_roopa_first_and_default():
     assert voice_or_default("Ishita") == "ishita"
 
 
-def test_main_voice_and_rotation_keep_only_offered_voices(monkeypatch):
+def test_the_main_voice_is_always_an_offered_voice(monkeypatch):
     monkeypatch.setattr(settings, "SARVAM_TTS_SPEAKER", "tanya")
     assert settings.tts_speaker == "roopa"
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "priya,ritu,simran,ishita,shreya,roopa,tanya,shruti")
-    assert settings.voice_rotation == ["roopa", "ritu", "simran", "ishita"]
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "tanya,shreya")
-    assert settings.voice_rotation == []  # nothing offered left: every call uses the main voice
+    assert not hasattr(settings, "voice_rotation")  # no rotation: one voice per call
 
 
 def test_a_flow_or_call_naming_a_removed_voice_speaks_as_roopa(monkeypatch):

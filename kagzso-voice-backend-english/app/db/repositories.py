@@ -3,14 +3,12 @@ the transaction (most helpers commit, since call events must persist even if
 a later step fails)."""
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
-    FINAL_CALL_STATUSES,
     Agent,
     Call,
     CallEvent,
@@ -142,25 +140,6 @@ async def create_call(db: AsyncSession, **fields: Any) -> Call:
     await db.commit()
     await db.refresh(call)
     return call
-
-
-async def next_rotation_voice(db: AsyncSession, voices: List[str]) -> str:
-    """The voice after the one the most recent rotated call used (wraps around)."""
-    stmt = select(Call.voice_id).where(Call.voice_id.is_not(None)).order_by(Call.created_at.desc(), Call.id.desc()).limit(1)
-    last = (await db.execute(stmt)).scalar_one_or_none()
-    return voices[(voices.index(last) + 1) % len(voices)] if last in voices else voices[0]
-
-
-async def free_call_voice(db: AsyncSession, primary: str, voices: List[str], since: datetime) -> str:
-    """`primary` unless a live call (not finished, created after `since`) is using it; then the
-    first rotation voice no live call is using. If every voice is busy, rotate as before."""
-    final = [s.value for s in FINAL_CALL_STATUSES]
-    stmt = select(Call.voice_id).where(Call.voice_id.is_not(None), Call.status.not_in(final), Call.created_at >= since)
-    in_use = set((await db.execute(stmt)).scalars().all())
-    for voice in [primary, *[v for v in voices if v != primary]]:
-        if voice not in in_use:
-            return voice
-    return await next_rotation_voice(db, voices)
 
 
 async def get_call(db: AsyncSession, call_id: str) -> Optional[Call]:

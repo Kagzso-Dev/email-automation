@@ -4,20 +4,21 @@ GET /api/flows/builtin) and every call use.
 Sarvam Bulbul v3 speakers. By default Roopa, Ritu, Simran and Ishita, Roopa first (today's
 English list; Bulbul speakers speak every language, so another language's backend offers them
 too). SARVAM_TTS_VOICES replaces the list for this backend (one backend per language). Any other
-voice id (an old flow, SARVAM_TTS_SPEAKER or SARVAM_TTS_VOICE_ROTATION naming a voice that is not
-offered) plays as DEFAULT_VOICE. Nothing is removed from the Sarvam account; it just isn't offered here.
+voice id (an old flow, or SARVAM_TTS_SPEAKER naming a voice that is not offered) plays as DEFAULT_VOICE.
+Nothing is removed from the Sarvam account; it just isn't offered here.
 
-Cloned voices (SARVAM_TTS_VOICE_<LANG>_FEMALE / _MALE_1 / _MALE_2, "svc-<uuid>") come first, each with its gender;
-two of one gender also add a pool ("cloned_male": either of them, picked once per call by resolve_voice). The female
-one is DEFAULT_VOICE. The stock list is unchanged; a failed cloned voice falls back to a stock voice of its gender
-(app/services/provider_registry.with_clone_fallback).
+Cloned voices (SARVAM_TTS_VOICE_<LANG>_FEMALE / _MALE_1 / _MALE_2, "svc-<uuid>") come first, each with its gender.
+The female one is DEFAULT_VOICE. The stock list is unchanged; a failed cloned voice falls back to a stock voice of
+its gender (app/services/provider_registry.with_clone_fallback).
+
+One voice per call, never picked at random or in turn: an AI agent's call speaks in the agent's saved voice, else
+DEFAULT_VOICE (the language's default), chosen once when the call is placed (call_service.start_outbound_call).
 """
 from __future__ import annotations
 
 import logging
-import random
 import re
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.core.config import CLONED_VOICE_SLOTS, LANGUAGE_NAMES, Settings, cloned_voice_id, settings
 
@@ -68,9 +69,8 @@ def offered_voices(voices_env: str, speaker: str, language: str) -> Tuple[List[D
 
 def cloned_voice_entries(cfg: Settings) -> List[Dict[str, object]]:
     """This backend's cloned voices as voice-list entries ("cloned": True; the picker labels them "Custom"), female
-    first, then male, named by SARVAM_TTS_VOICE_*_NAME. With SARVAM_TTS_VOICE_TA_MALE_EITHER, two or more male ones are
-    preceded by their pool ("cloned_male", "pool": [ids]): either voice, picked once per call. A setting that is set
-    but holds no cloned voice id is reported and ignored."""
+    first, then male, named by SARVAM_TTS_VOICE_*_NAME. A setting that is set but holds no cloned voice id is reported
+    and ignored."""
     for _, setting in CLONED_VOICE_SLOTS.get(cfg.call_language, ()):
         raw = getattr(cfg, setting)
         if (raw or "").strip() and cloned_voice_id(raw) is None:
@@ -79,9 +79,6 @@ def cloned_voice_entries(cfg: Settings) -> List[Dict[str, object]]:
     out: List[Dict[str, object]] = []
     for gender in ("female", "male"):
         clones = [(slot, v) for slot, v, g in cfg.cloned_voices if g == gender]
-        if len(clones) > 1 and cfg.cloned_either(gender):
-            out.append({"id": f"cloned_{gender}", "name": f"Either {gender} (per call)", "gender": gender,
-                        "language": label, "cloned": True, "pool": [v for _, v in clones]})
         out += [{"id": v, "name": cfg.cloned_voice_name(slot), "gender": gender, "language": label,
                  "cloned": True} for slot, v in clones]
     return out
@@ -96,26 +93,14 @@ STOCK_VOICES, STOCK_DEFAULT_VOICE = offered_voices(settings.SARVAM_TTS_VOICES, s
                                                    settings.call_language)
 STOCK_VOICE_IDS: Tuple[str, ...] = tuple(v["id"] for v in STOCK_VOICES)
 CLONED_VOICES = cloned_voice_entries(settings)
-# pool id -> its voices ("cloned_male" -> the cloned male voices)
-VOICE_POOLS: Dict[str, Tuple[str, ...]] = {str(v["id"]): tuple(v["pool"]) for v in CLONED_VOICES if "pool" in v}
 
 VOICES: List[Dict[str, object]] = CLONED_VOICES + STOCK_VOICES
-# The female cloned voice, else the first cloned voice, else the stock default (settings.tts_speaker, as one list).
-DEFAULT_VOICE: str = next((str(v["id"]) for v in CLONED_VOICES if "pool" not in v and v["gender"] == "female"),
-                          next((str(v["id"]) for v in CLONED_VOICES if "pool" not in v), STOCK_DEFAULT_VOICE))
+# The language's default voice: the female cloned voice, else the first cloned voice, else the stock default
+# (settings.tts_speaker, as one list). An AI agent with no saved voice speaks in it.
+DEFAULT_VOICE: str = next((str(v["id"]) for v in CLONED_VOICES if v["gender"] == "female"),
+                          next((str(v["id"]) for v in CLONED_VOICES), STOCK_DEFAULT_VOICE))
 
 VOICE_IDS: Tuple[str, ...] = tuple(str(v["id"]) for v in VOICES)
-
-
-def is_voice_pool(voice_id: Optional[str]) -> bool:
-    return (voice_id or "") in VOICE_POOLS
-
-
-def resolve_voice(voice_id: Optional[str], choose: Optional[Callable[[Sequence[str]], str]] = None) -> Optional[str]:
-    """A pool id becomes one of its voices (random.choice unless `choose` is given); any other id is returned
-    unchanged. A call does this once, when it starts, and keeps that voice to the end."""
-    pool = VOICE_POOLS.get(voice_id or "")
-    return (choose or random.choice)(pool) if pool else voice_id
 
 
 def offered_voice(voice_id: Optional[str]) -> Optional[str]:

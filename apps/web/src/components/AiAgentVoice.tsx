@@ -32,10 +32,10 @@ const isGender = (g: string | undefined): g is AiAgentVoiceGender => g === "fema
 /**
  * The voice a new agent of this language starts with: the backend's female cloned voice (SARVAM_TTS_VOICE_<LANG>_FEMALE),
  * else AI_AGENT_DEFAULT_VOICE (Roopa for Tamil) when offered. Undefined while the voices are unknown, or neither is offered.
- * Picking "Male" then starts from the backend's first male voice: its cloned male pool / voices come first in its list.
+ * Picking "Male" then starts from the backend's first male voice: its cloned male voices come first in its list.
  */
 export function agentDefaultVoice(language: AiCallLanguage, voices: VoiceOption[] | undefined): string | undefined {
-  const clone = voices?.find((v) => v.cloned && !v.pool && v.gender === "female");
+  const clone = voices?.find((v) => v.cloned && v.gender === "female");
   if (clone) return clone.id;
   const preferred = AI_AGENT_DEFAULT_VOICE[language];
   return preferred && voices?.some((v) => v.id === preferred) ? preferred : undefined;

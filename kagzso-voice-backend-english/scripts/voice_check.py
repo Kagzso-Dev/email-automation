@@ -113,7 +113,7 @@ async def main(selected: list[str]) -> None:
         for p in r["problems"]:
             print(f"       - {p}")
     passed = [r for r in reports if r.get("ok")]
-    print("\nPASSING (for SARVAM_TTS_VOICE_ROTATION):")
+    print("\nPASSING (for SARVAM_TTS_VOICES):")
     print(",".join(r["id"] for r in sorted(passed, key=lambda r: list(CANDIDATES).index(r["name"]))))
 
 

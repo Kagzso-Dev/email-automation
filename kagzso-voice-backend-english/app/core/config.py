@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import re
 from functools import lru_cache
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -67,6 +67,30 @@ CLONED_VOICE_DEFAULT_NAMES = {
     ("ta", "male_1"): "Kgazso Male 1",
     ("ta", "male_2"): "Kgazso Male 2",
 }
+
+
+# Settings that no longer exist: a call speaks only in its AI agent's saved voice (else the language default), never
+# a rotation voice or a random pick. Still in an env file or the environment, they are ignored (extra="ignore") and
+# reported at start-up (removed_settings_in_use, app/main.py).
+REMOVED_SETTINGS = ("SARVAM_TTS_VOICE_ROTATION", "VOICE_ROTATION_MODE", "SARVAM_TTS_VOICE_TA_MALE_EITHER")
+
+
+def removed_settings_in_use(env_file: Optional[str] = None) -> List[str]:
+    """REMOVED_SETTINGS given a value in the environment or in the env file this process reads (KAGZSO_ENV_FILE)."""
+    path = env_file if env_file is not None else os.getenv("KAGZSO_ENV_FILE", ".env")
+    found: Dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                name, sep, value = line.strip().partition("=")
+                if sep and name.strip() in REMOVED_SETTINGS:
+                    found[name.strip()] = value.strip().strip("\"'")
+    except OSError:
+        pass
+    for name in REMOVED_SETTINGS:
+        if os.getenv(name) is not None:
+            found[name] = os.environ[name].strip()
+    return [name for name in REMOVED_SETTINGS if found.get(name)]
 
 
 def cloned_voice_id(raw: Optional[str]) -> Optional[str]:
@@ -145,7 +169,7 @@ class Settings(BaseSettings):
     # --- Sarvam TTS (Bulbul; uses SARVAM_API_KEY and CALL_LANGUAGE) ---
     SARVAM_TTS_MODEL: str = "bulbul:v3"
     SARVAM_TTS_SPEAKER: str = "roopa"  # lowercase Bulbul v3 speaker id; must be an offered voice (app/core/voices.py)
-    # The voices this backend offers (Call Flows voice picker, rotation, previews): comma-separated
+    # The voices this backend offers (Call Flows / AI Agents voice pickers, previews): comma-separated
     # Bulbul speaker ids, each optionally id:gender, e.g. "kavitha:female,mani:male". Empty = Roopa,
     # Ritu, Simran and Ishita (today's English list; Bulbul speakers speak every language).
     SARVAM_TTS_VOICES: str = ""
@@ -164,18 +188,11 @@ class Settings(BaseSettings):
     AGENT_TTS_TEMPERATURE: float = 0.4
     AGENT_TTS_MIN_BUFFER_CHARS: int = 120
     SARVAM_TTS_WS_URL: str = "wss://api.sarvam.ai/text-to-speech/ws"
-    # Comma-separated speaker ids: each new call uses the next one in turn (empty = SARVAM_TTS_SPEAKER)
-    SARVAM_TTS_VOICE_ROTATION: str = ""
-    # How the rotation is used: "concurrent" = every call uses SARVAM_TTS_SPEAKER unless another
-    # live call already has it; then the first rotation voice not in use. "round_robin" = each
-    # new call takes the next voice in the list.
-    VOICE_ROTATION_MODE: str = "concurrent"
     # Cloned voices (Sarvam Instant Voice Cloning, beta): saved voice ids (svc-<uuid>, from Sarvam's Voice Library).
     # Each backend reads only its CALL_LANGUAGE's settings (CLONED_VOICE_SLOTS): English *_EN_*, Tamil *_TA_*; other
     # languages ignore them. Each is listed first in the backend's voices with its gender, so a Call Flow or an AI
-    # Agent can pick it; two of one gender also add "Cloned male (either)" - one of them, picked once when the call
-    # starts. The female one (else the first) is the backend's default voice. A failed request is said again in the
-    # stock fallback voice of the same gender (SARVAM_TTS_FALLBACK_VOICE_*) for the rest of that call.
+    # Agent can pick it. The female one (else the first) is the backend's default voice. A failed request is said
+    # again in the stock fallback voice of the same gender (SARVAM_TTS_FALLBACK_VOICE_*) for the rest of that call.
     # Cloned voices take the pace but not the temperature (Sarvam's clone API has none). All empty = as before.
     SARVAM_TTS_VOICE_EN_FEMALE: str = ""
     SARVAM_TTS_VOICE_TA_FEMALE: str = ""
@@ -187,8 +204,6 @@ class Settings(BaseSettings):
     SARVAM_TTS_VOICE_TA_FEMALE_NAME: str = ""
     SARVAM_TTS_VOICE_TA_MALE_1_NAME: str = ""
     SARVAM_TTS_VOICE_TA_MALE_2_NAME: str = ""
-    # true = also offer "Either male (per call)": one of the two Tamil male clones, picked once when each call starts.
-    SARVAM_TTS_VOICE_TA_MALE_EITHER: bool = False
     # Stock Bulbul v3 voices a failed cloned voice falls back to, by gender. Sarvam's Bulbul v3 best practices
     # (checked 2026-11-18) recommend ishita (female) and ratan (male) for both English and Tamil. Empty or not a
     # speaker name = SARVAM_TTS_SPEAKER's stock voice.
@@ -709,10 +724,6 @@ class Settings(BaseSettings):
         name = " ".join(str(getattr(self, f"{setting}_NAME", "") or "").split())[:40].strip()
         return name or CLONED_VOICE_DEFAULT_NAMES.get((self.call_language, slot), "Custom " + slot.replace("_", " "))
 
-    def cloned_either(self, gender: str) -> bool:
-        """Offer "Either <gender> (per call)" for this backend's cloned voices of that gender (Tamil male only)."""
-        return self.call_language == "ta" and gender == "male" and bool(self.SARVAM_TTS_VOICE_TA_MALE_EITHER)
-
     def fallback_speaker(self, gender: str) -> str:
         """The stock voice a failed cloned voice of this gender falls back to (SARVAM_TTS_FALLBACK_VOICE_*)."""
         name = {"female": self.SARVAM_TTS_FALLBACK_VOICE_FEMALE, "male": self.SARVAM_TTS_FALLBACK_VOICE_MALE}.get(gender, "")
@@ -733,19 +744,6 @@ class Settings(BaseSettings):
         from app.core.voices import stock_voice_or_default
 
         return stock_voice_or_default(self.SARVAM_TTS_SPEAKER)
-
-    @property
-    def voice_rotation(self) -> list:
-        """SARVAM_TTS_VOICE_ROTATION limited to the offered voices (app/core/voices.py), in that order."""
-        from app.core.voices import VOICE_IDS
-
-        listed = {v.strip().lower() for v in self.SARVAM_TTS_VOICE_ROTATION.split(",") if v.strip()}
-        return [v for v in VOICE_IDS if v in listed]
-
-    @property
-    def voice_rotation_mode(self) -> str:
-        mode = (self.VOICE_ROTATION_MODE or "").strip().lower()
-        return mode if mode in ("concurrent", "round_robin") else "concurrent"
 
     @property
     def telephony_provider(self) -> str:

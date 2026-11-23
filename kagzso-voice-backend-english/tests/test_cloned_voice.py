@@ -1,5 +1,5 @@
 """Cloned voices (SARVAM_TTS_VOICE_EN_FEMALE, SARVAM_TTS_VOICE_TA_FEMALE / _MALE_1 / _MALE_2): read by the backend's
-language with the gender of their slot, offered first (plus "cloned_male": either male voice, picked once per call),
+language with the gender of their slot, offered first (one voice each: never a pool or a random pick),
 spoken through Sarvam's /voices/clone API (REST + WebSocket) with the pace but no model / speaker / temperature, and
 backed per call by a stock voice of the same gender when Sarvam returns an error. No real request is made."""
 import base64
@@ -104,13 +104,9 @@ def test_cloned_voice_entries(caplog):
     assert [v["name"] for v in voices.cloned_voice_entries(_cfg("en"))] == ["Kgazso English"]
     long = voices.cloned_voice_entries(_cfg("en", SARVAM_TTS_VOICE_EN_FEMALE_NAME="K" * 60))
     assert long[0]["name"] == "K" * 40  # ai_agents.voiceDisplayName holds 40
-    # SARVAM_TTS_VOICE_TA_MALE_EITHER: "Either male (per call)" first among the male ones (one of them per call)
-    either = voices.cloned_voice_entries(_cfg("ta", SARVAM_TTS_VOICE_TA_MALE_EITHER=True))
-    assert [v["id"] for v in either] == [TA_F, "cloned_male", TA_M1, TA_M2]
-    assert either[1] == {"id": "cloned_male", "name": "Either male (per call)", "gender": "male", "language": label,
-                         "cloned": True, "pool": [TA_M1, TA_M2]}
-    one_male = voices.cloned_voice_entries(_cfg("ta", SARVAM_TTS_VOICE_TA_MALE_2="", SARVAM_TTS_VOICE_TA_MALE_EITHER=True))
-    assert [v["id"] for v in one_male] == [TA_F, TA_M1]  # a single voice of a gender: no "either"
+    # Two male clones are two voices: never "Either male (per call)", a pool picked at random (removed 2026-11-20).
+    assert [v["id"] for v in voices.cloned_voice_entries(_cfg("ta"))] == [TA_F, TA_M1, TA_M2]
+    assert not any("pool" in v for v in voices.cloned_voice_entries(_cfg("ta")))
     assert [v["id"] for v in voices.cloned_voice_entries(_cfg("en"))] == [EN_F]
     with caplog.at_level(logging.WARNING, logger="voices"):
         assert [v["id"] for v in voices.cloned_voice_entries(_cfg("ta", SARVAM_TTS_VOICE_TA_MALE_1="ishita"))] == [TA_F, TA_M2]
@@ -118,14 +114,15 @@ def test_cloned_voice_entries(caplog):
     assert all(len(str(v["name"])) <= 40 for v in voices.cloned_voice_entries(_cfg("ta")))  # ai_agents.voiceDisplayName
 
 
-def test_resolve_voice(monkeypatch):
-    monkeypatch.setattr(voices, "VOICE_POOLS", {"cloned_male": (TA_M1, TA_M2)})
-    assert voices.resolve_voice("cloned_male", choose=lambda pool: pool[1]) == TA_M2
-    assert {voices.resolve_voice("cloned_male") for _ in range(60)} == {TA_M1, TA_M2}
-    assert voices.resolve_voice(TA_F) == TA_F and voices.resolve_voice(None) is None and voices.resolve_voice("ritu") == "ritu"
-    # outside a call (a Listen preview) a pool speaks as its first voice, never a random one per request
-    monkeypatch.setattr(voices, "VOICE_IDS", voices.VOICE_IDS + ("cloned_male",))
-    assert SarvamTTS(settings, voice_id="cloned_male").voice_id == TA_M1
+def test_no_voice_is_ever_picked_at_random():
+    """No pool and no random pick left anywhere a voice is chosen (voices, the TTS, the call)."""
+    import inspect
+
+    for module in (voices, cs, provider_registry):
+        source = inspect.getsource(module)
+        assert "random.choice" not in source and "VOICE_POOLS" not in source and "resolve_voice" not in source
+    assert not hasattr(settings, "SARVAM_TTS_VOICE_TA_MALE_EITHER") and not hasattr(settings, "SARVAM_TTS_VOICE_ROTATION")
+    assert voices.offered_voice("cloned_male") is None  # the retired pool id is not a voice
 
 
 # ------------------------------------------------------------------ REST
@@ -312,10 +309,8 @@ def test_with_clone_fallback_only_wraps_cloned_voices():
 @pytest.fixture
 def tamil_clones(monkeypatch, recorder):  # noqa: F811
     """This backend offers the Tamil clones (and Roopa / Shubh); a recording SarvamTTS stands in for the network."""
-    monkeypatch.setattr(voices, "VOICE_IDS", (TA_F, "cloned_male", TA_M1, TA_M2, "roopa", "shubh"))
-    monkeypatch.setattr(voices, "VOICE_POOLS", {"cloned_male": (TA_M1, TA_M2)})
+    monkeypatch.setattr(voices, "VOICE_IDS", (TA_F, TA_M1, TA_M2, "roopa", "shubh"))
     monkeypatch.setattr(cs, "SarvamTTS", RecordingSarvamTTS)
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "")
     return recorder
 
 
@@ -345,15 +340,14 @@ def _talk(client, fakes, flow, flow_id, auth):
     return call_id
 
 
-@pytest.mark.parametrize("pick", [0, 1])
-def test_a_male_agent_call_picks_one_male_clone_once(client, auth, fakes, monkeypatch, sync_engine, tamil_clones, pick):
-    monkeypatch.setattr(voices.random, "choice", lambda pool: pool[pick])
-    flow = {**_flow("ta", monkeypatch), "voice_id": "cloned_male"}
-    call_id = _talk(client, fakes, flow, f"agent_male_{pick}", auth)
-    expected = (TA_M1, TA_M2)[pick]
+@pytest.mark.parametrize("male", [TA_M1, TA_M2])
+def test_a_male_agent_call_speaks_only_in_its_saved_male_clone(client, auth, fakes, monkeypatch, sync_engine, tamil_clones,
+                                                               male):
+    flow = {**_flow("ta", monkeypatch), "voice_id": male}
+    call_id = _talk(client, fakes, flow, f"agent_male_{male[-2:]}", auth)
     used = _voices_used(tamil_clones.log)
-    assert len(used) >= 3 and set(used) == {expected}  # greeting, replies, fixed lines: that one voice only
-    assert _call_voice(sync_engine, call_id) == expected  # saved on the call when it started
+    assert len(used) >= 3 and set(used) == {male}  # greeting, replies, fixed lines: that one voice only
+    assert _call_voice(sync_engine, call_id) == male  # saved on the call when it started
 
 
 def test_a_female_agent_call_uses_the_female_clone(client, auth, fakes, monkeypatch, sync_engine, tamil_clones):
@@ -363,11 +357,15 @@ def test_a_female_agent_call_uses_the_female_clone(client, auth, fakes, monkeypa
     assert _call_voice(sync_engine, call_id) == TA_F
 
 
-def test_an_ordinary_flow_with_the_male_pool_keeps_one_voice(client, auth, fakes, monkeypatch, sync_engine, tamil_clones):
-    monkeypatch.setattr(voices.random, "choice", lambda pool: pool[1])
-    flow = _flow("ta", monkeypatch)
-    flow.pop("autonomous")
-    flow["voice_id"] = "cloned_male"
-    call_id = _talk(client, fakes, flow, "plain_male_pool", auth)
-    assert set(_voices_used(tamil_clones.log)) == {TA_M2}
-    assert _call_voice(sync_engine, call_id) == TA_M2
+def test_an_agent_saved_with_the_retired_either_male_pool_is_refused(client, auth, fakes, monkeypatch, tamil_clones):
+    """An agent published with "cloned_male" (Either male, removed): never a random voice - the call is refused and
+    nothing is dialled until a voice is picked and the agent is published again."""
+    from tests.test_nila_flow import PHONE, _nila_id
+
+    flow = {**_flow("ta", monkeypatch), "voice_id": "cloned_male"}
+    r = client.post("/api/calls/outbound", headers=auth, json={
+        "phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth), "gender": "male",
+        "flow_id": "agent_either", "flow_version": 1, "flow": flow})
+    assert r.status_code == 409, r.text
+    assert "cloned_male" in r.text and "not offered" in r.text
+    assert fakes.plivo.placed == [] and tamil_clones.log == []

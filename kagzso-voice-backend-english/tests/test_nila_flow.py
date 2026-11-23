@@ -257,41 +257,7 @@ def test_plivo_requests_machine_detection():
     assert captured["machine_detection_url"] == "https://test.example.com/api/webhooks/plivo/machine?call_id=cid"
 
 
-# ------------------------------------------------------------------ voice rotation
-def test_voice_rotation_cycles_per_call(client, auth, monkeypatch, sync_engine):
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "ritu, simran,ishita")
-    monkeypatch.setattr(settings, "VOICE_ROTATION_MODE", "round_robin")
-    agent_id = _nila_id(client, auth)
-    for _ in range(4):
-        r = client.post("/api/calls/outbound", headers=auth,
-                        json={"phone_number": PHONE, "customer_name": "Ragul", "gender": "male", "agent_id": agent_id})
-        assert r.status_code == 200, r.text
-        time.sleep(0.01)
-    with sync_engine.connect() as c:
-        used = [r[0] for r in c.execute(text("select voice_id from calls order by created_at, rowid"))]
-    assert used == ["ritu", "simran", "ishita", "ritu"]
-
-
-def test_rotation_off_uses_agent_voice(client, auth, sync_engine):
-    r = client.post("/api/calls/outbound", headers=auth,
-                    json={"phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth)})
-    assert r.status_code == 200
-    with sync_engine.connect() as c:
-        assert c.execute(text("select voice_id from calls")).scalar() is None
-
-
-async def test_call_context_prefers_rotated_voice(client, auth, monkeypatch):
-    from app.services.call_service import load_call_context
-
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "simran")
-    monkeypatch.setattr(settings, "VOICE_ROTATION_MODE", "round_robin")
-    call_id = client.post("/api/calls/outbound", headers=auth, json={
-        "phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth)}).json()["call_id"]
-    ctx = await load_call_context(call_id)
-    assert ctx.voice_id == "simran" and ctx.first_message == "Hi {{title_to_use}}, {{time_greeting}}."
-
-
-# ------------------------------------------------------------------ concurrent voices (VOICE_ROTATION_MODE=concurrent)
+# ------------------------------------------------------------------ one voice per call: no rotation (removed 2026-11-20)
 def _place(client, auth):
     r = client.post("/api/calls/outbound", headers=auth,
                     json={"phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth)})
@@ -300,49 +266,9 @@ def _place(client, auth):
     return r.json()["call_id"]
 
 
-def _end(client, call_id):
-    client.post(f"/api/webhooks/plivo/status?call_id={call_id}",
-                data={"Event": "Hangup", "CallStatus": "no-answer", "CallUUID": f"u-{call_id[:8]}"})
-
-
 def _voice(sync_engine, call_id):
     with sync_engine.connect() as c:
         return c.execute(text("select voice_id from calls where id = :id"), {"id": call_id}).scalar()
-
-
-@pytest.fixture
-def concurrent_voices(monkeypatch):
-    monkeypatch.setattr(settings, "VOICE_ROTATION_MODE", "concurrent")
-    monkeypatch.setattr(settings, "SARVAM_TTS_SPEAKER", "ishita")
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "roopa,ritu,simran,ishita,shreya,tanya")
-
-
-def test_single_calls_always_use_the_main_voice(client, auth, sync_engine, concurrent_voices):
-    for _ in range(3):
-        call_id = _place(client, auth)
-        assert _voice(sync_engine, call_id) == "ishita"
-        _end(client, call_id)  # finished before the next one starts
-
-
-def test_calls_at_the_same_time_get_different_voices(client, auth, sync_engine, concurrent_voices):
-    ids = [_place(client, auth) for _ in range(3)]
-    assert [_voice(sync_engine, i) for i in ids] == ["ishita", "roopa", "ritu"]
-    _end(client, ids[0])  # ishita is free again
-    assert _voice(sync_engine, _place(client, auth)) == "ishita"
-    assert _voice(sync_engine, _place(client, auth)) == "simran"
-
-
-def test_when_every_voice_is_busy_voices_are_shared(client, auth, sync_engine, concurrent_voices, monkeypatch):
-    monkeypatch.setattr(settings, "SARVAM_TTS_VOICE_ROTATION", "roopa")
-    ids = [_place(client, auth) for _ in range(3)]
-    assert [_voice(sync_engine, i) for i in ids] == ["ishita", "roopa", "roopa"]
-
-
-def test_stuck_old_call_does_not_block_the_main_voice(client, auth, sync_engine, concurrent_voices):
-    old = _place(client, auth)
-    with sync_engine.begin() as c:  # never got a hangup webhook, started long ago
-        c.execute(text("update calls set created_at = '2020-01-01 00:00:00' where id = :id"), {"id": old})
-    assert _voice(sync_engine, _place(client, auth)) == "ishita"
 
 
 def _place_flow(client, auth, voice_id, version=1):
@@ -356,14 +282,26 @@ def _place_flow(client, auth, voice_id, version=1):
     return r.json()["call_id"]
 
 
-def test_a_flows_own_voice_wins_over_the_main_voice(client, auth, sync_engine, concurrent_voices):
-    call_id = _place_flow(client, auth, "ritu")
-    assert _voice(sync_engine, call_id) == "ritu"  # not SARVAM_TTS_SPEAKER (ishita)
-    _end(client, call_id)
-    # Busy: the next call at the same time gets the first free rotation voice instead.
-    ids = [_place_flow(client, auth, "ritu") for _ in range(2)]
-    assert [_voice(sync_engine, i) for i in ids] == ["ritu", "roopa"]
+def test_calls_at_the_same_time_all_keep_the_main_voice(client, auth, sync_engine, monkeypatch):
+    monkeypatch.setattr(settings, "SARVAM_TTS_SPEAKER", "ishita")
+    ids = [_place(client, auth) for _ in range(4)]  # none ended: once they got other voices (rotation)
+    assert [_voice(sync_engine, i) for i in ids] == [None] * 4  # no per-call voice: the backend's main voice
 
 
-def test_a_flow_without_a_voice_keeps_the_main_voice(client, auth, sync_engine, concurrent_voices):
-    assert _voice(sync_engine, _place_flow(client, auth, None, version=2)) == "ishita"
+async def test_call_context_uses_the_agents_voice(client, auth):
+    from app.services.call_service import load_call_context
+
+    call_id = client.post("/api/calls/outbound", headers=auth, json={
+        "phone_number": PHONE, "customer_name": "Ragul", "agent_id": _nila_id(client, auth)}).json()["call_id"]
+    ctx = await load_call_context(call_id)
+    assert ctx.voice_id is None and ctx.first_message == "Hi {{title_to_use}}, {{time_greeting}}."
+
+
+def test_a_flows_own_voice_is_every_calls_voice(client, auth, sync_engine, monkeypatch):
+    monkeypatch.setattr(settings, "SARVAM_TTS_SPEAKER", "ishita")
+    ids = [_place_flow(client, auth, "ritu") for _ in range(3)]  # at the same time: still that one voice each
+    assert [_voice(sync_engine, i) for i in ids] == ["ritu"] * 3
+
+
+def test_a_flow_without_a_voice_keeps_the_main_voice(client, auth, sync_engine):
+    assert _voice(sync_engine, _place_flow(client, auth, None, version=2)) is None

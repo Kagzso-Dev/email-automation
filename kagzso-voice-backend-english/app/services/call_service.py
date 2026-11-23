@@ -21,14 +21,15 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Set, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import call_context, get_logger
-from app.core.voices import is_voice_pool, offered_voice, resolve_voice
+from app.core import voices as voice_list
+from app.core.voices import offered_voice
 from app.db import repositories as repo
 from app.db.database import session_factory
 from app.db.models import FINAL_CALL_STATUSES, LOCKED_OUTCOMES, Call, CallOutcome, CallStatus, utcnow
@@ -155,8 +156,6 @@ SILENCE_CLOSINGS = {
     "kn": "ಪರವಾಗಿಲ್ಲ. ನಿಮ್ಮ ಸಮಯಕ್ಕೆ ಧನ್ಯವಾದಗಳು. Have a nice day.",
 }
 
-
-_VOICE_ROTATION_LOCK = asyncio.Lock()
 
 # Short line checks / backchannels ("Hello?", "Yes", "Hmm", "Can you hear me?") said while the agent
 # is talking or preparing a reply: the agent's reply already answers them, so they never interrupt.
@@ -651,6 +650,7 @@ async def transition(
     await repo.update_call(db, call, status=status.value, **fields)
     if status in FINAL_CALL_STATUSES:
         _GREETING_AUDIO.pop(call.id, None)  # unanswered calls never use it
+        _VOICE_FELL_BACK.discard(call.id)
     await repo.add_event(db, call.id, f"status:{status.value}", payload)
     await get_session_store().set_fields(call.id, status=status.value)
     log.info("Call status -> %s", status.value)
@@ -666,6 +666,8 @@ async def transition(
 # call_id -> (text, pace, pause lengths, audio)
 _GREETING_AUDIO: Dict[str, Tuple[str, Optional[float], Tuple[Tuple[str, int], ...], bytes]] = {}
 _PRERENDER_TASKS: Set[asyncio.Task] = set()
+# Calls whose greeting, rendered while the phone rang, fell back to the stock voice: the call starts on it too.
+_VOICE_FELL_BACK: Set[str] = set()
 
 
 def pause_key(pauses: Optional[Mapping[str, int]]) -> Tuple[Tuple[str, int], ...]:
@@ -723,6 +725,8 @@ async def prerender_greeting(call_id: str, text: str, voice_id: Optional[str], p
     if mulaw:
         _GREETING_AUDIO[call_id] = (text, pace, pause_key(pauses), mulaw)
         log.info("Greeting pre-rendered (%.1fs of audio)", audio.mulaw_duration_seconds(len(mulaw)))
+        if getattr(tts, "_on_fallback", False):  # said in the fallback voice: so is the rest of the call (CallSession)
+            _VOICE_FELL_BACK.add(call_id)
 
 
 def schedule_greeting_prerender(call_id: str, text: str, voice_id: Optional[str],
@@ -857,8 +861,9 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 flow_vars["flow_voice_profile"] = AGENT_VOICE_PROFILE  # one calm, steady voice for the whole call
                 if autonomous.voice_pace is not None:  # the agent's own speed, every line of the call
                     flow_vars["flow_voice_pace"] = str(autonomous.voice_pace)
-                if flow_voice:  # the agent's saved voice: every line, whatever the AI Providers TTS speaker is
-                    flow_vars["flow_agent_voice"] = flow_voice
+                # The call's one voice, every line, whatever the AI Providers TTS speaker is: the agent's saved voice,
+                # else the language's default voice (voices.DEFAULT_VOICE). Never another, never picked at random.
+                flow_vars["flow_agent_voice"] = flow_voice or voice_list.DEFAULT_VOICE
             if resolved.flow.pauses is not None:  # else the default pause lengths
                 flow_vars.update({f"flow_pause_{k}": str(v) for k, v in resolved.flow.pauses.model_dump().items()})
             # Training switched on with Active entries: compiled into each reply's prompt (llm_service.training_block).
@@ -866,15 +871,6 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
                 flow_vars["flow_training"] = training
             time_limit = min(resolved.flow.limits.max_duration_sec, cfg.MAX_CALL_DURATION_SECONDS)
             flow_event = ("flow:selected", {**resolved.info, "agent_id": agent.id, "time_limit": time_limit})
-
-    # A voice pool ("cloned_male": either cloned male voice) becomes ONE voice here, once: it is saved on the call and
-    # every line (greeting pre-render, replies, fixed lines) uses it - the voice never changes mid-call.
-    pooled_voice = resolve_voice(flow_voice) if is_voice_pool(flow_voice) else None
-    if pooled_voice:
-        log.info("Voice %s: this call uses %s", flow_voice, pooled_voice)
-        flow_voice = pooled_voice
-        if flow_vars.get("flow_agent_voice"):
-            flow_vars["flow_agent_voice"] = pooled_voice
 
     existing = await repo.get_contact_by_phone(db, req.phone_number)
     if existing is not None and existing.dnd:
@@ -915,39 +911,31 @@ async def start_outbound_call(db: AsyncSession, req: OutboundCallRequest, cfg: S
     if flow_vars.get("flow_natural_lines") and (known := customer_questions.known_json(
             [k.model_dump() for k in req.known_questions] if req.known_questions is not None else None)) is not None:
         variables[customer_questions.KNOWN_VARIABLE] = known
-    rotation = cfg.voice_rotation
-    # An Autonomous AI Agent with a picked voice: that voice for the whole call, never a rotation voice.
-    agent_picked_voice = flow_vars.get("flow_agent_voice")
-    async with _VOICE_ROTATION_LOCK:  # pick + insert together so concurrent calls get different voices
-        if agent_picked_voice:
-            voice_id = agent_picked_voice
-        elif not rotation:
-            voice_id = pooled_voice  # None (as before) unless the flow picked a pool
-        elif cfg.voice_rotation_mode == "concurrent":
-            # Ignore calls stuck in a live status (e.g. a missed hangup webhook) after the max duration.
-            since = utcnow() - timedelta(seconds=cfg.MAX_CALL_DURATION_SECONDS + 300)
-            # A flow's own voice is the first choice; a rotation voice only while it is busy.
-            voice_id = await repo.free_call_voice(db, flow_voice or cfg.tts_speaker, rotation, since)
-        else:
-            voice_id = await repo.next_rotation_voice(db, rotation)
-        call = await repo.create_call(
-            db,
-            voice_id=voice_id,
-            agent_id=agent.id,
-            contact_id=contact.id,
-            from_number=cfg.telephony_from_number,
-            telephony_provider=cfg.telephony_provider,
-            to_number=req.phone_number,
-            status=CallStatus.created.value,
-            direction="outbound",
-            variables=variables,
-        )
+    # The call's voice, resolved here once and saved on the call: an AI agent's saved voice (else the language default,
+    # above); any other call's own flow voice, else this backend's main voice (None). Every line of the call - the
+    # greeting pre-rendered while it rings, each reply, re-ask and the closing - is spoken by the TTS CallSession builds
+    # from it. No rotation, no random pick.
+    voice_id = flow_vars.get("flow_agent_voice") or flow_voice
+    call = await repo.create_call(
+        db,
+        voice_id=voice_id,
+        agent_id=agent.id,
+        contact_id=contact.id,
+        from_number=cfg.telephony_from_number,
+        telephony_provider=cfg.telephony_provider,
+        to_number=req.phone_number,
+        status=CallStatus.created.value,
+        direction="outbound",
+        variables=variables,
+    )
     with call_context(call.id):
         await repo.add_event(db, call.id, "status:created", {"agent_id": agent.id, "voice_id": voice_id})
         if flow_event:
             await repo.add_event(db, call.id, *flow_event)
-        if voice_id:
-            log.info("Voice rotation: using voice %s", voice_id)
+        source = ("the agent's saved voice" if flow_vars.get("flow_agent_voice") and flow_voice
+                  else "the language default" if flow_vars.get("flow_agent_voice")
+                  else "the flow's voice" if flow_voice else "the backend's main voice")
+        log.info("Call voice: %s (%s) - every line of this call", voice_id or cfg.tts_speaker, source)
         await get_session_store().set_fields(call.id, status="created", agent_id=agent.id, processing_state="idle")
         await transition(db, call, CallStatus.initiating, started_at=utcnow())
         try:
@@ -1401,6 +1389,12 @@ class CallSession:
             self.tts = provider_registry.with_agent_voice(self.tts, agent_voice_pace(ctx.variables))
         # A cloned voice (SARVAM_TTS_VOICE_<LANG>_*): this call's own fallback to a stock voice of its gender on a Sarvam error.
         self.tts = provider_registry.with_clone_fallback(self.tts)
+        # Built once, here, from the voice chosen when the call was placed: the greeting, every reply, re-ask, fixed
+        # line and the closing use self.tts. A greeting that already fell back while ringing: the call starts there.
+        if ctx.call_id in _VOICE_FELL_BACK and provider_registry.start_on_fallback(self.tts):
+            _VOICE_FELL_BACK.discard(ctx.call_id)
+            log.warning("VOICE FALLBACK (call %s): the greeting was rendered in the fallback voice - the whole call "
+                        "speaks in it", ctx.call_id)
         self.stt = stt_for_call(self.providers.stt, ctx.variables, cfg)
         # Which LLM chain / STT / TTS / voice this call uses (never a key): one line per call for the logs.
         log.info("Call providers: %s", provider_registry.describe_call(self.providers, self.stt, self.tts))

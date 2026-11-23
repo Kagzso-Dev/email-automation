@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, settings as default_settings
-from app.core.logging import get_logger, redact_secret
+from app.core.logging import call_id_var, get_logger, redact_secret
 from app.core.voices import VOICE_IDS
 from app.db.database import session_factory
 from app.db.models import AiProviderAudit, AiProviderSelection, AiProviderSetting, utcnow
@@ -441,16 +441,24 @@ def build_stt(row: AiProviderSetting, key: str, cfg: Settings, client: Optional[
 class FallbackTTS(TTSProvider):
     """A new TTS setup (e.g. bulbul:v4-flash) backed by the working one: a request that fails before
     any audio (wrong persona, no account access, timeout) is made again with the fallback. Never
-    mid-stream: audio that already played is not repeated."""
+    mid-stream: audio that already played is not repeated. Made per call (CallProviders.tts_for_voice,
+    with_clone_fallback): once the fallback voice has spoken, the rest of that call keeps it, so the
+    voice never flips between sentences. (sticky=False - each request trying the primary again - is
+    no longer used by any call.)"""
 
     name = "fallback"
 
-    def __init__(self, primary: TTSProvider, fallback: TTSProvider, sticky: bool = False):
+    def __init__(self, primary: TTSProvider, fallback: TTSProvider, sticky: bool = True):
         self.primary, self.fallback = primary, fallback
-        # sticky (Autonomous AI Agent calls): once the fallback voice has spoken, the rest of the call keeps it,
-        # so the voice never switches back and forth. Off = each request tries the primary first, as before.
         self.sticky = sticky
         self._on_fallback = False
+
+    def _fell_back(self, what: str, exc: TTSError) -> None:
+        log.warning("VOICE FALLBACK (call %s): %s with voice %s failed (%s) - %s the voice %s", call_id_var.get(), what,
+                    getattr(self.primary, "voice_id", "?"), exc.kind,
+                    "the rest of this call speaks in" if self.sticky else "this line is said in",
+                    getattr(self.fallback, "voice_id", "?"))
+        self._on_fallback = self.sticky
 
     async def synthesize(self, text: str, pace: Optional[float] = None) -> bytes:
         if self._on_fallback:
@@ -458,8 +466,7 @@ class FallbackTTS(TTSProvider):
         try:
             return await self.primary.synthesize(text, pace=pace)
         except TTSError as exc:
-            log.warning("TTS %s failed (%s) - using the fallback voice", getattr(self.primary, "voice_id", "?"), exc.kind)
-            self._on_fallback = self.sticky
+            self._fell_back("one-shot synthesis", exc)
             return await self.fallback.synthesize(text, pace=pace)
 
     async def open_stream(self, pace: Optional[float] = None) -> TTSStream:
@@ -468,8 +475,7 @@ class FallbackTTS(TTSProvider):
         try:
             return await self.primary.open_stream(pace=pace)
         except TTSError as exc:
-            log.warning("TTS stream failed to open (%s) - using the fallback voice", exc.kind)
-            self._on_fallback = self.sticky
+            self._fell_back("opening the stream", exc)
             return await self.fallback.open_stream(pace=pace)
 
     async def synthesize_preview(self, text: str) -> bytes:
@@ -490,8 +496,8 @@ class ClonedVoiceFallback(FallbackTTS):
 
     def _warn(self, what: str, exc: TTSError) -> None:
         self._on_fallback = True
-        log.warning("CLONED VOICE FALLBACK: %s with cloned voice %s failed (%s%s: %s) - this call continues in the stock "
-                    "voice %s", what, getattr(self.primary, "voice_id", "?"), exc.kind,
+        log.warning("CLONED VOICE FALLBACK (call %s): %s with cloned voice %s failed (%s%s: %s) - this call continues in "
+                    "the stock voice %s", call_id_var.get(), what, getattr(self.primary, "voice_id", "?"), exc.kind,
                     f" {exc.status_code}" if exc.status_code else "", str(exc)[:200],
                     getattr(self.fallback, "voice_id", "?"))
 
@@ -646,6 +652,16 @@ class _ClonedStream(TTSStream):
         return getattr(self._active, name)  # anything else the call reads from the provider's stream
 
 
+def start_on_fallback(tts: TTSProvider) -> bool:
+    """A call whose voice already fell back before it connected (its greeting, rendered while the phone rang): the
+    call's own TTS starts on the fallback voice too, so the greeting and every later line are one voice. True if
+    `tts` has a fallback to start on."""
+    if isinstance(tts, FallbackTTS):
+        tts._on_fallback = True
+        return True
+    return False
+
+
 def with_clone_fallback(tts: TTSProvider) -> TTSProvider:
     """A call's TTS: a cloned voice gets a stock voice of its gender (cfg.fallback_speaker: ishita / ratan by default;
     same settings, key and connection pool) as its fallback; any other TTS is returned unchanged. A stream that fails
@@ -655,7 +671,11 @@ def with_clone_fallback(tts: TTSProvider) -> TTSProvider:
     if isinstance(tts, FallbackTTS):
         return FallbackTTS(with_clone_fallback(tts.primary), with_clone_fallback(tts.fallback), sticky=tts.sticky)
     if isinstance(tts, SarvamTTS) and tts.cloned:
-        stock = tts.cfg.fallback_speaker(tts.cfg.cloned_voice_gender(tts.voice_id))
+        gender = tts.cfg.cloned_voice_gender(tts.voice_id)  # its env slot (SARVAM_TTS_VOICE_<LANG>_FEMALE / _MALE_*)
+        stock = tts.cfg.fallback_speaker(gender)
+        if not gender:  # not one of this backend's slots: the fallback can't follow its gender
+            log.warning("Cloned voice %s has no gender on this backend (not in SARVAM_TTS_VOICE_%s_*): its fallback is "
+                        "the default voice %s, which may not match it", tts.voice_id, tts.cfg.call_language.upper(), stock)
         return ClonedVoiceFallback(tts, SarvamTTS(tts.cfg, voice_id=stock, client=tts._client, exact_voice=True))
     return tts
 

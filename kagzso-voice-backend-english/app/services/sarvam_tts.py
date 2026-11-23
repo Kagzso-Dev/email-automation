@@ -44,7 +44,7 @@ import httpx
 
 from app.core.config import Settings, settings as default_settings
 from app.core.logging import get_logger
-from app.core.voices import is_cloned_voice, offered_voice, resolve_voice
+from app.core.voices import is_cloned_voice, offered_voice
 from app.services import audio_service as audio
 from app.services.tts import TTSError, TTSProvider, TTSStream, apply_pronunciations
 
@@ -110,10 +110,7 @@ class SarvamTTS(TTSProvider):
         # Only offered voices (app/core/voices.py); anything else - a voice no longer offered,
         # or an old voice UUID on an older agent / call flow - plays as the main voice.
         # exact_voice: the admin page's speaker for another model (bulbul:v4-flash personas), used as given.
-        voice = voice_id if exact_voice and voice_id else offered_voice(voice_id) or self.cfg.tts_speaker
-        # A pool ("cloned_male") is resolved once when a call starts (call_service); anywhere else (a "Listen" preview)
-        # it speaks as its first voice, never a random one per request.
-        self.voice_id = resolve_voice(voice, choose=lambda pool: pool[0])
+        self.voice_id = voice_id if exact_voice and voice_id else offered_voice(voice_id) or self.cfg.tts_speaker
         # A cloned voice (svc-...): Sarvam's /voices/clone API instead of Bulbul's /text-to-speech.
         self.cloned = is_cloned_voice(self.voice_id)
         self._client = client or httpx.AsyncClient(base_url=self.cfg.SARVAM_BASE_URL,
