@@ -12,6 +12,7 @@ import {
   AI_CALL_LANGUAGE_NAMES,
   femaleNameForMaleVoice,
   isVoiceTuningLanguage,
+  voiceLanguageMismatch,
   VOICE_TUNING_DEFAULT_PRESET,
   VOICE_TUNING_LIMITS,
   VOICE_TUNING_PRESET_HINTS,
@@ -35,7 +36,8 @@ const isGender = (g: string | undefined): g is AiAgentVoiceGender => g === "fema
  * Picking "Male" then starts from the backend's first male voice: its cloned male voices come first in its list.
  */
 export function agentDefaultVoice(language: AiCallLanguage, voices: VoiceOption[] | undefined): string | undefined {
-  const clone = voices?.find((v) => v.cloned && v.gender === "female");
+  // Never a clone made in another language (an English clone on a Tamil agent).
+  const clone = voices?.find((v) => v.cloned && v.gender === "female" && !voiceLanguageMismatch(v.source_language, language));
   if (clone) return clone.id;
   const preferred = AI_AGENT_DEFAULT_VOICE[language];
   return preferred && voices?.some((v) => v.id === preferred) ? preferred : undefined;
@@ -239,9 +241,13 @@ export function AiAgentVoice({
 
   const all = catalog.data?.voices ?? [];
   const preferred = agentDefaultVoice(language, all);
-  // The language's default voice first (its cloned voice, else Roopa for Tamil), then the backend's order.
+  // The language's default voice first (its cloned voice, else Roopa for Tamil), then the backend's order; a clone made
+  // in another language last, so picking a gender never starts on it.
+  const foreign = (v: VoiceOption) => voiceLanguageMismatch(v.source_language, language);
   const ofGender = (g: AiAgentVoiceGender): VoiceOption[] =>
-    all.filter((v) => v.gender === g).sort((a, b) => Number(b.id === preferred) - Number(a.id === preferred));
+    all
+      .filter((v) => v.gender === g)
+      .sort((a, b) => Number(foreign(a)) - Number(foreign(b)) || Number(b.id === preferred) - Number(a.id === preferred));
   const current = all.find((v) => v.id === value);
   const gender: AiAgentVoiceGender = picked ?? (isGender(current?.gender) ? current.gender : "female");
   const voices = ofGender(gender);
@@ -303,6 +309,13 @@ export function AiAgentVoice({
                 : undefined
           }
         />
+      )}
+      {current && foreign(current) && (
+        <p className="rounded-lg border border-warn/40 bg-warn-soft px-3 py-2 text-xs text-warn" role="alert">
+          <strong>{current.name}</strong> was cloned from a sample in another language ({current.source_language}), so in a{" "}
+          {AI_CALL_LANGUAGE_NAMES[language]} call it sounds like someone reading {AI_CALL_LANGUAGE_NAMES[language]} with an accent.
+          Pick a voice made in {AI_CALL_LANGUAGE_NAMES[language]}, or a stock voice.
+        </p>
       )}
       {current?.gender === "male" &&
         (femaleNameForMaleVoice(executiveName, current.gender) ? (

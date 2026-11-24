@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiResponse } from "../lib/api";
 import { useToast } from "./toast";
 import {
+  AI_CALL_LANGUAGE_NAMES,
   AI_CALL_VOICE_SAMPLES,
   AI_CALL_VOICE_SAMPLES_MIXED,
   DEFAULT_AI_CALL_LANGUAGE,
@@ -32,6 +33,13 @@ export function sampleLine(text: string | null | undefined): string | null {
   if (sentence > 0) return head.slice(0, sentence + 1);
   const word = head.lastIndexOf(" ");
   return word > 0 ? head.slice(0, word) : head;
+}
+
+/** A cloned voice's sample language for its tag: "Tamil", "English" ... or "Language ?" when the backend doesn't say. */
+export function sampleLanguage(code: string | undefined): string {
+  const base = (code ?? "").split("-")[0]!.trim().toLowerCase();
+  if (!base) return "Language ?";
+  return (AI_CALL_LANGUAGE_NAMES as Record<string, string>)[base] ?? code!;
 }
 
 /** Previews already fetched this session: language + voice + text + pause lengths → object URL (the oldest is revoked past 20). */
@@ -218,6 +226,14 @@ export function VoicePicker({
                         title="Your own cloned voice (Sarvam voice cloning)"
                       >
                         Custom
+                      </span>
+                    )}
+                    {v.cloned && (
+                      <span
+                        className="shrink-0 rounded border border-line px-1 text-[10px] font-semibold uppercase leading-4 text-slate-550"
+                        title="The language of the sample this voice was cloned from (Sarvam's record)"
+                      >
+                        {sampleLanguage(v.source_language)}
                       </span>
                     )}
                   </span>

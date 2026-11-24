@@ -516,6 +516,20 @@ CUSTOMER_BUSINESS_ASK_RULES = """
 - Listen to the answer, then adapt the rest of the conversation to that business: think about the work that takes such a business the most time, and show how AI automation or software could help with it, using only the approved information.
 - If they would rather not say, or avoid the question, accept it gracefully, do not ask again and carry on with the calling objective in general terms."""
 
+# Tamil only (approved 2026-11-24): discovery before any pitch. Same as CUSTOMER_BUSINESS_ASK_RULES except the third
+# line, which there moves to the company's help right after the customer names the business. Every other language keeps
+# CUSTOMER_BUSINESS_ASK_RULES exactly as it is.
+CUSTOMER_BUSINESS_ASK_RULES_TA = CUSTOMER_BUSINESS_ASK_RULES.replace(
+    "- Listen to the answer, then adapt the rest of the conversation to that business: think about the work that takes "
+    "such a business the most time, and show how AI automation or software could help with it, using only the approved "
+    "information.",
+    "- Listen to the answer. Do not talk about the company or what it offers yet: in one short sentence show you "
+    "understood what they said, then ask one follow-up question built from their answer, about how their work runs today "
+    "and where it is hard. When they name a problem, stay on it: how big it is, since when, and what they do about it "
+    "today; never jump to another topic or ask again what they already answered. Only once the problem is clear, connect "
+    "the one help that fits it, using only the approved information. If they have no problem or no interest, accept it "
+    "and close politely.")
+
 # An agent's call that opened with its published greeting (voice backend AGENT_FIXED_GREETING): the prompt's OPENING
 # section says the agent opens in its own words, so it is told the greeting is already said.
 AGENT_FIXED_GREETING_RULE = (
@@ -551,7 +565,8 @@ def customer_business_rules(business: str, language: Optional[str], opening: boo
     example = f', with the meaning of "{hint}", never word for word' if hint else ""
     if business:
         return CUSTOMER_BUSINESS_KNOWN_RULES.replace("{example}", example)
-    next_step = CUSTOMER_BUSINESS_OPENING_RULE if opening else CUSTOMER_BUSINESS_ASK_RULES.replace("{example}", example)
+    ask = CUSTOMER_BUSINESS_ASK_RULES_TA if code == "ta" else CUSTOMER_BUSINESS_ASK_RULES
+    next_step = CUSTOMER_BUSINESS_OPENING_RULE if opening else ask.replace("{example}", example)
     return CUSTOMER_BUSINESS_UNKNOWN_RULES + next_step
 
 

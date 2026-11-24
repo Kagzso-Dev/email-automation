@@ -67,6 +67,31 @@ export interface CompileInput {
  */
 export const AI_AGENT_COMPILER_VERSION = 3;
 
+/**
+ * A compiler change that reaches one language only: its agents show "unpublished changes" (agentInputsHash), every
+ * other language's hash stays exactly as before. Tamil 1 (2026-11-24): the discovery-first business sentence.
+ */
+export const AI_AGENT_COMPILER_LANGUAGE_REVISION: Partial<Record<AiCallLanguage, number>> = { ta: 1 };
+
+/** What agentInputsHash hashes as the compiler: AI_AGENT_COMPILER_VERSION itself for a language without a revision. */
+export function aiAgentCompilerVersion(language: string): number | string {
+  const revision = AI_AGENT_COMPILER_LANGUAGE_REVISION[language as AiCallLanguage];
+  return revision ? `${AI_AGENT_COMPILER_VERSION}.${language}${revision}` : AI_AGENT_COMPILER_VERSION;
+}
+
+/**
+ * How the conversation moves from the customer's business to the company's help. Tamil (approved 2026-11-24):
+ * discovery first - the business and a problem before any product. Every other language: as before (businessBlock).
+ */
+const BUSINESS_DISCOVERY: Partial<Record<AiCallLanguage, string>> = {
+  ta:
+    "Once you know the kind of business, do not describe any product or service yet. After each answer, show in one short " +
+    "sentence that you understood it, then ask one follow-up question built from what they said, about how their work runs " +
+    "today and where it is hard. When they describe a problem, stay on it - how big it is, since when, and what they do about " +
+    "it today - and never ask again what they already answered. Only once the problem is clear, show how the one fitting help " +
+    "could solve it. Never list several questions at once.\n\n",
+};
+
 export class AgentCompileError extends Error {
   constructor(message: string) {
     super(message);
@@ -160,9 +185,10 @@ function businessBlock(input: CompileInput): string {
     "Never assume which products or services their business offers, how it works or what it needs: find out from the customer, " +
     "and go by what they say. If they run a different kind of business from the one you were told, follow them and talk about that " +
     "business instead. Never assume it has the same problems as any other business.\n\n" +
-    "Once you know the kind of business, speak in terms that fit it. When it helps, ask one short, open question about how they run " +
-    "their day-to-day work and what takes their team the most time, then show how automation or software could help with what they " +
-    "told you. Never list several questions at once.\n\n" +
+    (BUSINESS_DISCOVERY[input.language] ??
+      "Once you know the kind of business, speak in terms that fit it. When it helps, ask one short, open question about how they run " +
+        "their day-to-day work and what takes their team the most time, then show how automation or software could help with what they " +
+        "told you. Never list several questions at once.\n\n") +
     `**Only describe products and services that the approved company facts or the training's approved knowledge confirm.** ` +
     "Never say that a product, feature or integration exists, works in a certain way or suits them unless an approved note says so.\n\n" +
     "**A question the approved information doesn't answer:** never guess or invent. Say honestly that you don't have that detail " +

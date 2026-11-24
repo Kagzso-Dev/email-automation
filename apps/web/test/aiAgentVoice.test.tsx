@@ -4,8 +4,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { voiceTuningPreset, type AiAgentView, type AiCallLanguage } from "@dispatch/shared";
+import {
+  AI_AGENT_DEFAULT_INSTRUCTIONS,
+  AI_AGENT_INSTRUCTIONS_MAX,
+  instructionPlaceholders,
+  voiceTuningPreset,
+  type AiAgentView,
+  type AiCallLanguage,
+} from "@dispatch/shared";
 import { AiAgentForm } from "../src/components/AiAgentForm";
+import { sampleLanguage } from "../src/components/VoicePicker";
 import { ConfirmProvider } from "../src/components/confirm";
 import { ToastProvider } from "../src/components/toast";
 import { AiCallLanguageProvider } from "../src/lib/aiCallLanguage";
@@ -155,11 +163,11 @@ describe("Settings → AI Voice", () => {
     it("they join the gender tabs (Female 5, Male 8) with a Custom label; a new agent starts on the female one", async () => {
       catalogVoices = [...CLONES, ...STOCK];
       form();
-      await waitFor(() => expect(checked()).toEqual(["Kgazso TamilCustomTamil (India) · female · default"]));
+      await waitFor(() => expect(checked()).toEqual(["Kgazso TamilCustomLanguage ?Tamil (India) · female · default"]));
       expect(genderButton("Female").textContent).toBe("Female(5)");
       expect(genderButton("Male").textContent).toBe("Male(8)");
       expect(names()).toEqual([
-        "Kgazso TamilCustomTamil (India) · female · default",
+        "Kgazso TamilCustomLanguage ?Tamil (India) · female · default",
         "RoopaTamil (India) · female",
         "IshitaTamil (India) · female",
         "RituTamil (India) · female",
@@ -167,8 +175,8 @@ describe("Settings → AI Voice", () => {
       ]); // only the cloned voice is labelled Custom
       fireEvent.click(genderButton("Male"));
       expect(names().slice(0, 3)).toEqual([
-        "Kgazso Male 1CustomTamil (India) · male",
-        "Kgazso Male 2CustomTamil (India) · male",
+        "Kgazso Male 1CustomLanguage ?Tamil (India) · male",
+        "Kgazso Male 2CustomLanguage ?Tamil (India) · male",
         "ShubhTamil (India) · male",
       ]);
       expect(names()).toHaveLength(8);
@@ -229,6 +237,94 @@ describe("Settings → AI Voice", () => {
       fill("AI executive name", "Sara");
       expect(screen.queryByRole("alert")).toBeNull(); // female voice: no warning
       expect(screen.queryByText(/A male voice still introduces itself as/)).toBeNull();
+    });
+
+    // Sarvam's record of the sample each clone was made from: "Kgazso Male 1" is an English (en-IN) one.
+    const withLanguage = (v: ReturnType<typeof clone>, source_language: string) => ({ ...v, source_language });
+
+    it("a clone made from an English sample is tagged, listed last, warned about and never a gender's first voice", async () => {
+      catalogVoices = [withLanguage(CLONES[0]!, "ta-IN"), withLanguage(CLONES[1]!, "en-IN"), withLanguage(CLONES[2]!, "ta-IN"), ...STOCK];
+      form();
+      await waitFor(() => expect(checked()).toEqual(["Kgazso TamilCustomTamilTamil (India) · female · default"]));
+      fireEvent.click(genderButton("Male"));
+      expect(checked()).toEqual(["Kgazso Male 2CustomTamilTamil (India) · male"]); // never the English clone
+      expect(names().at(-1)).toBe("Kgazso Male 1CustomEnglishTamil (India) · male");
+      expect(screen.queryByText(/cloned from a sample in another language/)).toBeNull();
+      fireEvent.click(within(voiceList()).getAllByRole("radio").at(-1)!); // picked anyway: said plainly
+      const warning = screen.getByText(/cloned from a sample in another language/);
+      expect(warning.textContent).toContain("Kgazso Male 1 was cloned from a sample in another language (en-IN)");
+      expect(warning.textContent).toContain("Pick a voice made in Tamil, or a stock voice.");
+    });
+
+    it("an English female clone on a Tamil backend is never a new agent's voice", async () => {
+      catalogVoices = [withLanguage(CLONES[0]!, "en-IN"), ...CLONES.slice(1), ...STOCK];
+      form();
+      await waitFor(() => expect(checked()).toEqual(["RoopaTamil (India) · female · default"]));
+    });
+
+    it("every clone gets a language tag; an unknown one says so", () => {
+      expect([sampleLanguage("ta-IN"), sampleLanguage("en-IN"), sampleLanguage("hi"), sampleLanguage(undefined)]).toEqual([
+        "Tamil", "English", "Hindi", "Language ?",
+      ]);
+    });
+  });
+
+  describe("AI Conversation Instructions (Tamil)", () => {
+    const DISCOVERY = [
+      "புரிஞ்சுக்கறது (முதல்ல இதுதான்)",
+      "- Pitch பண்றதுக்கு முன்னாடி customer-ஓட business, அவங்க பிரச்சனை, இப்போ எப்படி வேலை நடக்குதுன்னு கேட்டுப் புரிஞ்சுக்கோங்க.",
+      "- ஒவ்வொரு பதிலுக்கும் பிறகு, அவங்க சொன்னதை ஒரு சின்ன வாக்கியத்துல உங்க வார்த்தையில சொல்லி புரிஞ்சுக்கிட்டதைக் காட்டுங்க. அப்புறம் அந்த பதில்ல இருந்தே அடுத்த கேள்வி கேளுங்க.",
+      "- Customer ஒரு பிரச்சனை சொன்னா, வேற topic-க்கு போகாம அதையே ஆழமா கேளுங்க: எவ்வளவு பெருசு, எப்போ இருந்து, இப்போ என்ன பண்றாங்க.",
+      "- பிரச்சனை தெளிவா புரிஞ்ச பிறகு மட்டும், அதுக்கு பொருந்துற Kagzso help-ஐ Knowledge-ல இருக்கறபடி சொல்லுங்க. அதுக்கு முன்னாடி எந்த product-ம் சொல்லாதீங்க.",
+      "- Customer-க்கு பிரச்சனை இல்லன்னா, ஏத்துக்கிட்டு மரியாதையா முடிங்க.",
+    ];
+    const box = () => screen.getByPlaceholderText(/Additional business information/) as HTMLTextAreaElement;
+
+    it("a new Tamil agent starts with the recommended text: under 4000 characters, no placeholders, no team promises", async () => {
+      form();
+      await waitFor(() => expect(names()).toHaveLength(4));
+      const text = box().value;
+      expect(text).toBe(AI_AGENT_DEFAULT_INSTRUCTIONS.ta);
+      expect(text.length).toBeLessThanOrEqual(AI_AGENT_INSTRUCTIONS_MAX);
+      expect(instructionPlaceholders(text)).toEqual([]);
+      expect(text).not.toMatch(/[{}"“”]/); // no placeholders, no quoted lines
+      expect(text).not.toMatch(/good morning|கிட்டதான் பேசுறேனா/i); // the opening is the system's greeting
+      // No team follow-up is linked to agent calls: nothing says the team will call, explain or confirm anything.
+      expect(text).not.toMatch(/பண்ணுவாங்க|சொல்லுவாங்க|pass பண்றேன்|team தான் confirm|kagzso\.com/);
+      expect(text).toContain("Callback, meeting, demo, team contact பத்தி எந்த வாக்குறுதியும் சொல்லாதீங்க.");
+      // Discovery first: the block as given, before anything about Kagzso.
+      for (const line of DISCOVERY) expect([line, text.includes(line)]).toEqual([line, true]);
+      expect(text.indexOf("புரிஞ்சுக்கறது (முதல்ல இதுதான்)")).toBeLessThan(text.indexOf("Kagzso பத்தி சொல்றப்போ"));
+      expect(text).not.toMatch(/Kagzso எப்படி help பண்ணலாம்னு/); // the old goal that invited an early pitch
+      expect(screen.queryByRole("button", { name: /Use the recommended/ })).toBeNull(); // it is already in the box
+    });
+
+    it("an English agent starts with an empty box, as before", async () => {
+      form(null, "en");
+      await waitFor(() => expect(box()).toBeTruthy());
+      expect(box().value).toBe("");
+    });
+
+    it("a placeholder is explained and saving waits until it is removed", async () => {
+      form();
+      await waitFor(() => expect(names()).toHaveLength(4));
+      fill("Agent name (for your list)", "ABC Hospital — Thaara");
+      fill("Calling objective", "Introduce AI for hospitals.");
+      fireEvent.change(box(), { target: { value: "நீங்க {agent_name}. {contact_name} கிட்ட பேசுறீங்க." } });
+      const alert = screen.getByText(/this box fills in nothing/);
+      expect(alert.textContent).toContain("Remove {agent_name}, {contact_name}");
+      expect((screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.change(box(), { target: { value: "நீங்க பணிவா பேசுங்க." } });
+      expect(screen.queryByText(/this box fills in nothing/)).toBeNull();
+      expect((screen.getByRole("button", { name: "Create AI agent" }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it("an existing agent keeps its own text; the recommended one replaces it only after a confirmation", async () => {
+      form({ ...AGENT, instructions: "Do not discuss pricing." });
+      await waitFor(() => expect(box().value).toBe("Do not discuss pricing."));
+      fireEvent.click(screen.getByRole("button", { name: "Use the recommended Tamil instructions" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Replace" }));
+      await waitFor(() => expect(box().value).toBe(AI_AGENT_DEFAULT_INSTRUCTIONS.ta));
     });
   });
 

@@ -106,7 +106,11 @@ def test_without_a_business_the_ai_leads_asks_once_and_adapts(lang, empty):
     prompt = _prompt(empty, lang, last_reply=AFTER_GREETING)
     assert _data(prompt)["customer_business"] is None  # JSON null: never the text "—" or "undefined"
     assert LEADS in prompt and ASKS in prompt and CHECKS not in prompt
-    assert "adapt the rest of the conversation to that business" in prompt
+    if lang == "ta":  # Tamil only (approved 2026-11-24): understand the work and a problem before any product
+        assert "Do not talk about the company or what it offers yet" in prompt
+        assert "adapt the rest of the conversation to that business" not in prompt
+    else:  # every other language: exactly as before
+        assert "adapt the rest of the conversation to that business" in prompt
     assert "accept it gracefully, do not ask again and carry on with the calling objective" in prompt
     assert "never say a word such as undefined, null or blank" in prompt
 

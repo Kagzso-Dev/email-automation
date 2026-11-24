@@ -19,6 +19,8 @@ import {
 } from "@dispatch/shared";
 import {
   AgentCompileError,
+  AI_AGENT_COMPILER_VERSION,
+  aiAgentCompilerVersion,
   compileAgentFlow,
   CONVERSATION_BLOCK,
   INSTRUCTIONS_HEADER,
@@ -429,5 +431,35 @@ describe("knowledge content checks (same rules as the voice backend)", () => {
   const cases: { text: string; policy: boolean; ok: boolean }[] = JSON.parse(read(FIXTURES + "knowledge_cases.json"));
   it.each(cases)("$text → ok=$ok", ({ text: t, policy, ok }) => {
     expect(knowledgeTextIssues(t, { policy }).length === 0).toBe(ok);
+  });
+});
+
+describe("Tamil discovery first (approved 2026-11-24): Tamil only", () => {
+  const OLD =
+    "Once you know the kind of business, speak in terms that fit it. When it helps, ask one short, open question about how they run " +
+    "their day-to-day work and what takes their team the most time, then show how automation or software could help with what they " +
+    "told you. Never list several questions at once.";
+  const business = (language: AiCallLanguage) =>
+    (compileAgentFlow(input(language)).blocks.find((b) => b.id === "customer_business") as CallFlowTextBlock).text;
+
+  it("a Tamil agent is told to understand the business and a problem before any product", () => {
+    const ta = business("ta");
+    expect(ta).toContain("do not describe any product or service yet");
+    expect(ta).toContain("show in one short sentence that you understood it, then ask one follow-up question built from what they said");
+    expect(ta).toContain("how big it is, since when, and what they do about it today");
+    expect(ta).toContain("Only once the problem is clear, show how the one fitting help could solve it.");
+    expect(ta).not.toContain(OLD);
+  });
+
+  it.each(["en", "hi", "kn"] as const)("%s keeps the sentence exactly as before (the fixture test checks the whole flow)", (language) => {
+    expect(business(language)).toContain(OLD);
+    expect(business(language)).not.toContain("do not describe any product or service yet");
+  });
+
+  it("only Tamil agents get a new compiler version: every other agent's 'published' state is untouched", () => {
+    expect(aiAgentCompilerVersion("en")).toBe(AI_AGENT_COMPILER_VERSION); // hashed exactly as before (the number 3)
+    expect(aiAgentCompilerVersion("hi")).toBe(AI_AGENT_COMPILER_VERSION);
+    expect(aiAgentCompilerVersion("kn")).toBe(AI_AGENT_COMPILER_VERSION);
+    expect(aiAgentCompilerVersion("ta")).toBe(`${AI_AGENT_COMPILER_VERSION}.ta1`); // Tamil agents: "unpublished changes"
   });
 });

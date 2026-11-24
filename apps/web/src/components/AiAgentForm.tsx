@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AI_AGENT_DEFAULT_INSTRUCTIONS,
   AI_AGENT_DEFAULT_VOICE,
   AI_AGENT_DEFAULTS,
   AI_AGENT_DURATION_LIMITS,
@@ -15,6 +16,7 @@ import {
   aiAgentInput,
   aiAgentLanguageSupported,
   femaleNameForMaleVoice,
+  instructionPlaceholders,
   type AiAgentInput,
   type AiAgentView,
   type AiCallLanguage,
@@ -69,7 +71,8 @@ function initial(a: AiAgentView | null, autonomousOk: boolean, language: AiCallL
     companyName: a?.companyName ?? AI_AGENT_DEFAULTS.companyName,
     callbackNumber: a?.callbackNumber ?? "",
     personality: a?.personality ?? AI_AGENT_DEFAULTS.personality,
-    instructions: a?.instructions ?? "",
+    // A new agent starts with its language's recommended instructions (Tamil); an existing one keeps its own.
+    instructions: a?.instructions ?? AI_AGENT_DEFAULT_INSTRUCTIONS[language] ?? "",
     targetDurationSec: a?.targetDurationSec ?? AI_AGENT_DEFAULTS.targetDurationSec,
     maxDurationSec: a?.maxDurationSec ?? AI_AGENT_DEFAULTS.maxDurationSec,
     guidedFlowId: a?.guidedFlowId ?? "",
@@ -121,6 +124,9 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
   const check = aiAgentInput.safeParse(body);
   const fieldError = (k: string) => (!check.success ? check.error.issues.find((i) => i.path[0] === k)?.message : undefined);
   const phonesOk = phoneInputOk(f.contactPhone) && phoneInputOk(f.callbackNumber);
+  // Tamil agents: "{agent_name}" and the like are read by the AI as written (the box fills nothing), so saving waits.
+  const placeholders = language === "ta" && f.mode === "autonomous" ? instructionPlaceholders(f.instructions) : [];
+  const recommended = f.mode === "autonomous" ? AI_AGENT_DEFAULT_INSTRUCTIONS[language] : undefined;
 
   const save = useMutation({
     mutationFn: () =>
@@ -300,6 +306,30 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
               2. legal and mandatory disclosures · 3. approved company and product facts · 4. these restrictions · 5. the objective and preferences.
               {` ${f.instructions.length}/${AI_AGENT_INSTRUCTIONS_MAX}`}
             </p>
+            {placeholders.length > 0 && (
+              <p className="text-xs font-semibold text-crit" role="alert">
+                Remove {placeholders.join(", ")}: this box fills in nothing, so the AI would say it as written. The AI&apos;s name comes
+                from “AI executive name” and the customer&apos;s name is added to every call.
+              </p>
+            )}
+            {recommended && f.instructions !== recommended && (
+              <button
+                type="button"
+                className="btn-ghost mt-2 px-2.5 py-1 text-xs"
+                onClick={async () => {
+                  const ok =
+                    !f.instructions.trim() ||
+                    (await confirm({
+                      title: `Use the recommended ${AI_CALL_LANGUAGE_NAMES[language]} instructions?`,
+                      body: "They replace what is in the box now. Save settings and Publish the agent for calls to use them.",
+                      confirmText: "Replace",
+                    }));
+                  if (ok) set("instructions", recommended);
+                }}
+              >
+                Use the recommended {AI_CALL_LANGUAGE_NAMES[language]} instructions
+              </button>
+            )}
           </Section>
         </>
       )}
@@ -324,7 +354,7 @@ export function AiAgentForm({ agent, onCreated }: { agent: AiAgentView | null; o
         ) : (
           <span />
         )}
-        <button type="button" className="btn-primary" disabled={!check.success || !phonesOk || save.isPending} onClick={() => save.mutate()}>
+        <button type="button" className="btn-primary" disabled={!check.success || !phonesOk || placeholders.length > 0 || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? "Saving…" : agent ? "Save settings" : "Create AI agent"}
         </button>
       </div>

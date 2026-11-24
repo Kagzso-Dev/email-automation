@@ -76,6 +76,8 @@ export interface VoiceOption {
   language?: string;
   /** A Sarvam cloned voice (the backend's SARVAM_TTS_VOICE_<LANG>_*), not a stock Bulbul speaker. */
   cloned?: boolean;
+  /** A cloned voice's sample language as Sarvam has it (e.g. "en-IN"), when the voice backend knows it. */
+  source_language?: string;
 }
 
 export interface CallFlowPreview {

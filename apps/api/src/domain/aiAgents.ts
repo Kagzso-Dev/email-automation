@@ -21,7 +21,7 @@ import {
   type CallFlowDefinition,
 } from "@dispatch/shared";
 import { prisma } from "../prisma.js";
-import { AI_AGENT_COMPILER_VERSION, compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
+import { aiAgentCompilerVersion, compileAgentFlow, type CompileKnowledgeItem } from "./aiAgentCompile.js";
 import { itemIssues, type Extraction } from "./aiAgentKnowledge.js";
 import { questionStats } from "./aiAgentQuestions.js";
 import { agentReplySpeed, saveAgentReplySpeed } from "./aiCallVoiceTuning.js";
@@ -437,7 +437,8 @@ export async function agentInputsHash(a: AiAgent): Promise<string> {
   // published, so it stays out: hashing it would show every published agent as changed.
   const { voiceId, replySpeed: _dialTimeOnly, ...config } = await agentConfig(a);
   return definitionHash({
-    compiler: AI_AGENT_COMPILER_VERSION,
+    // A language's own compiler revision (Tamil) changes only that language's hash: English agents stay published.
+    compiler: aiAgentCompilerVersion(a.language),
     config: { ...config, ...(voiceId ? { voiceId } : {}) },
     knowledge: knowledge.map((k) => [k.kind, k.topic, k.text, k.questions, k.always]),
   });
