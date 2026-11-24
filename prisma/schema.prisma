@@ -1293,3 +1293,47 @@ model TemplateDraft {
   @@index([updatedAt])
   @@map("template_drafts")
 }
+
+// Automation (ENABLE_AUTOMATION, migration 0041): LinkedIn Automation + Instagram Automation. Two NEW tables only,
+// written only by /api/automation; nothing else reads them. No foreign key: the user is a snapshot (id + email).
+
+/// One row per DM recipient per send: sent, failed, or blocked (e.g. outside Instagram's 24-hour window).
+model AutomationDmSend {
+  id                String   @id @default(cuid())
+  platform          String   @db.VarChar(16) // instagram | linkedin
+  batchId           String   @db.VarChar(64) // one click of "Send" = one batch
+  recipientId       String   @db.VarChar(128) // Instagram-scoped id
+  recipientName     String?  @db.VarChar(255)
+  message           String   @db.Text
+  messageTag        String?  @db.VarChar(32) // HUMAN_AGENT, or null for a normal reply
+  windowState       String   @db.VarChar(16) // open | human_agent | closed | no_inbound (at send time)
+  status            String   @db.VarChar(16) // sent | failed | blocked
+  providerMessageId String?  @db.VarChar(191)
+  errorCode         String?  @db.VarChar(64)
+  errorMessage      String?  @db.VarChar(1000) // never holds a token (scrubbed before it is stored)
+  sentById          String   @db.VarChar(191)
+  sentByEmail       String   @db.VarChar(191)
+  createdAt         DateTime @default(now())
+
+  @@index([platform, createdAt])
+  @@index([batchId])
+  @@map("automation_dm_sends")
+}
+
+/// Campaign create / pause / resume from the Automation pages, with the outcome.
+model AutomationCampaignAction {
+  id           String   @id @default(cuid())
+  platform     String   @db.VarChar(16) // instagram | linkedin
+  campaignId   String?  @db.VarChar(64)
+  campaignName String?  @db.VarChar(255)
+  action       String   @db.VarChar(16) // create | pause | resume
+  status       String   @db.VarChar(16) // ok | failed
+  errorCode    String?  @db.VarChar(64)
+  errorMessage String?  @db.VarChar(1000)
+  actorId      String   @db.VarChar(191)
+  actorEmail   String   @db.VarChar(191)
+  createdAt    DateTime @default(now())
+
+  @@index([platform, createdAt])
+  @@map("automation_campaign_actions")
+}

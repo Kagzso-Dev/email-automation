@@ -47,6 +47,7 @@ import { uploadHistoryRouter } from "./routes/uploadHistory.js";
 import { imageSizeControlsRouter } from "./routes/imageSizeControls.js";
 import { templateDraftsRouter } from "./routes/templateDrafts.js";
 import { hardStopRouter } from "./routes/hardStop.js";
+import { automationRouter } from "./routes/automation.js";
 
 export function createApp() {
   const app = express();
@@ -124,6 +125,7 @@ export function createApp() {
   app.use("/api/image-size-controls", imageSizeControlsRouter); // GET /config only: { enabled } for ENABLE_IMAGE_SIZE_CONTROLS
   app.use("/api/template-drafts", templateDraftsRouter); // template_drafts table only (migration 0039); 404 unless ENABLE_TEMPLATE_DRAFTS
   app.use("/api/hard-stop", hardStopRouter); // Hard stop (migration 0038): GET /config always; the rest 404 unless ENABLE_HARD_STOP
+  app.use("/api/automation", automationRouter); // LinkedIn + Instagram Automation (migration 0041); every endpoint 404 unless ENABLE_AUTOMATION
   app.use("/api", callCostByFlowRouter);
   app.use("/api", statsRouter);
 

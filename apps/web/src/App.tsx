@@ -26,6 +26,8 @@ import { SettingsPage } from "./pages/Settings";
 import { DataQualityPage } from "./pages/DataQuality";
 import { AiProvidersPage } from "./pages/AiProviders";
 import { AiAgentsPage } from "./pages/AiAgents";
+import { LinkedInAutomationPage } from "./pages/LinkedInAutomation";
+import { InstagramAutomationPage } from "./pages/InstagramAutomation";
 import { canSeePath } from "./lib/navAccess";
 import type { ReactNode } from "react";
 
@@ -95,6 +97,8 @@ export function App() {
         <Route path="/send-queue" element={<SendQueuePage />} />
         <Route path="/upload-history" element={<UploadHistoryPage />} /> {/* "Not available" unless ENABLE_IMPORT_FILTER_STEP */}
         <Route path="/triggers" element={<TriggersPage />} />
+        <Route path="/automation/linkedin" element={<LinkedInAutomationPage />} /> {/* Dashboard unless ENABLE_AUTOMATION (admins, editors) */}
+        <Route path="/automation/instagram" element={<InstagramAutomationPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />

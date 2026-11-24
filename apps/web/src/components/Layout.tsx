@@ -7,6 +7,8 @@ import { useSidebarHiddenItems } from "../lib/sidebar";
 import { useBranding, useDocumentTitle } from "../lib/branding";
 import { navForRole } from "../lib/navAccess";
 import { useImportFilterStep } from "../lib/importFilter";
+import { AUTOMATION_NAV_GROUP, useAutomationState, withAutomationGroup } from "../lib/automation";
+import { BrandIcon, type Brand } from "./automation/BrandIcons";
 import { aiCallLanguagePath, splitAiCallLanguagePath, type AiCallLanguageInfo, type HideableNavItem } from "@dispatch/shared";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./Logo";
@@ -18,6 +20,8 @@ type NavEntry = {
   end?: boolean;
   /** Set only on items an admin may hide from Settings → Sidebar menu. */
   hideKey?: HideableNavItem;
+  /** Automation items only (ENABLE_AUTOMATION): the LinkedIn / Instagram mark instead of `icon`. */
+  brand?: Brand;
 };
 
 type NavGroup = {
@@ -241,6 +245,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const showAiCustomers = !!aiCalls.data?.enabled && !!aiCalls.data.canStart;
   // "Upload History" (/upload-history): only while ENABLE_IMPORT_FILTER_STEP is on.
   const showUploadHistory = useImportFilterStep().enabled;
+  // "Automation" section (LinkedIn / Instagram Automation): only while ENABLE_AUTOMATION is on.
+  const showAutomation = useAutomationState().enabled;
   // Optional items an admin hid in Settings → Sidebar menu (workspace-wide).
   const hidden = new Set<string>(useSidebarHiddenItems());
   // Unread customer messages on the "WhatsApp Inbox" item (admins only; polls while the tab is
@@ -250,7 +256,11 @@ export function Layout({ children }: { children: ReactNode }) {
   const { appName } = useBranding();
   useDocumentTitle(appName);
   const groups = navForRole(
-    withLanguageGroups(withUploadHistory(NAV_GROUPS, showUploadHistory), aiCalls.data?.languages ?? []).map((g) => ({
+    withAutomationGroup(
+      withLanguageGroups(withUploadHistory(NAV_GROUPS, showUploadHistory), aiCalls.data?.languages ?? []),
+      showAutomation,
+      AUTOMATION_NAV_GROUP,
+    ).map((g) => ({
       ...g,
       items: g.items.filter((n) => {
         const page = splitAiCallLanguagePath(n.to).path; // "/ta/call-flows" follows "/call-flows"
@@ -416,7 +426,7 @@ export function Layout({ children }: { children: ReactNode }) {
                         )
                       }
                     >
-                      <Icon name={n.icon} size={18} className="shrink-0" />
+                      {n.brand ? <BrandIcon brand={n.brand} size={18} className="shrink-0" /> : <Icon name={n.icon} size={18} className="shrink-0" />}
                       <span className={cx("nav-label truncate", collapsed && "md:hidden")}>{n.label}</span>
                       {n.to === "/whatsapp-inbox" && inboxUnread > 0 && (
                         <span
